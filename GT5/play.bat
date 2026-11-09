@@ -23,6 +23,16 @@ REM What the game received from the controller, also in logs\play.err.
 set "PAD_TRACE=1"
 REM The controller keeps working if another window takes focus (an untitled one did mid-race).
 set "PAD_BACKGROUND=1"
+REM Watch mode, for B-Spec races, replays and anything you only watch. OFF unless you turn it on.
+REM It draws every other frame (the race itself keeps full speed), draws nothing while the window
+REM is minimized, and lowers the game's priority so your other programs come first.
+REM   F9 in the game window: watch mode on / off, any time.
+REM   Or remove the REM from the next line and it comes on by itself after 10 s without touching
+REM   the controller or the game keys, and goes off again the moment you do.
+REM set "LD_WATCH=1"
+REM The mouse is no longer held inside the window. While you use the controller with the game in
+REM front, mouse movement and clicks that Steam makes from the controller are ignored; your real
+REM mouse always works. (PAD_CURSOR_CLIP=1 brings back the old clipping.)
 if not exist "%HERE%hdd0" mkdir "%HERE%hdd0"
 if not exist "%HERE%hdd1" mkdir "%HERE%hdd1"
 if not exist "%HERE%logs" mkdir "%HERE%logs"

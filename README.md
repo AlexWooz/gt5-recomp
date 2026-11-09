@@ -157,6 +157,8 @@ Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Sta
 | Variable | Effect |
 |---|---|
 | `PAD_BACKGROUND=1` | The pad keeps working when another window has focus. |
+| `LD_WATCH=1` (or **F9** in the game) | Watch mode for B-Spec races and replays: draws every other frame while the race keeps full speed, draws nothing while minimized, and lowers the game's priority. Off unless you turn it on; with `LD_WATCH=1` it comes on after 10 s without input and goes off when you touch the controls. |
+| `PAD_CURSOR_CLIP=1` | Keep the mouse inside the window while the controller is in use (the old behaviour). By default the mouse is free, and only the mouse movement and clicks Steam makes from the controller are ignored. |
 | `GCM_DRAIN_STAT=1` | Timing lines every 5 s in `logs\play.err`. |
 | `PS3_MUTE=1` | No sound. |
 | `RSX_SHADER_CACHE_DIR=<dir>` | Where compiled shaders are cached (default `scratch\rsx_shader_cache_v2`). |

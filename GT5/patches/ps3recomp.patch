@@ -3642,7 +3642,7 @@ index 4d916ac7..da0af01d 100644
      cellfs_add_path_mapping("/dev_bdvd/",
                             disc_root && *disc_root ? disc_root : "gamedata/dev_bdvd/");
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index afdd93de..78408a8f 100644
+index afdd93de..1a08213f 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -69,6 +69,7 @@ static double pad_clock(unsigned long long t0_ms)
@@ -3653,7 +3653,16 @@ index afdd93de..78408a8f 100644
  #define PAD_MAX_HOST_PORTS  4  /* XInput supports max 4; SDL may support more */
  
  typedef struct {
-@@ -284,12 +285,10 @@ static void pad_poll_keyboard(void)
+@@ -99,6 +100,8 @@ static u32           s_port_setting[CELL_PAD_MAX_PORT_NUM];
+ static PadHostState  s_host_state[PAD_MAX_HOST_PORTS];
+ /* Per-port "a report has arrived since your last read" flag; see cellPadGetData. */
+ static int s_data_fresh[PAD_MAX_HOST_PORTS];
++/* pad_now_ms of the last poll that found a controller or the keys in use (cellPad_last_activity_ms). */
++static volatile unsigned long long s_pad_activity_ms;
+ 
+ #if PAD_BACKEND_SDL2
+ /* PS3 port i's controller, by SDL instance id (-1 = none); the port keeps the
+@@ -284,12 +287,10 @@ static void pad_poll_keyboard(void)
      if (off) return;
  
      PadHostState* hs = &s_host_state[0];
@@ -3668,7 +3677,7 @@ index afdd93de..78408a8f 100644
          hs->connected = 1;
          return;
      }
-@@ -304,6 +303,7 @@ static void pad_poll_keyboard(void)
+@@ -304,6 +305,7 @@ static void pad_poll_keyboard(void)
          { VK_RETURN, CELL_PAD_CTRL_START },   { VK_TAB,   CELL_PAD_CTRL_SELECT },
      };
  
@@ -3676,7 +3685,7 @@ index afdd93de..78408a8f 100644
      u16 btns = 0;
      for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++)
          if (GetAsyncKeyState(map[i].vk) & 0x8000) btns |= map[i].btn;
-@@ -325,6 +325,229 @@ static void pad_poll_keyboard(void)
+@@ -325,6 +327,281 @@ static void pad_poll_keyboard(void)
  }
  #endif
  
@@ -3808,19 +3817,71 @@ index afdd93de..78408a8f 100644
 + * Steam game: R2 left click, L2 right click, right stick moves the cursor, Cross presses Enter. A
 + * trigger press with the cursor outside the window clicks whatever is there, the window loses focus
 + * and the pad stops counting, in the middle of a corner. So while the pad is in use the cursor stays
-+ * on the picture, and five seconds after its last use the mouse is free again. PAD_NO_CURSOR_GUARD off. */
++ * on the picture, and five seconds after its last use the mouse is free again. PAD_NO_CURSOR_GUARD off.
++ *
++ * That clip held the user's own mouse too, for whole races: a right stick held up for throttle
++ * counts as use. So by default nothing is clipped. Steam's mouse comes in through SendInput, which
++ * marks every event injected; a low-level mouse hook drops injected mouse events while the pad has
++ * been used in the last five seconds and this game's window is in front, and lets everything else
++ * through. The real mouse moves and clicks freely. PAD_CURSOR_CLIP=1 clips as before. */
 +static unsigned long long pad_now_ms(void);
++static volatile LONG64 s_pad_last_use_tick;      /* GetTickCount64 at the pad's last use, 0 = never */
++static volatile LONG s_pad_mouse_hook, s_pad_mouse_dropped;
++static LRESULT CALLBACK pad_mouse_ll(int code, WPARAM wp, LPARAM lp)
++{
++    if (code == HC_ACTION) {
++        const MSLLHOOKSTRUCT* m = (const MSLLHOOKSTRUCT*)lp;
++        const LONG64 last = s_pad_last_use_tick;
++        if ((m->flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED)) && last &&
++            GetTickCount64() - (ULONGLONG)last < 5000) {
++            HWND fg = GetForegroundWindow();
++            DWORD pid = 0;
++            if (fg) GetWindowThreadProcessId(fg, &pid);
++            if (pid == GetCurrentProcessId()) {
++                InterlockedIncrement(&s_pad_mouse_dropped);
++                return 1;
++            }
++        }
++    }
++    return CallNextHookEx(NULL, code, wp, lp);
++}
++static DWORD WINAPI pad_mouse_hook_thread(LPVOID unused)
++{
++    (void)unused;
++    /* Every mouse event on the desktop waits for this hook, so it must never wait for a busy game:
++     * a hook that misses Windows' timeout lags the user's whole mouse. Its work is a few compares. */
++    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
++    HHOOK h = SetWindowsHookExW(WH_MOUSE_LL, pad_mouse_ll, GetModuleHandleW(NULL), 0);
++    if (!h) {
++        fprintf(stderr, "[pad] mouse hook not installed (error %lu); Steam's pad mouse is not filtered\n", GetLastError());
++        return 0;
++    }
++    fprintf(stderr, "[pad] the mouse is never held; Steam's pad-driven mouse is ignored while the pad drives the game\n");
++    MSG msg;
++    while (GetMessageW(&msg, NULL, 0, 0) > 0) {}
++    UnhookWindowsHookEx(h);
++    return 0;
++}
 +static void pad_cursor_guard(const PadHostState* hs)
 +{
-+    static int off = -1, clipped;
++    static int mode = -1, clipped;   /* 0 off, 1 drop injected mouse input, 2 clip the cursor */
 +    static unsigned long long last_use, last_clip;
-+    if (off < 0) off = getenv("PAD_NO_CURSOR_GUARD") ? 1 : 0;
-+    if (off) return;
++    if (mode < 0) mode = getenv("PAD_NO_CURSOR_GUARD") ? 0 : getenv("PAD_CURSOR_CLIP") ? 2 : 1;
++    if (!mode) return;
 +    const unsigned long long now = pad_now_ms();
 +    if (hs && (hs->buttons || hs->trigger_l2 > 16 || hs->trigger_r2 > 16 ||
 +               abs((int)hs->analog_lx - 128) > 48 || abs((int)hs->analog_ly - 128) > 48 ||
 +               abs((int)hs->analog_rx - 128) > 48 || abs((int)hs->analog_ry - 128) > 48))
 +        last_use = now;
++    if (mode == 1) {
++        if (!hs) return;
++        if (last_use == now) s_pad_last_use_tick = (LONG64)GetTickCount64();
++        if (!InterlockedCompareExchange(&s_pad_mouse_hook, 1, 0)) {
++            HANDLE t = CreateThread(NULL, 64 * 1024, pad_mouse_hook_thread, NULL, 0, NULL);
++            if (t) CloseHandle(t);
++        }
++        return;
++    }
 +    if (hs && last_use && now - last_use < 5000) {
 +        if (clipped && now - last_clip < 250) return;
 +        HWND fg = GetForegroundWindow();
@@ -3906,7 +3967,7 @@ index afdd93de..78408a8f 100644
  /* XInputGetState on a slot with nothing plugged in costs about 140 us (2 us on
   * a connected one), and the backend is polled at least once a frame: three
   * empty slots beside one pad were 0.6 ms of every frame on God of War HD's
-@@ -693,6 +916,12 @@ static unsigned long long pad_now_ms(void)
+@@ -693,6 +970,12 @@ static unsigned long long pad_now_ms(void)
  #endif
  }
  
@@ -3919,7 +3980,7 @@ index afdd93de..78408a8f 100644
  static void pad_poll_backend(void)
  {
      static unsigned long long s_last_ms = 0;
-@@ -711,9 +940,14 @@ static void pad_poll_backend(void)
+@@ -711,12 +994,32 @@ static void pad_poll_backend(void)
      pad_poll_sdl2();
  #endif
  #ifdef _WIN32
@@ -3927,6 +3988,16 @@ index afdd93de..78408a8f 100644
 +    if (!s_host_state[0].connected) { pad_poll_keyboard(); pad_poll_dualsense(); }
  #endif
      pad_track_assign();
++    /* Someone is playing: a button, a trigger or a stick off centre on any port. */
++    for (int _i = 0; _i < PAD_MAX_HOST_PORTS; _i++) {
++        const PadHostState* hs = &s_host_state[_i];
++        if (hs->connected && (hs->buttons || hs->trigger_l2 > 16 || hs->trigger_r2 > 16 ||
++            abs((int)hs->analog_lx - 128) > 48 || abs((int)hs->analog_ly - 128) > 48 ||
++            abs((int)hs->analog_rx - 128) > 48 || abs((int)hs->analog_ry - 128) > 48)) {
++            s_pad_activity_ms = now;
++            break;
++        }
++    }
 +#ifdef _WIN32
 +    AcquireSRWLockExclusive(&s_pad_pub_lock);
 +    memcpy(s_pad_pub, s_host_state, sizeof s_pad_pub);
@@ -3935,7 +4006,15 @@ index afdd93de..78408a8f 100644
      pad_unlock();
  }
  
-@@ -786,6 +1020,9 @@ void cellPad_poll(void)
++/* pad_now_ms of the last poll that found a pad in use (0 = never), for the renderer's watch mode:
++ * nobody has touched the controller or the keys for a while, so nobody is driving. */
++unsigned long long cellPad_last_activity_ms(void) { return s_pad_activity_ms; }
++unsigned long long cellPad_now_ms(void) { return pad_now_ms(); }
++
+ /* ---------------------------------------------------------------------------
+  * API implementations
+  * -----------------------------------------------------------------------*/
+@@ -786,6 +1089,9 @@ void cellPad_poll(void)
   * were fixed.) These used to be redeclared here with a 64-bit address
   * parameter, which conflicts with the header now that it is included. */
  
@@ -3945,7 +4024,7 @@ index afdd93de..78408a8f 100644
  s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
  {
      { static int _once = 0;
-@@ -854,7 +1091,15 @@ skip_inject: ;
+@@ -854,7 +1160,15 @@ skip_inject: ;
       * physical device, which yields no-buttons-pressed data below. */
  
      {
@@ -3961,7 +4040,7 @@ index afdd93de..78408a8f 100644
      u32 setting = s_port_setting[port_no];
  
      /* Determine data length based on port settings */
-@@ -913,7 +1158,7 @@ skip_inject: ;
+@@ -913,7 +1227,7 @@ skip_inject: ;
       * LEFT 0x0080, RIGHT 0x0020, CROSS 0x4000, CIRCLE 0x2000, TRIANGLE 0x1000.
       * Legit input simulation on the same footing as PAD_AUTOPRESS/PAD_STICK. */
      { static int s_sc = -1;
@@ -3970,7 +4049,7 @@ index afdd93de..78408a8f 100644
        static unsigned long long t0 = 0;   /* not ULONGLONG: this builds on POSIX too */
        if (s_sc < 0) {
            s_sc = 0;
-@@ -925,7 +1170,10 @@ skip_inject: ;
+@@ -925,7 +1239,10 @@ skip_inject: ;
                    double t = strtod(p, (char**)&p);
                    if (*p == ':') p++;
                    unsigned m = (unsigned)strtoul(p, (char**)&p, 0);
@@ -3982,7 +4061,7 @@ index afdd93de..78408a8f 100644
                    while (*p == ',' || *p == ' ') p++;
                }
                printf("[cellPad] PAD_SCRIPT: %d event(s)%s\n", n_ev,
-@@ -941,8 +1189,11 @@ skip_inject: ;
+@@ -941,8 +1258,11 @@ skip_inject: ;
             * hold it for a fixed number of polls, which is what a real press
             * looks like regardless of poll rate. */
            static int fired[256], held[256];
@@ -3995,7 +4074,7 @@ index afdd93de..78408a8f 100644
                if (held[i] > 0) {
                    held[i]--;
                    data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(ev[i].mask & 0xFF);
-@@ -967,21 +1218,27 @@ skip_inject: ;
+@@ -967,21 +1287,27 @@ skip_inject: ;
       *   echo 0x0040 4 > pad.txt  # DOWN for 4 reports (menus auto-repeat a
       *                            # long hold; the default is 40)
       */
@@ -4026,7 +4105,7 @@ index afdd93de..78408a8f 100644
                                 printf("[cellPad] PAD_FILE press 0x%04X\n", m); fflush(stdout); }
                    }
                    fclose(f);
-@@ -991,8 +1248,18 @@ skip_inject: ;
+@@ -991,8 +1317,18 @@ skip_inject: ;
            if (held_n > 0) {
                if (data->len > 0) held_n--;
                data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(held_mask & 0xFF);
@@ -4047,7 +4126,7 @@ index afdd93de..78408a8f 100644
  
      /* Analog sticks */
      /* PAD_STICK="lx,ly,rx,ry" (0-255, 128 = centred): hold the analog sticks at
-@@ -1080,7 +1347,9 @@ skip_inject: ;
+@@ -1080,7 +1416,9 @@ skip_inject: ;
              { CELL_PAD_BTN_OFFSET_DIGITAL2, 0x01, CELL_PAD_BTN_OFFSET_PRESS_L2 },
              { CELL_PAD_BTN_OFFSET_DIGITAL2, 0x02, CELL_PAD_BTN_OFFSET_PRESS_R2 } };
          for (unsigned k = 0; k < sizeof pm / sizeof pm[0]; k++)
@@ -4058,7 +4137,7 @@ index afdd93de..78408a8f 100644
                  data->button[pm[k].off] = 255;
      }
  
-@@ -1095,6 +1364,13 @@ skip_inject: ;
+@@ -1095,6 +1433,13 @@ skip_inject: ;
      }  /* end connected block */
  
  emit:
@@ -4072,7 +4151,7 @@ index afdd93de..78408a8f 100644
      /* A non-zero len means "here is a CHANGE packet" -- the constant is literally
       * named CELL_PAD_LEN_CHANGE_DEFAULT. Hardware reports len = 0 once the port
       * has nothing new, and titles DRAIN on that: The Simpsons Arcade Game's
-@@ -1120,6 +1396,24 @@ emit:
+@@ -1120,6 +1465,24 @@ emit:
       * attack firing once.
       *
       * PAD_ALWAYS_CHANGE=1 restores the old always-a-packet behaviour. */
@@ -4976,10 +5055,29 @@ index c4eb87db..ade1bbb4 100644
       * same poll delivers them. A no-op when no psnr server is configured. */
      { extern void np_psnr_pump(void); np_psnr_pump(); }
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 298ee7de..23497fa8 100644
+index 298ee7de..8ea23d2c 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
-@@ -135,10 +135,18 @@ static volatile int s_flip_direct_pending = 0;
+@@ -103,6 +103,18 @@ u32 cellGcm_flip_request_count(void)
+ {
+     return s_flip_request_count;
+ }
++/* Flips that put a new frame on the display: the ones that set s_flip_pending (a FIFO flip
++ * marker reached, a direct flip). The request count also moves on cellGcmSetPrepareFlip, which
++ * GT5 calls early in every frame, and the present thread's fallback took that for a flip: it
++ * presented each frame twice, once at the prepare while the frame was still being drawn.
++ * GCM_PRESENT_ON_PREPARE=1: the request count again. */
++static volatile u32 s_flip_present_count = 0;
++u32 cellGcm_flip_present_count(void)
++{
++    static int on_prepare = -1;
++    if (on_prepare < 0) on_prepare = getenv("GCM_PRESENT_ON_PREPARE") ? 1 : 0;
++    return on_prepare ? s_flip_request_count : s_flip_present_count;
++}
+ static u32  s_debug_level = CELL_GCM_DEBUG_LEVEL0;
+ 
+ /* Display buffers */
+@@ -135,10 +147,18 @@ static volatile int s_flip_direct_pending = 0;
   * second to build its next frame here, then queues the flip, and a beat in
   * between that reported a flip made it take the new one for done. It then
   * rebuilt the command segment the walker was still waiting in. */
@@ -4999,7 +5097,7 @@ index 298ee7de..23497fa8 100644
      if (s_flip_direct_pending) { s_flip_direct_pending = 0; return 1; }
      return 0;
  }
-@@ -156,9 +164,37 @@ int cellGcm_take_flip_pending(void)
+@@ -156,9 +176,37 @@ int cellGcm_take_flip_pending(void)
  /* The flip now names this buffer. The shared draw engine presents on the
   * host's call and only learns a buffer from 0xE944 by itself, so it would
   * keep presenting display buffer 0 for a title that flips through 0xFEAD. */
@@ -5037,7 +5135,7 @@ index 298ee7de..23497fa8 100644
      if (rsx_draw_engine_enabled())
          rsx_draw_engine_note_flip(bufferId);
  }
-@@ -382,6 +418,13 @@ static u32 s_labels[CELL_GCM_MAX_LABEL_COUNT];
+@@ -382,6 +430,13 @@ static u32 s_labels[CELL_GCM_MAX_LABEL_COUNT];
   * label slots (0x03000000..0x03001000). Fields are big-endian (vm_write32). */
  #define GCM_CONTROL_GUEST_ADDR (VM_HLE_INJECT_BASE + 0x2000u)
  
@@ -5051,7 +5149,7 @@ index 298ee7de..23497fa8 100644
  /* Synthetic guest code EA for the FIFO command-buffer-full callback. The title's
   * inline gcmReserve calls context->callback(context, count) when `current` nears
   * `end`; we point the context's callback OPD at this EA and register it in the
-@@ -597,6 +640,7 @@ u32 cellGcmSetupContext(u32 ctx_out_addr, u32 cmdSize, u32 ioSize, u32 ioAddress
+@@ -597,6 +652,7 @@ u32 cellGcmSetupContext(u32 ctx_out_addr, u32 cmdSize, u32 ioSize, u32 ioAddress
  {
      if (cmdSize < 0x10000)
          cmdSize = 0x10000;
@@ -5059,7 +5157,7 @@ index 298ee7de..23497fa8 100644
  
      /* PSL1GHT's gcmInitBody passes ioAddress = 0, expecting gcm to allocate the
       * IO region itself (the official SDK has the app allocate and pass it).
-@@ -775,9 +819,16 @@ static atomic_flag s_gcm_pumping = ATOMIC_FLAG_INIT;
+@@ -775,9 +831,16 @@ static atomic_flag s_gcm_pumping = ATOMIC_FLAG_INIT;
   * and mark a vblank+flip tick pending for the main thread to deliver. */
  static u32 s_fifo_getoff;   /* tentative: defined below */
  
@@ -5076,7 +5174,7 @@ index 298ee7de..23497fa8 100644
      /* GCM_FLIP_NEEDS_FIFO=1: only mark a flip pending once the walker has
       * actually consumed up to `put`.
       *
-@@ -850,10 +901,34 @@ void ppu_gcm_pump(void)
+@@ -850,10 +913,34 @@ void ppu_gcm_pump(void)
                 if ((calls % 20000) == 0)
                     fprintf(stderr, "[gcm-pump] calls=%u vblank=%u flip=%u vcount=%u%c",
                             calls, nv, nf, s_vblank_count, 10); } }
@@ -5115,7 +5213,7 @@ index 298ee7de..23497fa8 100644
      }
      if (p & 2) {
          /* Delivery waits for a guest thread to reach an HLE call or a timer
-@@ -867,10 +942,18 @@ void ppu_gcm_pump(void)
+@@ -867,10 +954,18 @@ void ppu_gcm_pump(void)
          if (s_flip_tick_seq == s_flip_req_seq)
              s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
          FLIP_UNLOCK();
@@ -5138,7 +5236,7 @@ index 298ee7de..23497fa8 100644
      }
      if (user) {
          u32 cmd = (u32)user;
-@@ -882,7 +965,7 @@ void ppu_gcm_pump(void)
+@@ -882,7 +977,7 @@ void ppu_gcm_pump(void)
  
  /* Back-compat: the old direct entry points now just mark a tick pending (so any
   * caller other than the ticker still works) -- delivery stays on the main thread. */
@@ -5147,7 +5245,7 @@ index 298ee7de..23497fa8 100644
  /* Only deliver a flip completion when a flip is actually outstanding.
   *
   * Ticking unconditionally at 60 Hz fires the guest's flip handler even when
-@@ -895,15 +978,36 @@ void cellGcmTickVBlank(void) { s_vblank_count++; GCM_PENDING_SET(1); }
+@@ -895,15 +990,36 @@ void cellGcmTickVBlank(void) { s_vblank_count++; GCM_PENDING_SET(1); }
   * and its handler runs code that puts the status back to WAITING, so the
   * poll never saw DONE and the game never rendered another frame. On hardware
   * the callback IS the flip interrupt -- no flip, no callback. */
@@ -5186,7 +5284,7 @@ index 298ee7de..23497fa8 100644
  }
  
  /* Drain the game's GCM FIFO into the RSX backend. Called from the present thread
-@@ -946,6 +1050,14 @@ unsigned long long ps3_ms_now(void)
+@@ -946,6 +1062,14 @@ unsigned long long ps3_ms_now(void)
  static u32 s_sema_offset = 0;   /* NV406E semaphore offset (label window) */
  static int s_sema_blocked_pass = 0;   /* this drain stopped on a semaphore acquire */
  static int s_park_pass = 0;           /* this drain stopped on a self-JUMP park */
@@ -5201,7 +5299,7 @@ index 298ee7de..23497fa8 100644
  /* The park the walker is waiting on (0 = none), the `put` it saw there, and
   * since when it has stood with that put: the jump-park grace in the walker. */
  static u32 park_off, park_put;
-@@ -1106,6 +1218,11 @@ static void nv3089_engine_wrote(u32 dst_pitch, u32 x0, u32 y0, u32 x1, u32 y1)
+@@ -1106,6 +1230,11 @@ static void nv3089_engine_wrote(u32 dst_pitch, u32 x0, u32 y0, u32 x1, u32 y1)
   * vm_read32/vm_write32 pair does cancel, so the bytes move verbatim. */
  static void gcm_row_copy(u32 d, u32 s, u32 n)
  {
@@ -5213,7 +5311,7 @@ index 298ee7de..23497fa8 100644
      extern u8* vm_base;
      const u32 l0 = d & ~127u, l1 = (d + n - 1) & ~127u;
      int reserved = 0;
-@@ -1118,7 +1235,7 @@ static void gcm_row_copy(u32 d, u32 s, u32 n)
+@@ -1118,7 +1247,7 @@ static void gcm_row_copy(u32 d, u32 s, u32 n)
      spu_lockline_unlock();
  }
  
@@ -5222,7 +5320,7 @@ index 298ee7de..23497fa8 100644
  {
      u32 out_w = s_nv3089.out_sz & 0xFFFF, out_h = s_nv3089.out_sz >> 16;
      u32 out_x = s_nv3089.out_pt & 0xFFFF, out_y = s_nv3089.out_pt >> 16;
-@@ -1320,6 +1437,39 @@ static void nv3089_blit(void)
+@@ -1320,6 +1449,39 @@ static void nv3089_blit(void)
                 out_w, out_h, f, src, in_pitch, dst, dst_pitch, out_x, out_y); } }
  }
  
@@ -5262,7 +5360,7 @@ index 298ee7de..23497fa8 100644
  static void gcm_2d_method(u32 subch, u32 method, u32 data)
  {
      /* GCM2D_TRACE=1: histogram of (subchannel, method) actually seen. The
-@@ -1783,8 +1933,52 @@ void* cellGcm_fifo_kick_event(void)
+@@ -1783,8 +1945,52 @@ void* cellGcm_fifo_kick_event(void)
   * starved guest still paid the full tick. Waiting here instead costs nothing
   * when no one kicks (the timeout is the old sleep) and drains immediately when
   * someone does. */
@@ -5315,7 +5413,7 @@ index 298ee7de..23497fa8 100644
      static int on = -1;
      if (on < 0) { const char* e = getenv("GCM_FIFO_KICK"); on = (e && *e == '0') ? 0 : 1; }
      HANDLE ev = on ? (HANDLE)cellGcm_fifo_kick_event() : NULL;
-@@ -1952,7 +2146,29 @@ void cellGcm_rsx_process_fifo(void)
+@@ -1952,7 +2158,29 @@ void cellGcm_rsx_process_fifo(void)
      g_gcm_drain_tid = GetCurrentThreadId();
      const uint64_t ft_t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
      AcquireSRWLockExclusive(&s_gcm_fifo_lock);
@@ -5346,7 +5444,7 @@ index 298ee7de..23497fa8 100644
      ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
      if (ft_t0) {
          const uint64_t t1 = ps3_ft_now();
-@@ -1988,16 +2204,42 @@ static int gcm_get_eq_put(void)
+@@ -1988,16 +2216,42 @@ static int gcm_get_eq_put(void)
   * drain: the walker hands every data word through these checks, a million a
   * second in God of War HD gameplay, and it used to test each switch on its
   * own for every word. */
@@ -5391,7 +5489,7 @@ index 298ee7de..23497fa8 100644
  /* One data word for the 3D engine (subchannel 0, or 1 unless GCM_SUBCH1_2D),
   * plus the methods whose answer the walker writes itself. */
  static void gcm_3d_method(rsx_state* st, u32 m, u32 v, int legacy_state_live)
-@@ -2074,14 +2316,27 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2074,14 +2328,27 @@ static void gcm_rsx_process_fifo_unlocked(void)
      if (!s_gcm_context_ea && !s_gcm_syscall_mode) return;
      if (!s_inited) { rsx_state_init(&s_state); s_inited = 1; }
      const int wdiag = gcm_word_diag();
@@ -5422,7 +5520,7 @@ index 298ee7de..23497fa8 100644
  
  
      /* Walk the FIFO exactly like the RSX: chase the guest-written `put` (an IO
-@@ -2091,6 +2346,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2091,6 +2358,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
       * one flat ring (cellmark), but PSL1GHT/Tiny3D immediately JUMPs into its
       * own command ring, so everything after the jump (including the reference
       * writes its waits spin on) silently never executed. */
@@ -5430,7 +5528,7 @@ index 298ee7de..23497fa8 100644
      u32 put = vm_read32(GCM_CONTROL_GUEST_ADDR + 0);
      /* The words behind `put` were stored by another thread (the title, or the
       * recycle below) before it stored `put`. On x86 the hardware keeps loads
-@@ -2257,7 +2513,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2257,7 +2525,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
           * skip is a faster decode, not a bigger tick, and VF5 depends on the
           * walker yielding at the cap (it lost 7 milestones when a whole run
           * cost one word). */
@@ -5439,7 +5537,7 @@ index 298ee7de..23497fa8 100644
              const u32 page_end = (s_fifo_getoff | 0xFFFFFu) + 1u;
              const u32 lim = (put > s_fifo_getoff && put < page_end) ? put : page_end;
              u32 off = s_fifo_getoff + 4u, nea = ea + 4u;
-@@ -2302,10 +2558,11 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2302,12 +2570,14 @@ static void gcm_rsx_process_fifo_unlocked(void)
                            flips, 10); }
              if (PS3_FT_ON()) { const uint64_t t = ps3_ft_now();
                                 ps3_ft_span(PS3_FT_FLIP_FIFO, 0, w & 7u, 0, t, t); }
@@ -5451,8 +5549,11 @@ index 298ee7de..23497fa8 100644
 +                gcm_set_current_display_buffer(gcm_prepared_take(w & 7u));
                  s_flip_pending = 1;
                  s_flip_request_count++;
++                s_flip_present_count++;
                  /* Not past `queued`: a resync may already have written off
-@@ -2384,6 +2641,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                  * this flip. */
+                 if (s_fifo_flips_reached != s_fifo_flips_queued) s_fifo_flips_reached++;
+@@ -2384,6 +2654,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
                    }
                    why = "parked";
                    s_park_pass = 1;
@@ -5461,7 +5562,7 @@ index 298ee7de..23497fa8 100644
                    break;
                }
                if (tgt < s_fifo_getoff) s_fifo_back_jumps++;
-@@ -2519,21 +2778,33 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2519,21 +2791,33 @@ static void gcm_rsx_process_fifo_unlocked(void)
               * which can match, are skipped. Most of a frame's words come this
               * way (God of War HD: about five million vertex-program microcode and
               * constant words a second). */
@@ -5502,7 +5603,7 @@ index 298ee7de..23497fa8 100644
              for (u32 i = 0; i < count; i++) {
                  u32 dea = gcm_io2ea(s_fifo_getoff + 4 + i * 4);
                  if (!dea) break;
-@@ -2680,6 +2951,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2680,6 +2964,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
                  if (mfull == 0xEB00u || mfull == 0xEB04u) {
                      cellGcmQueueUserCommand(vm_read32(dea));
                  } else if (mfull == 0xE920u || mfull == 0xE924u) {
@@ -5511,7 +5612,7 @@ index 298ee7de..23497fa8 100644
                      cellGcmSetFlipCommand(vm_read32(dea) & 7u);
                  } else if (subch == 0 || (subch == 1 && !s1_2d)) {
                      gcm_3d_method(&s_state, m, vm_read32(dea), legacy_state_live);
-@@ -2757,6 +3030,10 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2757,6 +3043,10 @@ static void gcm_rsx_process_fifo_unlocked(void)
       * ring start, and the resync dropped them: inFAMOUS 2 stopped presenting
       * for good that way in about one New Marais run in five ("stuck-get" at a
       * self-jump with no "jump-park" before it). */
@@ -5522,7 +5623,7 @@ index 298ee7de..23497fa8 100644
      { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
        if (s_sema_blocked_pass || s_park_pass) {
            stuck = 0; last = s_fifo_getoff; s_sema_blocked_pass = 0; s_park_pass = 0; }
-@@ -3102,10 +3379,11 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -3102,10 +3392,12 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
      /* in_fifo: the flip sits in the command stream as a GCM_FLIP_MARKER, and
       * the drain does this half when it reaches it (see the 0xFEAD case). */
      if (!in_fifo) {
@@ -5530,12 +5631,13 @@ index 298ee7de..23497fa8 100644
 +        gcm_set_current_display_buffer(gcm_prepared_take(bufferId));
          s_flip_pending = 1;   /* ticker: present BEFORE the next drain */
          s_flip_request_count++;
++        s_flip_present_count++;
          s_flip_direct_pending = 1;
 +        s_direct_flips++;
      }
      /* Flip requested but not yet shown: a subsequent cellGcmSetWaitFlip blocks
       * until the present thread's cellGcmTickFlip marks it done (vsync). */
-@@ -3214,9 +3492,9 @@ s32 cellGcmSetPrepareFlip(void* ctx, u32 bufferId)
+@@ -3214,9 +3506,9 @@ s32 cellGcmSetPrepareFlip(void* ctx, u32 bufferId)
      if (!s_display_buffer_set[bufferId])
          return CELL_GCM_ERROR_INVALID_VALUE;
  
@@ -5547,7 +5649,7 @@ index 298ee7de..23497fa8 100644
      s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
      s_flip_request_count++;
      s_last_flip_time = get_timestamp_ns();
-@@ -4231,7 +4509,8 @@ u32 cellGcmGetDefaultSegmentWordSize(void)
+@@ -4231,7 +4523,8 @@ u32 cellGcmGetDefaultSegmentWordSize(void)
  /* Immediate flip — perform flip right now */
  s32 cellGcmSetFlipImmediate(u32 bufferId)
  {
@@ -5781,7 +5883,7 @@ index cfb9685b..8627b851 100644
           * (oracle: RPCS3 FragmentProgramDecompiler.cpp's _builtin_sqrt macro,
           * reused by _builtin_divsq) AND forces the result to exactly 0,
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 25791179..c1f57971 100644
+index 25791179..3a7de286 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
 @@ -22,7 +22,7 @@
@@ -8772,7 +8874,10 @@ index 25791179..c1f57971 100644
  
 -    FILE* file = fopen(temporary, "wb");
 -    if (!file)
--        return;
++    shader_store_job* job = (shader_store_job*)malloc(
++        sizeof(*job) + source_length + blob_length);
++    if (!job)
+         return;
 -    const int wrote = fwrite(&header, sizeof(header), 1, file) == 1 &&
 -        fwrite(source, 1, source_length, file) == source_length &&
 -        fwrite(blob->lpVtbl->GetBufferPointer(blob), 1,
@@ -8783,10 +8888,7 @@ index 25791179..c1f57971 100644
 -            temporary, path,
 -            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
 -        DeleteFileA(temporary);
-+    shader_store_job* job = (shader_store_job*)malloc(
-+        sizeof(*job) + source_length + blob_length);
-+    if (!job)
-         return;
+-        return;
 -    }
 -
 -    const u32 stage_index = shader_disk_cache_stage_index(stage);
@@ -10103,7 +10205,7 @@ index 25791179..c1f57971 100644
      fprintf(file, "at=%u/0x%X/0x%X ", rs.alpha_test_enable, rs.alpha_func, rs.alpha_ref_raw);
      fprintf(file, "sc=%08X/%08X ", rsx_dsp_reg(&g.rsx, M_SCISSOR_HORIZONTAL), rsx_dsp_reg(&g.rsx, M_SCISSOR_VERTICAL));
      if (rs.stencil_enable)
-@@ -7063,9 +10029,67 @@ static void write_topology_indices(u32 prim, u32* indices)
+@@ -7063,9 +10029,212 @@ static void write_topology_indices(u32 prim, u32* indices)
      }
  }
  
@@ -10119,12 +10221,149 @@ index 25791179..c1f57971 100644
 + * the vertex ring overflowed: something a skipped frame leaves out is needed by later frames. */
 +int g_ld_skip_frame;
 +static unsigned long long g_ld_skip_n, g_ld_skip_frames;
++static HWND s_ld_hwnd;   /* the window the swap chain presents to (for IsIconic) */
++
++/* Which passes a left-out frame may leave out. A pass is a (colour target, zeta) pair from the
++ * register file. One the game draws every frame (the scene, its shadows, the bloom chain, the
++ * display buffer) is redrawn by the next drawn frame, so dropping it costs nothing. One it does not
++ * -- a race's name labels rendered into a texture when the order changes, a cube face redrawn in
++ * turn -- holds what later frames sample, and a dropped one stays missing: watch mode first showed
++ * every leaderboard name but one blank. Such a pass always runs. Tracked only while watch mode is
++ * on (s_ld_pass_track), so a pass is new, hence run, in the first frame after it starts. */
++static int s_ld_pass_track;
++static u32 s_ld_pass_frame = 1;
++#define LD_PASS_SLOTS 1024u
++static struct { u64 key; u32 frame, hot; } s_ld_pass[LD_PASS_SLOTS];
++static unsigned long long g_ld_pass_kept;   /* draws and clears run in left-out frames */
++/* 1 when the current draw or clear's pass was also drawn in the frame before this one. */
++static int ld_pass_hot(void)
++{
++    if (!s_ld_pass_track) return 1;   /* LD_FRAME_SKIP: every pass, as before */
++    rsx_dsp_surface sf;
++    rsx_dsp_get_surface(&g.rsx, &sf);
++    const u64 key = ((u64)((sf.color_location[0] << 31) | (sf.color_offset[0] & 0x7FFFFFFFu)) << 32) |
++                    (u64)((sf.zeta_location << 31) | (sf.zeta_offset & 0x7FFFFFFFu));
++    u32 h = (u32)((key * 0x9E3779B97F4A7C15ull) >> 54) & (LD_PASS_SLOTS - 1u);
++    int spare = -1;   /* an empty slot, or one not drawn since before the last frame */
++    for (u32 probe = 0; probe < 16; probe++, h = (h + 1u) & (LD_PASS_SLOTS - 1u)) {
++        if (s_ld_pass[h].frame && s_ld_pass[h].key == key) {
++            if (s_ld_pass[h].frame != s_ld_pass_frame) {   /* first time this frame */
++                s_ld_pass[h].hot = s_ld_pass[h].frame + 1u == s_ld_pass_frame;
++                s_ld_pass[h].frame = s_ld_pass_frame;
++            }
++            return (int)s_ld_pass[h].hot;
++        }
++        if (spare < 0 && (!s_ld_pass[h].frame || s_ld_pass[h].frame + 1u < s_ld_pass_frame)) spare = (int)h;
++    }
++    if (spare >= 0) {   /* a pass not seen last frame: new, so it runs */
++        s_ld_pass[spare].key = key;
++        s_ld_pass[spare].frame = s_ld_pass_frame;
++        s_ld_pass[spare].hot = 0;
++    }
++    return 0;
++}
++
++/* Watch mode: nobody is driving -- a B-Spec race, a replay, the attract demo, a menu left alone --
++ * so draw fewer frames. The game itself is untouched: every frame's commands still run, its flips,
++ * fences, labels and readbacks happen as before, and GT5's clock (one 60th of a second per game
++ * frame) keeps real time; only the drawing of some frames is left out, and a frame with nothing
++ * drawn is not presented, so the screen holds the last drawn one. Drawn frames are drawn exactly
++ * as before.
++ *   - minimized: nothing is drawn;
++ *   - watching: one game frame in LD_WATCH_DRAW (default 2, so 30 a second at 60) is drawn. The
++ *     drawn phase moves on by one every 64 frames, so passes the game spreads over alternate frames
++ *     (a reflection cube a face at a time) still all get drawn;
++ *   - OPTIONAL, off unless the user turns it on (their call: "make the b spec low resource thing
++ *     optional"). F9 in the game window switches it on and off by hand. LD_WATCH=1 (play.bat)
++ *     also lets it start by itself after LD_WATCH_IDLE_S (default 10) seconds with no button,
++ *     trigger or stick on any pad and none of the game keys, and any input then ends it at the
++ *     next frame; F9 on stays on until F9 again. While watching the process runs at below-normal
++ *     priority, so whatever else the user is doing comes first (LD_WATCH_PRIORITY=0 keeps it).
++ * LD_WATCH=0 off (default; F9 still works), 1 automatic, 2 always (tests). */
++static int ld_watch_skip(void)
++{
++    static int mode = -1, draw_n = 2, prio = 1;
++    static unsigned long long idle_ms = 10000;
++    if (mode < 0) {
++        const char* e = getenv("LD_WATCH"); mode = e ? atoi(e) : 0;
++        e = getenv("LD_WATCH_DRAW"); if (e && atoi(e) >= 1) draw_n = atoi(e);
++        e = getenv("LD_WATCH_IDLE_S"); if (e && atoi(e) >= 0) idle_ms = (unsigned long long)atoi(e) * 1000ull;
++        e = getenv("LD_WATCH_PRIORITY"); if (e) prio = atoi(e) != 0;
++    }
++    extern unsigned long long cellPad_last_activity_ms(void);
++    extern unsigned long long cellPad_now_ms(void);
++    const unsigned long long now = cellPad_now_ms(), last = cellPad_last_activity_ms();
++    static unsigned long long start;
++    if (!start) start = now;
++    HWND fg = GetForegroundWindow();
++    DWORD fg_pid = 0;
++    if (fg) GetWindowThreadProcessId(fg, &fg_pid);
++    const int focused = fg_pid == GetCurrentProcessId();
++    /* F9: watch mode on, and off again. */
++    static int manual;
++    { static int f9_was;
++      const int f9 = focused && (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
++      if (f9 && !f9_was) {
++          manual = !manual;
++          fprintf(stderr, "[watch] F9: watch mode %s\n", manual ? "switched on" : "switched off");
++      }
++      f9_was = f9; }
++    const unsigned long long quiet_since = last ? last : start;
++    /* LD_WATCH=3 (tests): on and off in turn every 10 s, so both are measured under the same load. */
++    const int watching = manual || mode == 2 || (mode == 1 && now - quiet_since >= idle_ms) ||
++                         (mode == 3 && ((now - start) / 10000ull) % 2ull == 1ull);
++    { static unsigned long long seg_t0, seg_frames; static int seg_state = -1;
++      if (mode == 3) {
++          if (seg_state != watching) {
++              if (seg_state >= 0 && now > seg_t0)
++                  fprintf(stderr, "[watch-ab] %s: %llu game frames in %.1f s, %.1f a second\n",
++                          seg_state ? "watching" : "normal", seg_frames, (now - seg_t0) / 1000.0,
++                          seg_frames * 1000.0 / (double)(now - seg_t0));
++              seg_state = watching; seg_t0 = now; seg_frames = 0;
++          }
++          seg_frames++;
++      } }
++    const int minimized = (manual || mode) && s_ld_hwnd && IsIconic(s_ld_hwnd);
++    static int was = 0;
++    const int state = minimized ? 2 : watching;
++    s_ld_pass_track = state != 0;
++    if (state != was) {
++        fprintf(stderr, "[watch] %s\n", state == 2 ? "window minimized: nothing drawn" :
++                state ? "on: drawing fewer frames" : "off: drawing every frame");
++        if (prio) SetPriorityClass(GetCurrentProcess(), state ? BELOW_NORMAL_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS);
++        was = state;
++    }
++    if (minimized) return 1;
++    if (!watching) return 0;
++    static unsigned long long k;
++    k++;
++    return ((k + k / 64u) % (unsigned long long)draw_n) != 0;
++}
++
 +void rsx_live_draw_frame_boundary(void)
 +{
 +    static int on = -1; static LONGLONG last, rep_t; static double debt; static int skipped_last;
 +    if (on < 0) { const char* e = getenv("LD_FRAME_SKIP"); on = e && atoi(e) != 0;
 +                  if (on) fprintf(stderr, "[frameskip] on: drop a frame's drawing when behind 60 fps\n"); }
-+    if (!on) return;
++    if (!on) {
++        s_ld_pass_frame++;
++        g_ld_skip_frame = ld_watch_skip();
++        g_ld_skip_frames++;
++        if (g_ld_skip_frame) g_ld_skip_n++;
++        static LONGLONG wrep;
++        LARGE_INTEGER wf; QueryPerformanceFrequency(&wf);
++        const LONGLONG wt = hx_now();
++        if (!wrep) wrep = wt;
++        if (wt - wrep >= 5 * wf.QuadPart) {
++            if (g_ld_skip_n)
++                fprintf(stderr, "[watch] %llu of %llu game frames drawn; %llu draws and clears of passes "
++                                "the game does not redraw every frame run in the others\n",
++                        g_ld_skip_frames - g_ld_skip_n, g_ld_skip_frames, g_ld_pass_kept);
++            g_ld_skip_n = g_ld_skip_frames = g_ld_pass_kept = 0;
++            wrep = wt;
++        }
++        return;
++    }
 +    LARGE_INTEGER f; QueryPerformanceFrequency(&f);
 +    const LONGLONG now = hx_now();
 +    if (last) {
@@ -10165,13 +10404,21 @@ index 25791179..c1f57971 100644
  static void sink_end_impl(void* user, const rsx_dispatch* r)
  {
      (void)user; (void)r;
-+    if (g_ld_skip_frame) return;   /* LD_FRAME_SKIP: this frame is not drawn */
++    /* LD_FRAME_SKIP / watch mode: this frame is not drawn, except passes the game does not redraw
++     * every frame (ld_pass_hot). While watching, drawn frames record their passes too. */
++    if (g_ld_skip_frame || s_ld_pass_track) {
++        const int hot = ld_pass_hot();
++        if (g_ld_skip_frame) {
++            if (hot) return;
++            g_ld_pass_kept++;
++        }
++    }
 +    LONGLONG dt_prev = hx_now();
 +    g_dt_draws++;
      if (g_ld_movie_mode && !ld_movie_composite_ui_enabled()) return;
      if (!dc.n_packets) { g_ld_stats.groups_empty++; return; }
      g_ld_stats.groups_seen++;
-@@ -7094,6 +10118,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7094,6 +10263,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              for (u32 i = 0; i < 16; i++)
                  g.rsx.constants[108 + i / 4][i % 4] =
                      g_ld_a010_camera_bits[i];
@@ -10179,7 +10426,7 @@ index 25791179..c1f57971 100644
              static u64 repairs = 0;
              repairs++;
              if (repairs <= 16 || (repairs & (repairs - 1)) == 0) {
-@@ -7124,8 +10149,58 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7124,8 +10294,58 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          g_ld_profile.total_used_attribute_max = used_layout.count;
      const LONGLONG fetch_pack_begin = ld_profile_qpc();
  #endif
@@ -10240,7 +10487,7 @@ index 25791179..c1f57971 100644
      } else if (ld_vertex_hoist_fetch()) {
          rsx_vertex_layout_plan legacy_layout;
          ld_layout_plan_get(0xFFFFu, &legacy_layout);
-@@ -7139,33 +10214,62 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7139,33 +10359,62 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      g_ld_profile.total.vertex_fetch_pack_qpc +=
          (u64)(ld_profile_qpc() - fetch_pack_begin);
  #endif
@@ -10312,7 +10559,7 @@ index 25791179..c1f57971 100644
      const u64 vb_capacity = VERT_BUFFER_SIZE;
      if (draw_vb_bytes > vb_capacity || draw_ib_bytes > INDEX_BUFFER_SIZE) {
          live_draw_csv_emit(prim, n_tri, "drop_vbring_oversize");
-@@ -7193,13 +10297,16 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7193,13 +10442,16 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          memcpy(
              g.vb_mapped + g.vb_used, vertex_data,
              (size_t)draw_vb_bytes);
@@ -10330,7 +10577,7 @@ index 25791179..c1f57971 100644
      if (!pso) {
  #if defined(YZ_PERF_PROFILE)
          ld_profile_note_rejected_pso();
-@@ -7258,6 +10365,24 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7258,6 +10510,24 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                rsx_dsp_texture st; rsx_dsp_get_texture(&g.rsx, u, &st);
                if (st.enabled && st.offset == (u32)skip) return;
            } }
@@ -10355,7 +10602,7 @@ index 25791179..c1f57971 100644
      /* LD_TRACE_PSO=<hex key>: raw vertex attributes + unit-0 texels of the
       * first three draws with that CSV pso_key. */
      { static u64 tk = 1; static int tn;
-@@ -7423,7 +10548,11 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7423,7 +10693,11 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                }
            }
        } }
@@ -10367,7 +10614,7 @@ index 25791179..c1f57971 100644
          rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
          /* LD_PS1_BUF0=1 -- DIAGNOSTIC, not a fix. Force a 24-bit PS1 VRAM
           * bind at buffer 1 (offset 0x4003C0) to sample buffer 0 (0x400000).
-@@ -7442,6 +10571,26 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7442,6 +10716,26 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          if (!t.enabled) continue;
          texture_mask |= 1u << u;
          smp_slots[u] = sampler_slot(&t, sampler_key(&t));
@@ -10394,7 +10641,7 @@ index 25791179..c1f57971 100644
          /* Pick WHICH surface at this offset to sample.
           *
           * Matching on (location, offset) alone was fine when only one surface
-@@ -7463,7 +10612,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7463,7 +10757,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
           * depth read: try the zeta first. Before, the colour surface at the
           * same address was taken (zeros). */
          int zeta_pref = 0;
@@ -10404,7 +10651,7 @@ index 25791179..c1f57971 100644
              for (u32 i = 0; i < g.n_zdepths; i++)
                  if (g.zdepths[i].location == t.location &&
                      g.zdepths[i].offset == t.offset &&
-@@ -7471,18 +10621,36 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7471,18 +10766,36 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                      zeta_pref = 1;
                      break;
                  }
@@ -10422,13 +10669,13 @@ index 25791179..c1f57971 100644
 -              if (sf_i->location != t.location || sf_i->offset != t.offset ||
 -                  i == target)
 +              if (sf_i->location != t.location || sf_i->offset != t.offset)
-+                  continue;
+                   continue;
 +              any_at_address = 1;
 +              if (i == target)
 +                  continue;
 +              /* Only ever the dummy target of a depth-only pass: nothing to read. */
 +              if (!sf_i->last_draw_generation && !sf_i->last_clear_generation && !sf_i->last_copy_generation)
-                   continue;
++                  continue;
 +              /* A format mismatch is a last resort: a surface of the right format, or the
 +               * target itself just below, is what this memory really holds now. */
 +              if (!surface_texel_matches(sf_i, t.format)) { other_fmt = (int)i; continue; }
@@ -10445,7 +10692,7 @@ index 25791179..c1f57971 100644
          /* LD_UVDBG=1: the texture coordinates of the draw that samples the PS1
           * framebuffer. Placed here rather than in fetch_batches because that
           * function is not on this draw's path -- probing it printed nothing at
-@@ -7559,7 +10727,39 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7559,7 +10872,39 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                    }
                }
            } }
@@ -10486,7 +10733,7 @@ index 25791179..c1f57971 100644
              static u32 n_dbg = 0;
              if (PS3_LOG_FIRST(n_dbg, 24)) {
                  fprintf(stderr, "[alias-miss] tex %u:0x%08X fmt=0x%02X %ux%u target=%u surf:",
-@@ -7572,8 +10772,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7572,8 +10917,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          }
          if (sampled < 0 && !zeta_pref && g.surfaces[target].location == t.location &&
              g.surfaces[target].offset == t.offset) {
@@ -10499,7 +10746,7 @@ index 25791179..c1f57971 100644
              g_ld_bind_surf++;
          } else if (sampled >= 0) {
              /* LD_ALIAS_DBG also reports the HIT. A texture that aliases a render
-@@ -7595,6 +10797,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7595,6 +10942,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                              g.surfaces[sampled].offset,
                              g.surfaces[sampled].w, g.surfaces[sampled].h);
              }
@@ -10510,7 +10757,7 @@ index 25791179..c1f57971 100644
              {   /* a smaller texture reads the surface's top-left samples, texel for sample */
                  const int sw = surface_window((u32)sampled, &t, alias_dbg);
                  if (sw >= 0) { slots[u] = (u32)sw; g_ld_bind_surf++; continue; }
-@@ -7611,7 +10817,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7611,7 +10962,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              /* Mirror the replay-proven depth-RT contract: address and format
               * must match, and the pass must have executed a depth-writing draw.
               * Clear-only zetas intentionally fall through to guest VRAM. */
@@ -10519,7 +10766,7 @@ index 25791179..c1f57971 100644
                  for (u32 i = 0; i < g.n_zdepths; i++)
                      if (g.zdepths[i].location == t.location &&
                          g.zdepths[i].offset == t.offset &&
-@@ -7650,12 +10856,26 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7650,12 +11001,26 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                  if (!seen && n_zdepth_used < SRV_TABLE_SIZE)
                      zdepth_used[n_zdepth_used++] = (u32)sampled_depth;
              } else {
@@ -10548,7 +10795,7 @@ index 25791179..c1f57971 100644
      const u32 vtex_mask = vertex_texture_mask();
      u32 vtex_slots[SRV_TABLE_SIZE];
      for (u32 u = 0; u < SRV_TABLE_SIZE; u++)
-@@ -7724,23 +10944,27 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7724,23 +11089,27 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          rtvs[0] = rtv;
          for (u32 r = 1; r < n_mrt; r++)
              rtvs[r] = rtv_handle(LD_SWAP_BUFFERS + mrt[r]);
@@ -10581,7 +10828,7 @@ index 25791179..c1f57971 100644
  
      const float W = sf.clip_w ? (float)sf.clip_w : (float)g.width;
      const float H = sf.clip_h ? (float)sf.clip_h : (float)g.height;
-@@ -7757,14 +10981,36 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7757,14 +11126,36 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          xf[5] = -((vp.translate[1] - Hv * 0.5f) / (Hv * 0.5f));
          xf[6] = vp.translate[2];
      }
@@ -10625,7 +10872,7 @@ index 25791179..c1f57971 100644
      if (ld_fp_constants_buffered())
          g.list->lpVtbl->SetGraphicsRootConstantBufferView(
              g.list, 4,
-@@ -7775,7 +11021,6 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7775,7 +11166,6 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      if (vtex_mask)
          g.list->lpVtbl->SetGraphicsRootDescriptorTable(
              g.list, 3, vtex_table);
@@ -10633,7 +10880,7 @@ index 25791179..c1f57971 100644
  
      D3D12_VIEWPORT dvp = {0, 0, W, H, 0.0f, 1.0f};
      D3D12_RECT sc = {
-@@ -7808,19 +11053,20 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7808,19 +11198,20 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              if (sc.bottom < sc.top)      sc.bottom = sc.top;
          }
      }
@@ -10659,7 +10906,7 @@ index 25791179..c1f57971 100644
      {
          const u64 serial = ++g_ld_recent_draw_total;
          ld_recent_draw* draw =
-@@ -7850,14 +11096,16 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7850,14 +11241,16 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          draw->clip_h = sf.clip_h;
          draw->srv_ring_used = g.srv_ring_used;
          draw->sampler_ring_used = g.smp_ring_used;
@@ -10680,7 +10927,7 @@ index 25791179..c1f57971 100644
          ibv.Format = DXGI_FORMAT_R32_UINT;
          g.list->lpVtbl->IASetIndexBuffer(g.list, &ibv);
          g.list->lpVtbl->DrawIndexedInstanced(
-@@ -7865,13 +11113,23 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7865,13 +11258,23 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      } else {
          g.list->lpVtbl->DrawInstanced(g.list, n_tri, 1, 0, 0);
      }
@@ -10707,7 +10954,7 @@ index 25791179..c1f57971 100644
          z->draws++;
          if (depth_state.depth_test) z->depth_test_draws++;
          if (depth_state.depth_write) z->depth_write_draws++;
-@@ -7947,7 +11205,11 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -7947,7 +11350,11 @@ static void sink_end(void* user, const rsx_dispatch* r)
  #if defined(YZ_PERF_PROFILE)
      const LONGLONG begin = ld_profile_qpc();
  #endif
@@ -10719,16 +10966,24 @@ index 25791179..c1f57971 100644
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.sink_end_qpc += (u64)(ld_profile_qpc() - begin);
  #endif
-@@ -7956,6 +11218,8 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -7956,6 +11363,16 @@ static void sink_end(void* user, const rsx_dispatch* r)
  static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
  {
      (void)user; (void)r;
 +    ld_frame_check();
-+    if (g_ld_skip_frame) return;   /* LD_FRAME_SKIP: a cleared, undrawn frame must not be shown */
++    /* A cleared, undrawn frame must not be shown: left-out frames clear only the passes they run
++     * (see sink_end_impl), and are never presented (rsx_live_draw_present_needed). */
++    if (g_ld_skip_frame || s_ld_pass_track) {
++        const int hot = ld_pass_hot();
++        if (g_ld_skip_frame) {
++            if (hot) return;
++            g_ld_pass_kept++;
++        }
++    }
      if (g_ld_movie_mode && !ld_movie_composite_ui_enabled()) return;
      g_ld_stats.clears++;
      const u32 target = current_surface();
-@@ -8220,6 +11484,82 @@ static int make_depth_snapshot_pipeline(void)
+@@ -8220,11 +11637,88 @@ static int make_depth_snapshot_pipeline(void)
      return SUCCEEDED(hr) ? 0 : -1;
  }
  
@@ -10811,7 +11066,13 @@ index 25791179..c1f57971 100644
  int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
                         rsx_live_guest_ptr_fn guest_fn, void* guest_user)
  {
-@@ -8356,10 +11696,13 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+     if (!rsx_live_draw_enabled()) return 0;
+     if (g.ready) return 0;
++    s_ld_hwnd = (HWND)hwnd;
+     ld_present_measure_init();
+ #if defined(YZ_PERF_PROFILE)
+     memset(&g_ld_profile, 0, sizeof(g_ld_profile));
+@@ -8356,10 +11850,13 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      g.dev->lpVtbl->CreateCommandQueue(g.dev, &qd, &IID_ID3D12CommandQueue, (void**)&g.queue);
      g.dev->lpVtbl->CreateCommandAllocator(g.dev, D3D12_COMMAND_LIST_TYPE_DIRECT,
                                            &IID_ID3D12CommandAllocator, (void**)&g.alloc);
@@ -10825,7 +11086,7 @@ index 25791179..c1f57971 100644
      g.dev->lpVtbl->CreateFence(g.dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void**)&g.fence);
      g.fence_event = CreateEventA(NULL, FALSE, FALSE, NULL);
  
-@@ -8385,7 +11728,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8385,7 +11882,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      g.rtv_step = g.dev->lpVtbl->GetDescriptorHandleIncrementSize(g.dev, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
      for (u32 i = 0; i < LD_SWAP_BUFFERS; i++) {
          g.swap->lpVtbl->GetBuffer(g.swap, i, &IID_ID3D12Resource, (void**)&g.backbuf[i]);
@@ -10834,7 +11095,7 @@ index 25791179..c1f57971 100644
      }
  
      /* upload arena */
-@@ -8395,28 +11738,28 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8395,28 +11892,28 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
      bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
      bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
@@ -10868,7 +11129,7 @@ index 25791179..c1f57971 100644
          g.dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
          D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
          &IID_ID3D12Resource, (void**)&g.ps_cb);
-@@ -8475,18 +11818,19 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8475,18 +11972,19 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
          drd.MipLevels = 1; drd.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT; drd.SampleDesc.Count = 1;
          drd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
          D3D12_CLEAR_VALUE dcv = {0}; dcv.Format = drd.Format; dcv.DepthStencil.Depth = 1.0f;
@@ -10891,7 +11152,7 @@ index 25791179..c1f57971 100644
          return -1;
  
      static const u8 white[4] = {255, 255, 255, 255};
-@@ -8501,6 +11845,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8501,6 +11999,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      sink.end = sink_end;
      sink.draw_arrays = sink_draw_arrays;
      sink.inline_array = sink_inline_array;
@@ -10899,7 +11160,7 @@ index 25791179..c1f57971 100644
      sink.draw_index_array = sink_draw_index;
      sink.flip = sink_flip;
      rsx_dispatch_init(&g.rsx, &sink);
-@@ -8615,6 +11960,32 @@ void rsx_live_draw_method(u32 method, u32 arg)
+@@ -8615,6 +12114,32 @@ void rsx_live_draw_method(u32 method, u32 arg)
      rsx_dispatch_method(&g.rsx, method, arg);
  }
  
@@ -10932,7 +11193,7 @@ index 25791179..c1f57971 100644
  void rsx_live_draw_set_movie_mode(int on)
  {
      static unsigned long long suppressed_at_start = 0;
-@@ -8929,6 +12300,72 @@ static void ld_dump_texel_rgb(const u8* p, int fp16, u8* out)
+@@ -8929,6 +12454,72 @@ static void ld_dump_texel_rgb(const u8* p, int fp16, u8* out)
   * through here while recording). */
  static FILE* g_ld_record_to;
  
@@ -11005,7 +11266,7 @@ index 25791179..c1f57971 100644
  static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
  {
      ID3D12Resource* rt = surface ? surface->tex : NULL;
-@@ -8948,7 +12385,7 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
+@@ -8948,7 +12539,7 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
      bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
      bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
      ID3D12Resource* rb = NULL;
@@ -11014,7 +11275,7 @@ index 25791179..c1f57971 100644
              D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&rb)))
          return UINT64_MAX;
  
-@@ -9202,6 +12639,7 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
+@@ -9202,6 +12793,7 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
  void rsx_live_draw_present(u32 buffer_id)
  {
      if (!g.ready) return;
@@ -11022,7 +11283,7 @@ index 25791179..c1f57971 100644
  
      /* LD_SURF_DUMP=<dir>: dump EVERY live surface once, with its non-black
       * count, at LD_SURF_DUMP_FRAME (default 1200).
-@@ -9262,20 +12700,38 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9262,20 +12854,38 @@ void rsx_live_draw_present(u32 buffer_id)
       * late scene, e.g. frames for a GIF, without thousands of early files). */
      static long dump_from = -1;
      if (dump_from < 0) { const char* e = getenv("LD_FRAME_DUMP_FROM"); dump_from = e ? atol(e) : 0; }
@@ -11066,7 +11327,7 @@ index 25791179..c1f57971 100644
          }
      }
      if (target == LD_INVALID_SURFACE && buffer_id < 8 &&
-@@ -9296,6 +12752,19 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9296,6 +12906,19 @@ void rsx_live_draw_present(u32 buffer_id)
          return;
      }
      g_ld_last_present_target = target;
@@ -11086,7 +11347,7 @@ index 25791179..c1f57971 100644
      if (dump_now) {
          char path[MAX_PATH * 2];
          snprintf(path, sizeof(path), "%s\\frame_%06u.ppm", dump_dir, dump_n - 1u);
-@@ -9416,7 +12885,23 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9416,7 +13039,23 @@ void rsx_live_draw_present(u32 buffer_id)
      bar[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
      g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
  
@@ -11111,7 +11372,7 @@ index 25791179..c1f57971 100644
  
      bar[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
      bar[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-@@ -9424,9 +12909,13 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9424,9 +13063,13 @@ void rsx_live_draw_present(u32 buffer_id)
      bar[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
      g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
  
@@ -11126,7 +11387,7 @@ index 25791179..c1f57971 100644
          if (SUCCEEDED(present_hr))
              ld_present_measure_record(g_ld_frames + 1u);
          else {
-@@ -10153,6 +13642,30 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -10153,6 +13796,30 @@ void rsx_live_draw_present(u32 buffer_id)
                    } }
                  (void)hi; (void)rbase;
              } }
@@ -11157,7 +11418,7 @@ index 25791179..c1f57971 100644
            fprintf(stderr, "[fps] %.1f (frames %u..%u over %.1fs)\n",
                    (g_ld_frames - fps_f0) * 1000.0 / (double)(now - fps_t0),
                    fps_f0, g_ld_frames, (now - fps_t0) / 1000.0);
-@@ -10275,9 +13788,11 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -10275,9 +13942,11 @@ void rsx_live_draw_present(u32 buffer_id)
      }
  #endif
  
@@ -11172,7 +11433,7 @@ index 25791179..c1f57971 100644
  #if !defined(YZ_PERF_CLEAN)
      g_ld_frame_vertex_constant_ring_recycles = 0;
  #endif
-@@ -10520,6 +14035,10 @@ void rsx_live_draw_shutdown(void)
+@@ -10520,6 +14189,10 @@ void rsx_live_draw_shutdown(void)
      if (g.ps_cb) g.ps_cb->lpVtbl->Release(g.ps_cb);
      if (g.depth_snapshot_pso)
          g.depth_snapshot_pso->lpVtbl->Release(g.depth_snapshot_pso);
@@ -11183,7 +11444,7 @@ index 25791179..c1f57971 100644
      for (u32 i = 0; i < 4; i++)
          if (g.downsample_pso[i]) g.downsample_pso[i]->lpVtbl->Release(g.downsample_pso[i]);
      if (g.downsample_rootsig)
-@@ -10552,3 +14071,27 @@ void rsx_live_draw_shutdown(void)
+@@ -10552,3 +14225,31 @@ void rsx_live_draw_shutdown(void)
  }
  
  #endif /* _WIN32 */
@@ -11206,6 +11467,10 @@ index 25791179..c1f57971 100644
 +    if (on < 0) { const char* e = getenv("LD_SKIP_EMPTY_PRESENT"); on = !e || atoi(e) != 0; }
 +    if (!on || g_ld_movie_mode) return 1;
 +    const unsigned long long groups = g_ld_stats.groups_seen, clears = g_ld_stats.clears;
++    /* A frame watch mode left out is never shown, even when a pass of it into a target only it
++     * updates (a name label, a cube face) was drawn: its display buffer was not drawn, and showing
++     * it would flash an old frame. */
++    if (g_ld_skip_frame) { last_groups = groups; last_clears = clears; return 0; }
 +    if (groups == last_groups && clears == last_clears) return 0;
 +    last_groups = groups;
 +    last_clears = clears;
@@ -12269,7 +12534,7 @@ index 9cb50400..e38aea53 100644
      ps3_hle_register_ctx(ps3_compute_nid("sys_mmapper_unmap_memory"),   "sys_mmapper_unmap_memory",   crt_ok);
      ps3_hle_register_ctx(ps3_compute_nid("sys_mmapper_free_memory"),    "sys_mmapper_free_memory",    crt_ok);
 diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
-index a55afb05..966190f7 100644
+index a55afb05..f5fdada9 100644
 --- a/runtime/ppu/tests/boot_main.cpp
 +++ b/runtime/ppu/tests/boot_main.cpp
 @@ -73,7 +73,7 @@ void     ps3_load_prx_modules(void) {}
@@ -12332,7 +12597,15 @@ index a55afb05..966190f7 100644
      }
      AcquireSRWLockExclusive(&s_env_lock);
      const char* val = NULL; int found = 0;
-@@ -446,8 +446,68 @@ static DWORD WINAPI guest_prof_thread(LPVOID)
+@@ -307,6 +307,7 @@ extern "C" int  rsx_null_backend_pump_messages(void);
+ extern "C" void cellGcm_rsx_process_fifo(void);   /* cellGcmSys.c: drain get->put */
+ extern "C" void cellGcm_fifo_kick_wait(unsigned ms); /* idle wait, woken by a kick */
+ extern "C" unsigned cellGcm_flip_request_count(void);
++extern "C" unsigned cellGcm_flip_present_count(void);   /* flips that show a frame, not SetPrepareFlip */
+ extern "C" unsigned cellGcmGetCurrentDisplayBufferId(void);
+ extern "C" int sys_event_queue_inject(unsigned int, unsigned long long, unsigned long long, unsigned long long, unsigned long long);
+ 
+@@ -446,8 +447,68 @@ static DWORD WINAPI guest_prof_thread(LPVOID)
  
  extern "C" const char* cellGame_get_title(void);   /* PARAM.SFO TITLE, for the caption */
  
@@ -12401,7 +12674,7 @@ index a55afb05..966190f7 100644
      /* Window caption: $PS3_TITLE wins, else the TITLE field PARAM.SFO already
       * gave cellGame, else a neutral name. It used to fall back to a specific
       * other title, so every port announced itself as that game. */
-@@ -485,7 +545,16 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -485,7 +546,16 @@ static DWORD WINAPI vblank_ticker(LPVOID)
       * window DXGI Present throttles hard, which previously stalled these ticks and
       * paced the game's main loop to ~0.5fps. Drive the ticks off REAL elapsed time
       * and catch up in a bounded burst so present latency never slows the game. */
@@ -12419,7 +12692,7 @@ index a55afb05..966190f7 100644
      for (;;) {
          /* Was Sleep(4). The FIFO kick event existed, was signalled on a dry
           * fence queue, and had no waiter -- so a guest starved for `get` or a
-@@ -494,8 +563,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -494,8 +564,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
           * does. */
          cellGcm_fifo_kick_wait(4);
          ULONGLONG now = GetTickCount64();
@@ -12430,16 +12703,18 @@ index a55afb05..966190f7 100644
              cellGcmTickVBlank();
              cellGcmTickFlip();
              /* Present a pending flip BEFORE draining further: the flip fires
-@@ -505,7 +575,7 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -505,8 +576,8 @@ static DWORD WINAPI vblank_ticker(LPVOID)
               * writes and showed empty or mixed batches. */
              {
                  if (rsx_ok && cellGcm_take_flip_pending()) {
 -                    present_guest_frame();
+-                    last_flip = cellGcm_flip_request_count();
 +                    timed_present();
-                     last_flip = cellGcm_flip_request_count();
++                    last_flip = cellGcm_flip_present_count();
                  }
              }
-@@ -514,20 +584,21 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+             /* Drain the game's GCM FIFO every tick -- this writes the RSX sync-fence
+@@ -514,20 +585,21 @@ static DWORD WINAPI vblank_ticker(LPVOID)
               * Doing it here (not after present) keeps those fences advancing at 60Hz
               * even when present() throttles on a hidden/occluded window. */
              if (rsx_ok) cellGcm_rsx_process_fifo();
@@ -12456,15 +12731,16 @@ index a55afb05..966190f7 100644
          if (rsx_ok) {
              if (cellGcm_take_flip_pending()) {
 -                present_guest_frame();
+-                last_flip = cellGcm_flip_request_count();
 +                timed_present();
-                 last_flip = cellGcm_flip_request_count();
++                last_flip = cellGcm_flip_present_count();
              }
              cellGcm_rsx_process_fifo();
 +            cellGcmTickFlip();
          }
          /* YDKJ_INJECT_Q3: the main thread polls q3 (load/state-complete) each frame but
           * it's never posted (producer signals a condvar, never enqueues). Inject a q3
-@@ -538,7 +609,13 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -538,7 +610,13 @@ static DWORD WINAPI vblank_ticker(LPVOID)
              if(++s_q3 % 8 == 0){ int r=sys_event_queue_inject(qid, 0x1234, 0, 0, 0);
                static int _n=0; if(_n++<12) fprintf(stderr,"[INJQ3] injected q%u event rc=%d\n",qid,r); } }
          if (rsx_ok) {
@@ -12479,16 +12755,19 @@ index a55afb05..966190f7 100644
              if (getenv("YDKJ_PACETRACE")) {
                  static ULONGLONG s_win=0; static int s_pf=0, s_pres=0; static ULONGLONG s_presms=0;
                  s_pf += fired; s_pres++;
-@@ -559,7 +636,7 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -557,9 +635,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+                  * flash a partial frame (clear + a few draws). Before the
+                  * first flip present freely so the window isn't stuck white
                   * during boot. */
-                 unsigned fc = cellGcm_flip_request_count();
+-                unsigned fc = cellGcm_flip_request_count();
++                unsigned fc = cellGcm_flip_present_count();
                  if (fc != last_flip || fc == 0) {
 -                    if (fc) present_guest_frame(); else rsx_present_frame();
 +                    if (fc) timed_present(); else rsx_present_frame();
                      last_flip = fc;
                  } else if (fc == 0) {
                      rsx_backend_present();
-@@ -934,45 +1011,45 @@ static DWORD WINAPI debug_console(LPVOID param)
+@@ -934,45 +1012,45 @@ static DWORD WINAPI debug_console(LPVOID param)
              dump_threads("console", self);
          } else if (!strcmp(verb, "find32") && sscanf(cmd, "%*s %x", &a) == 1) {
              /* find32 <hex>: every aligned big-endian u32 equal to <hex> in committed
@@ -12563,7 +12842,7 @@ index a55afb05..966190f7 100644
          } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
              dbg_prof((DWORD)a, b ? b : 5);
          } else if (!strcmp(verb, "hle")) {
-@@ -1136,7 +1213,12 @@ int main(int argc, char** argv)
+@@ -1136,7 +1214,12 @@ int main(int argc, char** argv)
      /* Reserve the full 4 GB guest space; pages commit on first touch via the VEH. */
      AddVectoredExceptionHandler(1, guard_report_veh);  /* diagnose 0x80000001 silent deaths */
      AddVectoredExceptionHandler(1, vm_commit_veh);
