@@ -7,6 +7,10 @@ sound, input and system calls are reimplemented on Windows (Direct3D 12 for the 
 It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows from the
 [GT5 Prologue port](https://github.com/sp00nznet/GT5P), both by Ned Heller (sp00nznet).
 
+> **Game version required:** your own **Gran Turismo 5** Blu-ray disc, European release
+> **BCES00569**, using the disc's own executable: version **01.00**, with **no game update** installed.
+> Other regions (such as the US release, BCUS98114) and updated versions will not work. Check your files against the hashes under [Which copy of GT5](#which-copy-of-gt5).
+
 ## What this repository contains, and what it does not
 
 This repository holds only code and scripts written for the port:
@@ -67,8 +71,8 @@ The port was built from, and only works with, this version of the game:
 | `EBOOT.elf` SHA-1 (decrypted) | `1535B865EC7DD58E7704B378B8621532ECF844E1` |
 
 The recompiled code, `config\label_jumps.json` and parts of the patch refer to addresses inside that
-exact executable, so other regions (BCUS98114, BCJS30001 and others) and executables from game updates
-will not work as they are. Check your files' hashes with
+exact executable, so other regions (such as BCUS98114) and executables from game updates will not
+work as they are. Check your files' hashes with
 `Get-FileHash <file> -Algorithm SHA1` in PowerShell.
 
 ## Setup
