@@ -26,6 +26,12 @@ It does **not** contain, and must never be given:
 You need your own copy of Gran Turismo 5 (BCES00569), dumped from a console you own, and PS3 system
 software installed from Sony's official update file. Use this only with games you own.
 
+- **Never share what you build.** `gt5.exe`, the `generated/` folder and anything else made by the
+  lift contain code recompiled from the game, so each person has to build them from their own copy.
+  Don't upload them or a ready-to-play package, and don't ask for them.
+- This repository does not include, link to, or explain how to obtain decryption keys or game files.
+- Questions about downloaded copies of the game will not be answered.
+
 **Gran Turismo** is a trademark of Sony Interactive Entertainment. This project is not affiliated
 with, endorsed by, or connected to Sony Interactive Entertainment or Polyphony Digital.
 
