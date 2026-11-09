@@ -1,0 +1,133 @@
+# GT5 Recomp
+
+An unofficial PC port of **Gran Turismo 5** (PS3, BCES00569) made by static recompilation: the game's
+PowerPC and SPU code is translated into C++ that is compiled for Windows x64, and the PS3's graphics,
+sound, input and system calls are reimplemented on Windows (Direct3D 12 for the RSX).
+
+It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows from the
+[GT5 Prologue port](https://github.com/sp00nznet/GT5P), both by Ned Heller (sp00nznet).
+
+## What this repository contains, and what it does not
+
+This repository holds only code and scripts written for the port:
+
+- `GT5/patches/ps3recomp.patch`: the changes to ps3recomp (runtime, graphics, SPU, audio, input).
+- `GT5/CMakeLists.txt`, `GT5/play.bat`, `GT5/src/`, `GT5/config/`: the GT5 build and launcher.
+- `GT5/scripts/`: the lift, build, test and analysis tools.
+
+It does **not** contain, and must never be given:
+
+- any part of the game: the EBOOT, disc or installed files, music, textures, models, shaders,
+  menu images, save data, or screenshots;
+- code generated from the game (the recompiled `generated/` and `spu/` folders, `src/gen/`): every
+  user produces these from their own copy;
+- PS3 firmware, system modules, or any decryption key.
+
+You need your own copy of Gran Turismo 5 (BCES00569), dumped from a console you own, and PS3 system
+software installed from Sony's official update file. Use this only with games you own.
+
+**Gran Turismo** is a trademark of Sony Interactive Entertainment. This project is not affiliated
+with, endorsed by, or connected to Sony Interactive Entertainment or Polyphony Digital.
+
+## Status
+
+- Boots, menus, A-Spec and B-Spec races, licence tests, special events, replays, Photo Mode, the
+  Course Maker and GT TV work in testing.
+- Performance depends mostly on the CPU: on a fast desktop CPU menus run at 60 fps and races at roughly
+  45 to 60 fps. The first visit to a scene stutters while its shaders compile; later visits load them
+  from the shader cache.
+- Online features do not work. Some graphics issues remain.
+
+## Requirements
+
+- Windows 10 or 11 (x64) and a Direct3D 12 graphics card.
+- Visual Studio 2022 with *Desktop development with C++* and *C++ Clang tools for Windows*
+  (provides clang-cl, CMake and Ninja).
+- Python 3.11 or newer, and Git.
+- About 25 GB free: the game files are about 17 GB, the build a few more.
+- Your own GT5 disc (BCES00569) and the means to dump it, and
+  [RPCS3](https://rpcs3.net) to install PS3 firmware and decrypt the game's executable.
+
+## Which copy of GT5
+
+The port was built from, and only works with, this version of the game:
+
+| | |
+|---|---|
+| Game | Gran Turismo 5, Blu-ray disc |
+| Title ID | **BCES00569** (Europe / PAL) |
+| Executable | the disc's own `EBOOT.BIN`, application version **01.00**, with no game update installed |
+| `EBOOT.BIN` SHA-1 | `1FFABF4C029CF3099579B73425C91C1FD48CAFCA` |
+| `EBOOT.elf` SHA-1 (decrypted) | `1535B865EC7DD58E7704B378B8621532ECF844E1` |
+
+The recompiled code, `config\label_jumps.json` and parts of the patch refer to addresses inside that
+exact executable, so other regions (BCUS98114, BCJS30001 and others) and executables from game updates
+will not work as they are. Check your files' hashes with
+`Get-FileHash <file> -Algorithm SHA1` in PowerShell.
+
+## Setup
+
+1. Clone this repository and run `setup.ps1` in PowerShell. It clones ps3recomp at the commit the
+   patch was made against and applies the patch, creates the Python environment, and downloads the
+   FFmpeg LGPL build that plays the game's movies.
+2. Dump your own BCES00569 disc and copy its `PS3_GAME` folder to `GT5\vfs\PS3_GAME`.
+3. In RPCS3, install the PS3 firmware (File > Install Firmware, with `PS3UPDAT.PUP` from Sony), then copy
+   RPCS3's `dev_flash` folder to `GT5\dev_flash`.
+4. In RPCS3, decrypt the executable (Utilities > Decrypt PS3 Binaries) by choosing your disc's
+   `PS3_GAME\USRDIR\EBOOT.BIN`. Copy the decrypted file to `GT5\input\EBOOT.elf`, and copy the disc's
+   `EBOOT.BIN` and `PS3_GAME\PARAM.SFO` to `GT5\input` as well. Check both hashes against the table above.
+5. Generate the recompiled code from your executable: `GT5\scripts\relift.ps1` (about 10 minutes).
+6. Build: `GT5\scripts\build.cmd gt5` (the first build takes a while).
+7. Play: `GT5\play.bat`. Saves go to `GT5\hdd0`; logs go to `GT5\logs`.
+
+When it is set up, the folder looks like this (the parts you add are marked):
+
+```
+gt5-recomp\
+  setup.ps1, README.md, LICENSE
+  ps3recomp\          fetched and patched by setup.ps1
+  ffmpeg\             fetched by setup.ps1
+  venv\               made by setup.ps1
+  GT5\
+    input\            YOU ADD: EBOOT.BIN, EBOOT.elf (decrypted), PARAM.SFO
+    vfs\PS3_GAME\     YOU ADD: the PS3_GAME folder from your disc
+    dev_flash\        YOU ADD: from RPCS3 after installing Sony's firmware
+    generated\, src\gen\   made by relift.ps1 from your EBOOT.elf
+    build\            made by build.cmd (gt5.exe)
+    hdd0\, logs\      made when you play
+```
+
+Optional, for speed: GT5 runs many SPU jobs. They run in an interpreter until they are captured and
+recompiled. Run the game once with `SPU_DUMP_MISS=<GT5 folder>\analysis\spu_miss` set, then run
+`python GT5\scripts\lift_spu_jobs.py` and build again (see the comments at the top of that script).
+
+## Controls
+
+A DualSense, DualShock 4 or XInput pad works. Without one, the keyboard:
+Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
+
+## Switches
+
+`play.bat` sets the usual environment variables. Some useful ones:
+
+| Variable | Effect |
+|---|---|
+| `PAD_BACKGROUND=1` | The pad keeps working when another window has focus. |
+| `GCM_DRAIN_STAT=1` | Timing lines every 5 s in `logs\play.err`. |
+| `PS3_MUTE=1` | No sound. |
+| `RSX_SHADER_CACHE_DIR=<dir>` | Where compiled shaders are cached (default `scratch\rsx_shader_cache_v2`). |
+
+Most speed-ups in the patch can be switched off one by one to rule them out when something looks
+wrong; each is described in a comment next to its `getenv` in the patch.
+
+## Credits
+
+- [ps3recomp](https://github.com/sp00nznet/ps3recomp) and [GT5P](https://github.com/sp00nznet/GT5P)
+  by Ned Heller (sp00nznet), MIT licensed; their licences are in `licenses/`.
+- ps3recomp's live D3D12 renderer began as caner (canersaka)'s work for Yakuza: Dead Souls.
+- RPCS3, envytools and Mesa's nv30 driver were consulted as references for hardware behaviour.
+
+## License
+
+The code in this repository is under the MIT License (`LICENSE`). The patch modifies ps3recomp, which
+is also MIT licensed. FFmpeg is not included; `setup.ps1` downloads an LGPL build of it.

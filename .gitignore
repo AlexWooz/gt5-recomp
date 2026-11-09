@@ -1,0 +1,64 @@
+# Never commit anything from the game, anything generated from it, or PS3 firmware.
+# Game files
+GT5/input/
+GT5/vfs/
+GT5/gamedata/
+GT5/dev_flash/
+*.elf
+*.ELF
+*.self
+*.SELF
+*.sprx
+*.SPRX
+*.bin
+*.BIN
+*.pkg
+*.PKG
+*.rap
+*.RAP
+*.edat
+*.EDAT
+*.sdat
+*.SDAT
+*.PUP
+*.sfo
+*.SFO
+*.iso
+*.ISO
+*.zip
+*.7z
+*.rar
+# Code and data generated from the game
+GT5/generated/
+GT5/spu/
+GT5/src/gen/
+GT5/analysis/
+GT5/scratch/
+# Saves, logs, screenshots
+GT5/hdd0/
+GT5/hdd1/
+GT5/test_save/
+GT5/logs/
+GT5/scripts/refs/
+*.png
+*.ppm
+*.jpg
+*.f32
+*.wav
+# Build output and fetched dependencies
+GT5/build/
+build/
+ps3recomp/
+ffmpeg/
+venv/
+__pycache__/
+*.pyc
+# Editors and OS
+.vs/
+.vscode/
+.idea/
+.claude/
+*.user
+Thumbs.db
+desktop.ini
+.DS_Store
