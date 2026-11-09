@@ -1,15 +1,20 @@
 # GT5 Recomp
 
-An unofficial PC port of **Gran Turismo 5** (PS3, BCES00569) made by static recompilation: the game's
+An unofficial PC port of **Gran Turismo 5** (PS3) made by static recompilation: the game's
 PowerPC and SPU code is translated into C++ that is compiled for Windows x64, and the PS3's graphics,
 sound, input and system calls are reimplemented on Windows (Direct3D 12 for the RSX).
 
 It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows from the
 [GT5 Prologue port](https://github.com/sp00nznet/GT5P), both by Ned Heller (sp00nznet).
 
-> **Game version required:** your own **Gran Turismo 5** Blu-ray disc, European release
-> **BCES00569**, using the disc's own executable: version **01.00**, with **no game update** installed.
-> Other regions (such as the US release, BCUS98114) and updated versions will not work. Check your files against the hashes under [Which copy of GT5](#which-copy-of-gt5).
+> **Game version required:** your own **Gran Turismo 5** Blu-ray disc, using the disc's own
+> executable (version **01.00**, with **no game update** installed):
+>
+> - **Europe, BCES00569**: tested. This is the copy the port was built from.
+> - **North America, BCUS98114**: expected to work, not tested yet. The lift finds the few addresses
+>   that differ between releases in your own executable.
+>
+> See [Which copy of GT5](#which-copy-of-gt5) for how to check your files.
 
 ## What this repository contains, and what it does not
 
@@ -27,7 +32,7 @@ It does **not** contain, and must never be given:
   user produces these from their own copy;
 - PS3 firmware, system modules, or any decryption key.
 
-You need your own copy of Gran Turismo 5 (BCES00569), dumped from a console you own, and PS3 system
+You need your own copy of Gran Turismo 5 (BCES00569 or BCUS98114), dumped from a console you own, and PS3 system
 software installed from Sony's official update file. Use this only with games you own.
 
 - **Never share what you build.** `gt5.exe`, the `generated/` folder and anything else made by the
@@ -55,38 +60,46 @@ with, endorsed by, or connected to Sony Interactive Entertainment or Polyphony D
   (provides clang-cl, CMake and Ninja).
 - Python 3.11 or newer, and Git.
 - About 25 GB free: the game files are about 17 GB, the build a few more.
-- Your own GT5 disc (BCES00569) and the means to dump it, and
+- Your own GT5 disc (BCES00569, or BCUS98114 untested) and the means to dump it, and
   [RPCS3](https://rpcs3.net) to install PS3 firmware and decrypt the game's executable.
 
 ## Which copy of GT5
 
-The port was built from, and only works with, this version of the game:
+Use the Blu-ray disc's own executable, `PS3_GAME\USRDIR\EBOOT.BIN`, application version **01.00**
+(the `APP_VER` in `PS3_GAME\PARAM.SFO`). Executables from game updates are not supported.
 
-| | |
-|---|---|
-| Game | Gran Turismo 5, Blu-ray disc |
-| Title ID | **BCES00569** (Europe / PAL) |
-| Executable | the disc's own `EBOOT.BIN`, application version **01.00**, with no game update installed |
-| `EBOOT.BIN` SHA-1 | `1FFABF4C029CF3099579B73425C91C1FD48CAFCA` |
-| `EBOOT.elf` SHA-1 (decrypted) | `1535B865EC7DD58E7704B378B8621532ECF844E1` |
+| Release | Title ID | Status | SHA-1 of the disc's files |
+|---|---|---|---|
+| Europe / PAL | **BCES00569** | tested | `EBOOT.BIN` `1FFABF4C029CF3099579B73425C91C1FD48CAFCA`, decrypted `EBOOT.elf` `1535B865EC7DD58E7704B378B8621532ECF844E1` |
+| North America | **BCUS98114** | expected to work, not tested yet | |
 
-The recompiled code, `config\label_jumps.json` and parts of the patch refer to addresses inside that
-exact executable, so other regions (such as BCUS98114) and executables from game updates will not
-work as they are. Check your files' hashes with
-`Get-FileHash <file> -Algorithm SHA1` in PowerShell.
+Almost everything in the port works for any release, because the recompiled code is generated from
+your own executable. Only three things are tied to where the code sits in one executable: the end of
+the code, the game's setjmp/longjmp routines, and one jump table the game builds while it runs.
+`GT5\scripts\relift.ps1` starts by running `GT5\scripts\version_addrs.py`, which finds all three in
+your EBOOT by what the code looks like, not by address, and prints your EBOOT's SHA-1:
+
+- If every line is found, carry on: your release should work.
+- If it prints `NOT FOUND`, that release differs in those places. Please open an issue with that
+  output (the text only, never any game file).
+
+Check a file's hash with `Get-FileHash <file> -Algorithm SHA1` in PowerShell.
 
 ## Setup
 
 1. Clone this repository and run `setup.ps1` in PowerShell. It clones ps3recomp at the commit the
    patch was made against and applies the patch, creates the Python environment, and downloads the
    FFmpeg LGPL build that plays the game's movies.
-2. Dump your own BCES00569 disc and copy its `PS3_GAME` folder to `GT5\vfs\PS3_GAME`.
+2. Dump your own GT5 disc (BCES00569 or BCUS98114) and copy its `PS3_GAME` folder to
+   `GT5\vfs\PS3_GAME`.
 3. In RPCS3, install the PS3 firmware (File > Install Firmware, with `PS3UPDAT.PUP` from Sony), then copy
    RPCS3's `dev_flash` folder to `GT5\dev_flash`.
 4. In RPCS3, decrypt the executable (Utilities > Decrypt PS3 Binaries) by choosing your disc's
    `PS3_GAME\USRDIR\EBOOT.BIN`. Copy the decrypted file to `GT5\input\EBOOT.elf`, and copy the disc's
-   `EBOOT.BIN` and `PS3_GAME\PARAM.SFO` to `GT5\input` as well. Check both hashes against the table above.
+   `EBOOT.BIN` and `PS3_GAME\PARAM.SFO` to `GT5\input` as well. For the European release, check both
+   hashes against the table above.
 5. Generate the recompiled code from your executable: `GT5\scripts\relift.ps1` (about 10 minutes).
+   Read the `version_addrs` lines it prints first (see [Which copy of GT5](#which-copy-of-gt5)).
 6. Build: `GT5\scripts\build.cmd gt5` (the first build takes a while).
 7. Play: `GT5\play.bat`. Saves go to `GT5\hdd0`; logs go to `GT5\logs`.
 

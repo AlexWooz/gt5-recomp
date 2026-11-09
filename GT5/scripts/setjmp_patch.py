@@ -25,8 +25,15 @@ from pathlib import Path
 
 GEN = Path(__file__).resolve().parent.parent / "generated"
 
-SETJMP = "00D00D74"
-LONGJMP = "00D00E98"
+# This copy's routines, as scripts/version_addrs.py found them (relift.ps1 runs it first);
+# Europe 01.00's when it has not run.
+SETJMP, LONGJMP = "00D00D74", "00D00E98"
+_ver = Path(__file__).resolve().parent.parent / "analysis" / "version.json"
+if _ver.exists():
+    import json as _json
+    _v = _json.loads(_ver.read_text())
+    if _v.get("setjmp") and _v.get("longjmp"):
+        SETJMP, LONGJMP = _v["setjmp"], _v["longjmp"]
 
 DECLS = """
 /* ---- setjmp_patch.py ------------------------------------------------- */
