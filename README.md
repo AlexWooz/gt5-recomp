@@ -1,3 +1,15 @@
+<p align="center">
+  <img src="docs/banner.png" alt="GT5 Recomp: Gran Turismo 5, PS3 to PC static recompilation" width="100%">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Europe_BCES00569-tested-2E8BFF?style=for-the-badge" alt="Europe BCES00569: tested">
+  <img src="https://img.shields.io/badge/US_BCUS98114-untested-6E7681?style=for-the-badge" alt="US BCUS98114: untested">
+  <img src="https://img.shields.io/badge/Windows_x64-Direct3D_12-5CC8FF?style=for-the-badge" alt="Windows x64, Direct3D 12">
+  <img src="https://img.shields.io/badge/license-MIT-E8312F?style=for-the-badge" alt="MIT license">
+  <img src="https://img.shields.io/badge/Discord-mormonftp-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord: mormonftp">
+</p>
+
 # GT5 Recomp
 
 An unofficial PC port of **Gran Turismo 5** (PS3) made by static recompilation: the game's
@@ -16,7 +28,7 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
 >
 > See [Which copy of GT5](#which-copy-of-gt5) for how to check your files.
 
-## Try it, then tell me how it went
+## 🏁 Try it, then tell me how it went
 
 If you own the game, please set it up and play. Every result helps decide what gets fixed next,
 whether it runs great, half works, or doesn't build at all. US players especially: the US release
@@ -30,7 +42,7 @@ hasn't been tested yet.
 | Post quick results, screenshots of it running, or ask for help | [Discussions](https://github.com/MormonFTP-hub/gt5-recomp/discussions/1) |
 | Talk to me directly | Discord: **mormonftp** (add me and send a message) |
 
-## Fork it, mod it
+## 🔧 Fork it, mod it
 
 Forks are welcome; take whatever you like (MIT license). If you make something good, open a pull
 request or [show it here](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=4-my-fork-or-mod.yml)
@@ -38,7 +50,7 @@ so it can come back into the main repo. [MODDING.md](MODDING.md) covers the ways
 game-code mods in `GT5\mods`, the graphics, controller and sound code, and the tools for finding
 your way around. [CONTRIBUTING.md](CONTRIBUTING.md) has the few rules.
 
-## What this repository contains, and what it does not
+## ⚖️ What this repository contains, and what it does not
 
 This repository holds only code and scripts written for the port:
 
@@ -66,7 +78,7 @@ software installed from Sony's official update file. Use this only with games yo
 **Gran Turismo** is a trademark of Sony Interactive Entertainment. This project is not affiliated
 with, endorsed by, or connected to Sony Interactive Entertainment or Polyphony Digital.
 
-## Status
+## 🏎️ Status
 
 - Boots, menus, A-Spec and B-Spec races, licence tests, special events, replays, Photo Mode, the
   Course Maker and GT TV work in testing.
@@ -75,7 +87,7 @@ with, endorsed by, or connected to Sony Interactive Entertainment or Polyphony D
   from the shader cache.
 - Online features do not work. Some graphics issues remain.
 
-## Requirements
+## 🧰 Requirements
 
 - Windows 10 or 11 (x64) and a Direct3D 12 graphics card.
 - Visual Studio 2022 with *Desktop development with C++* and *C++ Clang tools for Windows*
@@ -107,7 +119,7 @@ your EBOOT by what the code looks like, not by address, and prints your EBOOT's 
 
 Check a file's hash with `Get-FileHash <file> -Algorithm SHA1` in PowerShell.
 
-## Setup
+## 🚦 Setup
 
 1. Clone this repository and run `setup.ps1` in PowerShell. It clones ps3recomp at the commit the
    patch was made against and applies the patch, creates the Python environment, and downloads the
@@ -146,12 +158,12 @@ Optional, for speed: GT5 runs many SPU jobs. They run in an interpreter until th
 recompiled. Run the game once with `SPU_DUMP_MISS=<GT5 folder>\analysis\spu_miss` set, then run
 `python GT5\scripts\lift_spu_jobs.py` and build again (see the comments at the top of that script).
 
-## Controls
+## 🎮 Controls
 
 A DualSense, DualShock 4 or XInput pad works. Without one, the keyboard:
 Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
 
-## Switches
+## ⚙️ Switches
 
 `play.bat` sets the usual environment variables. Some useful ones:
 
@@ -168,14 +180,14 @@ Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Sta
 Most speed-ups in the patch can be switched off one by one to rule them out when something looks
 wrong; each is described in a comment next to its `getenv` in the patch.
 
-## Credits
+## 🏆 Credits
 
 - [ps3recomp](https://github.com/sp00nznet/ps3recomp) and [GT5P](https://github.com/sp00nznet/GT5P)
   by Ned Heller (sp00nznet), MIT licensed; their licences are in `licenses/`.
 - ps3recomp's live D3D12 renderer began as caner (canersaka)'s work for Yakuza: Dead Souls.
 - RPCS3, envytools and Mesa's nv30 driver were consulted as references for hardware behaviour.
 
-## License
+## 📄 License
 
 The code in this repository is under the MIT License (`LICENSE`). The patch modifies ps3recomp, which
 is also MIT licensed. FFmpeg is not included; `setup.ps1` downloads an LGPL build of it.

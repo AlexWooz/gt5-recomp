@@ -41,6 +41,8 @@ GT5/test_save/
 GT5/logs/
 GT5/scripts/refs/
 *.png
+!docs/banner.png
+!docs/social.png
 *.ppm
 *.jpg
 *.f32
