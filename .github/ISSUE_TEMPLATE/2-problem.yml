@@ -1,0 +1,72 @@
+name: Something's broken
+description: A crash, freeze, wrong picture or sound, a setup or build step that fails.
+title: "[Problem] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Sorry it broke! The more exact, the faster it gets fixed.
+        Please don't attach or link game files, builds (`gt5.exe`) or the generated code.
+  - type: dropdown
+    id: release
+    attributes:
+      label: Which copy of GT5?
+      options:
+        - Europe, BCES00569
+        - North America, BCUS98114
+        - Something else (say which below)
+    validations:
+      required: true
+  - type: dropdown
+    id: step
+    attributes:
+      label: Where did it go wrong?
+      options:
+        - setup.ps1
+        - relift.ps1 (generating the code)
+        - build.cmd (building)
+        - Starting the game
+        - In the menus
+        - In a race
+        - Replays, Photo Mode or another mode
+        - Saving or loading
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you saw or heard, and what you expected instead. Screenshots of the problem are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to make it happen again
+      placeholder: |
+        1. Arcade > Single Race > Suzuka
+        2. Pick any car
+        3. At the start line the screen flickers
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        For setup, lift or build problems: the error lines from the window.
+        For the game: the last 60 lines of `GT5\logs\play.err` (open it in Notepad, copy from the bottom).
+      render: text
+  - type: input
+    id: hardware
+    attributes:
+      label: CPU, graphics card, Windows version
+      placeholder: e.g. Ryzen 5 5600, RTX 3060, Windows 11
+    validations:
+      required: true
+  - type: checkboxes
+    id: own_copy
+    attributes:
+      label: Own copy
+      options:
+        - label: I'm using my own copy of the game, dumped from my own console, and I'm not sharing game files or builds here.
+          required: true

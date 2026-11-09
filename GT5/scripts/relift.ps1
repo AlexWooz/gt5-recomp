@@ -25,10 +25,15 @@ Run "ppu_loader"     @("$tk\ppu_loader.py", "input\EBOOT.elf", "-o", "analysis\"
 Run "find_functions" @("$tk\find_functions.py", "input\EBOOT.elf", "--seed-json", "analysis\EBOOT.functions.json", "--output", "analysis\functions.json")
 Run "filter"         @("scripts\filter_functions.py", "input\EBOOT.elf", "analysis\functions.json", "analysis\functions_code.json")
 
-Run "ppu_lifter"     @("$tk\ppu_lifter.py", "input\EBOOT.elf", "--functions", "analysis\functions_code.json",
-                       "--hle-stubs", "analysis\EBOOT.imports.json", "--code-end", $codeEnd,
-                       "--label-jumps", "analysis\label_jumps.json",
-                       "--jobs", "16", "--chunks", "48", "--output", "generated")
+# Game-code mods in GT5\mods (see MODDING.md): their instruction patches go to the lifter, each
+# behind a start-up switch. With no mod for this EBOOT, mods.py writes nothing and the lift is plain.
+Run "mods"           @("scripts\mods.py")
+$liftArgs = @("$tk\ppu_lifter.py", "input\EBOOT.elf", "--functions", "analysis\functions_code.json",
+              "--hle-stubs", "analysis\EBOOT.imports.json", "--code-end", $codeEnd,
+              "--label-jumps", "analysis\label_jumps.json",
+              "--jobs", "16", "--chunks", "48", "--output", "generated")
+if (Test-Path "analysis\insn_patches.json") { $liftArgs += @("--insn-patches", "analysis\insn_patches.json") }
+Run "ppu_lifter"     $liftArgs
 Run "setjmp_patch"   @("scripts\setjmp_patch.py")
 
 New-Item -ItemType Directory -Force src\gen | Out-Null

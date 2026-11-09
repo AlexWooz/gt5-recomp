@@ -1,0 +1,104 @@
+name: "Tried it: here's how it went"
+description: You set it up and played (or tried to). Great, half working or not at all, every report helps.
+title: "[Report] "
+labels: ["report", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying the port! These answers tell me what to fix next. Most are quick picks.
+        Please don't attach or link game files, builds (`gt5.exe`) or the generated code.
+  - type: dropdown
+    id: release
+    attributes:
+      label: Which copy of GT5?
+      options:
+        - Europe, BCES00569
+        - North America, BCUS98114
+        - Something else (say which below)
+    validations:
+      required: true
+  - type: dropdown
+    id: how_far
+    attributes:
+      label: How far did you get?
+      options:
+        - Played races, no real problems
+        - Played, but with problems
+        - Reached the menus
+        - It started, then froze or crashed
+        - It didn't build
+        - setup.ps1 or relift.ps1 failed
+    validations:
+      required: true
+  - type: checkboxes
+    id: played
+    attributes:
+      label: What did you play?
+      options:
+        - label: A-Spec races (driving)
+        - label: B-Spec races (managing a driver)
+        - label: Licence tests or special events
+        - label: Replays or Photo Mode
+        - label: Course Maker or GT TV
+  - type: dropdown
+    id: fps
+    attributes:
+      label: Frame rate in races (the window title shows FPS)
+      options:
+        - Didn't get to a race
+        - Under 20
+        - 20 to 30
+        - 30 to 45
+        - 45 to 55
+        - Steady 60
+  - type: input
+    id: cpu
+    attributes:
+      label: CPU
+      placeholder: e.g. Ryzen 7 5800X3D, Core i5-12400
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics card
+      placeholder: e.g. RTX 3060, RX 6700 XT
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: RAM and Windows version (optional)
+      placeholder: e.g. 32 GB, Windows 11 24H2
+  - type: dropdown
+    id: controller
+    attributes:
+      label: What did you play with?
+      options:
+        - DualSense or DualShock 4
+        - Xbox or other XInput pad
+        - Keyboard
+        - Wheel or something else (say which below)
+  - type: textarea
+    id: problems
+    attributes:
+      label: Anything wrong?
+      description: Graphics, sound, controls, speed, freezes. Where it happened (menu, track, car) helps a lot. Screenshots of the problem are welcome.
+  - type: textarea
+    id: change
+    attributes:
+      label: What would you change or add?
+  - type: textarea
+    id: version_addrs
+    attributes:
+      label: version_addrs output (optional, needed for the US release)
+      description: The lines relift.ps1 prints first, starting with "EBOOT.elf SHA-1".
+      render: text
+  - type: checkboxes
+    id: own_copy
+    attributes:
+      label: Own copy
+      options:
+        - label: I'm using my own copy of the game, dumped from my own console, and I'm not sharing game files or builds here.
+          required: true

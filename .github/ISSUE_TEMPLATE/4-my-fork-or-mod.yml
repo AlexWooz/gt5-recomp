@@ -1,0 +1,53 @@
+name: I made a fork, mod or fix
+description: Show what you built on the port, so it can be tried and maybe brought into the main repo.
+title: "[Fork/mod] "
+labels: ["mod", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Forks and mods are welcome; do what you like with the code (it's MIT licensed).
+        If something should come back into the main repo, a pull request is the quickest way,
+        but a link here works too.
+  - type: input
+    id: link
+    attributes:
+      label: Link to your fork, branch or mod
+      placeholder: https://github.com/you/gt5-recomp/tree/your-branch
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is it?
+      options:
+        - A fix for a bug
+        - Better speed
+        - Better graphics or sound
+        - Controls or wheel support
+        - A game mod (in GT5/mods, see MODDING.md)
+        - Setup or build improvements
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What does it change, and how did you test it?
+    validations:
+      required: true
+  - type: dropdown
+    id: release
+    attributes:
+      label: Tested with
+      options:
+        - Europe, BCES00569
+        - North America, BCUS98114
+        - Both
+  - type: checkboxes
+    id: own_copy
+    attributes:
+      label: No game content
+      options:
+        - label: My fork or mod contains no game files, builds or code generated from the game.
+          required: true

@@ -1,0 +1,15 @@
+{
+  "name": "unlock-fps",
+  "description": "EXPERIMENTAL example mod: the game no longer waits for the next screen refresh before starting a frame. GT5's clock counts frames, so races run faster than real time whenever the frame rate goes over 60.",
+  "default": false,
+  "patches": {
+    "1535B865EC7DD58E7704B378B8621532ECF844E1": [
+      {
+        "addr": "0x008CFFB4",
+        "orig": "0x8089001C",
+        "new": "0x38800000",
+        "note": "lwz r4,0x1C(r9) -> li r4,0: the frame pacer's wait interval becomes 0 (Europe 01.00; the same idea as RPCS3's patch for this game)"
+      }
+    ]
+  }
+}

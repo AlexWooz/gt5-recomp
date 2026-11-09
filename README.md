@@ -16,6 +16,27 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
 >
 > See [Which copy of GT5](#which-copy-of-gt5) for how to check your files.
 
+## Try it, then tell me how it went
+
+If you own the game, please set it up and play. Every result helps decide what gets fixed next,
+whether it runs great, half works, or doesn't build at all. US players especially: the US release
+hasn't been tested yet.
+
+| You want to... | Go here |
+|---|---|
+| Say how it went (takes two minutes, mostly quick picks) | [Tried it: here's how it went](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml) |
+| Report something broken | [Something's broken](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml) |
+| Ask for a change | [Suggest a change](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=3-idea.yml) |
+| Post quick results, screenshots of it running, or ask for help | [Discussions](https://github.com/MormonFTP-hub/gt5-recomp/discussions/1) |
+
+## Fork it, mod it
+
+Forks are welcome; take whatever you like (MIT license). If you make something good, open a pull
+request or [show it here](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=4-my-fork-or-mod.yml)
+so it can come back into the main repo. [MODDING.md](MODDING.md) covers the ways in: switchable
+game-code mods in `GT5\mods`, the graphics, controller and sound code, and the tools for finding
+your way around. [CONTRIBUTING.md](CONTRIBUTING.md) has the few rules.
+
 ## What this repository contains, and what it does not
 
 This repository holds only code and scripts written for the port:
@@ -139,6 +160,7 @@ Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Sta
 | `GCM_DRAIN_STAT=1` | Timing lines every 5 s in `logs\play.err`. |
 | `PS3_MUTE=1` | No sound. |
 | `RSX_SHADER_CACHE_DIR=<dir>` | Where compiled shaders are cached (default `scratch\rsx_shader_cache_v2`). |
+| `GT5_MOD_<NAME>=1` | Turns on a game-code mod from `GT5\mods` (see [MODDING.md](MODDING.md)). |
 
 Most speed-ups in the patch can be switched off one by one to rule them out when something looks
 wrong; each is described in a comment next to its `getenv` in the patch.

@@ -1,0 +1,22 @@
+name: Suggest a change
+description: Something you'd like added or done differently (settings, controls, speed, setup).
+title: "[Idea] "
+labels: ["idea", "needs-triage"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why would it help?
+  - type: dropdown
+    id: tried
+    attributes:
+      label: Have you played the port?
+      options:
+        - Yes
+        - Not yet
