@@ -28,6 +28,7 @@ hasn't been tested yet.
 | Report something broken | [Something's broken](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml) |
 | Ask for a change | [Suggest a change](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=3-idea.yml) |
 | Post quick results, screenshots of it running, or ask for help | [Discussions](https://github.com/MormonFTP-hub/gt5-recomp/discussions/1) |
+| Talk to me directly | Discord: **mormonftp** (add me and send a message) |
 
 ## Fork it, mod it
 

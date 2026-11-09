@@ -8,6 +8,7 @@ body:
       value: |
         Thanks for trying the port! These answers tell me what to fix next. Most are quick picks.
         Please don't attach or link game files, builds (`gt5.exe`) or the generated code.
+        Rather chat? Message **mormonftp** on Discord.
   - type: dropdown
     id: release
     attributes:

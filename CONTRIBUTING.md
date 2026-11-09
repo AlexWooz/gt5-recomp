@@ -5,9 +5,10 @@
 If you make something good (a fix, more speed, a mod, wheel support, easier setup), please let me know
 so I can try it and maybe bring it into the main repo:
 
-- open a pull request, or
+- open a pull request,
 - fill in the [fork/mod form](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=4-my-fork-or-mod.yml)
-  with a link to your fork or branch.
+  with a link to your fork or branch, or
+- message me on Discord: **mormonftp**.
 
 ## Rules for pull requests and forks
 
