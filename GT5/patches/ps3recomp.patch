@@ -8122,6 +8122,242 @@ index 298ee7de..8ea23d2c 100644
      return cellGcmSetFlipCommand(bufferId);
  }
  
+diff --git a/libs/video/cellVideoOut.c b/libs/video/cellVideoOut.c
+index c67a6eaa..cd4e1df1 100644
+--- a/libs/video/cellVideoOut.c
++++ b/libs/video/cellVideoOut.c
+@@ -8,6 +8,7 @@
+ #include "cellVideoOut.h"
+ #include "ps3emu/endian.h"
+ #include "../../runtime/ppu/ppu_memory.h"   /* vm_base (guest mem) */
++#include "display_aspect.h"
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdint.h>
+@@ -51,8 +52,14 @@ static void get_resolution_wh(u32 resId, u16* w, u16* h)
+     switch (resId) {
+     case CELL_VIDEO_OUT_RESOLUTION_1080:
+         *w = 1920; *h = 1080; break;
+-    case CELL_VIDEO_OUT_RESOLUTION_720:
+-        *w = 1280; *h = 720;  break;
++    case CELL_VIDEO_OUT_RESOLUTION_720: {
++        /* On a screen wider than 16:9 (display_aspect.h) the 720p mode is wider too, e.g.
++         * 1704x720 for 21:9: a title that sizes its frame from this draws that wide (GT5 does,
++         * with its own shape constants widened by GT5/src/gt5_widescreen.cpp). 1280x720 at 16:9. */
++        u32 rw, rh;
++        ps3_display_render_size(1280, 720, &rw, &rh);
++        *w = (u16)rw; *h = (u16)rh;  break;
++    }
+     case CELL_VIDEO_OUT_RESOLUTION_480:
+         *w = 720;  *h = 480;  break;
+     case CELL_VIDEO_OUT_RESOLUTION_576:
+diff --git a/libs/video/display_aspect.c b/libs/video/display_aspect.c
+new file mode 100644
+index 00000000..6aa79ae2
+--- /dev/null
++++ b/libs/video/display_aspect.c
+@@ -0,0 +1,140 @@
++/*
++ * ps3recomp - display aspect for screens wider than 16:9 (see display_aspect.h)
++ */
++#include "display_aspect.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <math.h>
++
++#ifdef _WIN32
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++#endif
++
++#define ASPECT_16_9 (16.0f / 9.0f)
++
++static int   s_init;
++static float s_asked = ASPECT_16_9;   /* PS3_ASPECT / PS3_WINDOW_SIZE */
++static const char* s_asked_from = "default";
++static int   s_title_widens;          /* ps3_display_title_widens() was called */
++static u32   s_win_w, s_win_h;   /* PS3_WINDOW_SIZE, 0 when not set */
++
++/* "21:9", "2560x1080", "2.37": width over height, 0 when it isn't one of those. */
++static float parse_shape(const char* s)
++{
++    char* e;
++    const double a = strtod(s, &e);
++    if (e == s || a <= 0.0) return 0.0f;
++    if (*e == ':' || *e == 'x' || *e == 'X') {
++        const double b = strtod(e + 1, NULL);
++        return b > 0.0 ? (float)(a / b) : 0.0f;
++    }
++    return (float)a;
++}
++
++static int same_word(const char* a, const char* b)
++{
++    for (; *a && *b; a++, b++) {
++        const char x = (char)(*a | 0x20), y = (char)(*b | 0x20);
++        if (x != y) return 0;
++    }
++    return *a == *b;
++}
++
++static float monitor_shape(void)
++{
++#ifdef _WIN32
++    POINT pt = {0, 0};
++    MONITORINFO mi;
++    memset(&mi, 0, sizeof mi);
++    mi.cbSize = sizeof mi;
++    if (GetMonitorInfoA(MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY), &mi)) {
++        const LONG w = mi.rcMonitor.right - mi.rcMonitor.left;
++        const LONG h = mi.rcMonitor.bottom - mi.rcMonitor.top;
++        if (w > 0 && h > 0) return (float)w / (float)h;
++    }
++#endif
++    return ASPECT_16_9;
++}
++
++static void display_init(void)
++{
++    if (s_init) return;
++    s_init = 1;
++    const char* ws = getenv("PS3_WINDOW_SIZE");
++    if (ws && *ws) {
++        unsigned w = 0, h = 0;
++        if (sscanf(ws, "%ux%u", &w, &h) == 2 && w >= 64 && h >= 64 && w <= 16384 && h <= 16384) {
++            s_win_w = w; s_win_h = h;
++        }
++    }
++    const char* as = getenv("PS3_ASPECT");
++    float a = ASPECT_16_9;
++    const char* from = "default";
++    if (as && *as) {
++        if (same_word(as, "auto")) { a = monitor_shape(); from = "monitor"; }
++        else if (same_word(as, "off")) { a = ASPECT_16_9; from = "PS3_ASPECT"; }
++        else { const float p = parse_shape(as); if (p > 0.0f) a = p; from = "PS3_ASPECT"; }
++    } else if (s_win_w) {
++        a = (float)s_win_w / (float)s_win_h;
++        from = "PS3_WINDOW_SIZE";
++    }
++    /* Narrower than 16:9 stays 16:9; past 4:1 nothing reads well. */
++    if (a < ASPECT_16_9 * 1.005f) a = ASPECT_16_9;
++    if (a > 4.0f) a = 4.0f;
++    s_asked = a;
++    s_asked_from = from;
++}
++
++/* What is in force: the asked shape once the title said it can draw it, else 16:9. */
++static float shape(void)
++{
++    display_init();
++    return s_title_widens ? s_asked : ASPECT_16_9;
++}
++
++void ps3_display_title_widens(void)
++{
++    display_init();
++    s_title_widens = 1;
++    if (s_asked != ASPECT_16_9)
++        fprintf(stderr, "[display] shape %.4f (%s), wider than 16:9\n", s_asked, s_asked_from);
++}
++
++float ps3_display_aspect(void) { return shape(); }
++int   ps3_display_wide(void)   { return shape() != ASPECT_16_9; }
++float ps3_display_widen(void)  { return shape() / ASPECT_16_9; }
++
++void ps3_display_render_size(u32 base_w, u32 base_h, u32* w, u32* h)
++{
++    const float a = shape();
++    u32 rw = base_w;
++    if (a != ASPECT_16_9) {
++        rw = ((u32)lroundf((float)base_h * a / 8.0f)) * 8u;
++        if (rw > PS3_DISPLAY_MAX_W) rw = PS3_DISPLAY_MAX_W;
++        if (rw < base_w) rw = base_w;
++    }
++    *w = rw;
++    *h = base_h;
++}
++
++void ps3_display_window_size(u32 render_w, u32 render_h, u32* client_w, u32* client_h)
++{
++    const float a = shape();
++    if (s_asked != ASPECT_16_9 && !s_title_widens) {
++        static int said;
++        if (!said) {
++            said = 1;
++            fprintf(stderr, "[display] shape %.4f asked (%s), but this title can't draw wider than 16:9:"
++                            " the picture stays 16:9\n", s_asked, s_asked_from);
++        }
++    }
++    u32 w = render_w, h = render_h;
++    if (s_win_w) { w = s_win_w; h = s_win_h; }
++    else if (a != ASPECT_16_9) w = (u32)lroundf((float)render_h * a);
++    *client_w = w;
++    *client_h = h;
++}
+diff --git a/libs/video/display_aspect.h b/libs/video/display_aspect.h
+new file mode 100644
+index 00000000..ba2f762a
+--- /dev/null
++++ b/libs/video/display_aspect.h
+@@ -0,0 +1,55 @@
++/*
++ * ps3recomp - display aspect for screens wider than 16:9 (ultrawide)
++ *
++ * A PS3 title draws for a 16:9 television. On a wider PC screen the picture can either be
++ * shown at 16:9 (today's default) or widened, which needs the title's own camera widened
++ * (a title-side change) and the picture shown across the wider window. This module only
++ * decides the shape; the title and the renderer ask it.
++ *
++ *   PS3_ASPECT=auto          the shape of the monitor the window opens on
++ *   PS3_ASPECT=21:9 | 2560x1080 | 2.37   an explicit shape
++ *   PS3_ASPECT=16:9 | off    as on a PS3 (also the default)
++ *   PS3_WINDOW_SIZE=<w>x<h>  the window's drawing area in pixels; when PS3_ASPECT is not set,
++ *                            the shape follows it (how tests force a 2560x1080 window)
++ *
++ * Shapes narrower than 16:9 (16:10, 4:3) are left as they are: 16:9.
++ */
++#ifndef PS3RECOMP_DISPLAY_ASPECT_H
++#define PS3RECOMP_DISPLAY_ASPECT_H
++
++#include "ps3emu/ps3types.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* A title that can draw wider than 16:9 says so before anything asks for the shape (GT5 does in
++ * src/gt5_widescreen.cpp, run right after its executable is loaded). Without that the shape
++ * stays 16:9 whatever was asked: a title that draws 16:9 into a wider frame would come out
++ * stretched. */
++void ps3_display_title_widens(void);
++
++/* Width / height of the picture: 16/9 unless a wider shape was asked for and the title can. */
++float ps3_display_aspect(void);
++
++/* 1 when the picture is wider than 16:9 (by more than 0.5%), else 0. */
++int ps3_display_wide(void);
++
++/* How much wider than 16:9 the picture is: ps3_display_aspect() / (16/9), 1.0 when not wide. */
++float ps3_display_widen(void);
++
++/* The size a title's frame should have for a base_w x base_h video mode (1280x720): that size at
++ * 16:9; when wide, base_h lines at the wide shape (a multiple of 8 across), at most
++ * PS3_DISPLAY_MAX_W across. Past that the frame keeps that width and the window stretches it. */
++#define PS3_DISPLAY_MAX_W 1920u
++void ps3_display_render_size(u32 base_w, u32 base_h, u32* w, u32* h);
++
++/* The window's drawing area for a title rendering render_w x render_h: that size unless
++ * PS3_WINDOW_SIZE says otherwise or the picture is wide (then render_h lines at the wide shape). */
++void ps3_display_window_size(u32 render_w, u32 render_h, u32* client_w, u32* client_h);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
 diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
 index bc05a308..445095d0 100644
 --- a/libs/video/rsx_d3d12_backend.c
@@ -14274,11 +14510,28 @@ index 1c3fd72a..8519d01b 100644
   * flip presents that surface when the buffer has none of its own. */
  void rsx_live_draw_note_resolve(u32 src_loc, u32 src_abs, u32 dst_loc, u32 dst_abs);
 diff --git a/libs/video/rsx_null_backend.c b/libs/video/rsx_null_backend.c
-index 32e8a959..9e2a86f5 100644
+index 32e8a959..8111e047 100644
 --- a/libs/video/rsx_null_backend.c
 +++ b/libs/video/rsx_null_backend.c
-@@ -251,10 +251,12 @@ int rsx_null_backend_init(u32 width, u32 height, const char* title)
-     RECT wr = {0, 0, (LONG)width, (LONG)height};
+@@ -7,6 +7,7 @@
+  */
+ 
+ #include "rsx_null_backend.h"
++#include "display_aspect.h"
+ #include <stdio.h>
+ #include <string.h>
+ #include "../../runtime/ps3_log.h"
+@@ -247,14 +248,19 @@ int rsx_null_backend_init(u32 width, u32 height, const char* title)
+     wc.lpszClassName = "ps3recomp_null";
+     RegisterClassExA(&wc);
+ 
+-    /* Compute window size from client area */
+-    RECT wr = {0, 0, (LONG)width, (LONG)height};
++    /* Compute window size from client area. The client area is the render size unless the
++     * display is wider than 16:9 (ps3_display_window_size: PS3_ASPECT, PS3_WINDOW_SIZE). */
++    u32 cw = width, ch = height;
++    ps3_display_window_size(width, height, &cw, &ch);
++    RECT wr = {0, 0, (LONG)cw, (LONG)ch};
      AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
  
 +    /* PS3_WINDOW_BEHIND=1: see rsx_d3d12_backend.c. */
@@ -14292,7 +14545,7 @@ index 32e8a959..9e2a86f5 100644
          CW_USEDEFAULT, CW_USEDEFAULT,
          wr.right - wr.left, wr.bottom - wr.top,
          NULL, NULL, GetModuleHandle(NULL), NULL);
-@@ -263,6 +265,10 @@ int rsx_null_backend_init(u32 width, u32 height, const char* title)
+@@ -263,6 +269,10 @@ int rsx_null_backend_init(u32 width, u32 height, const char* title)
          printf("[RSX null] ERROR: CreateWindow failed (%lu)\n", GetLastError());
          return -1;
      }
@@ -15303,10 +15556,30 @@ index 9cb50400..e38aea53 100644
      ps3_hle_register_ctx(ps3_compute_nid("sys_mmapper_unmap_memory"),   "sys_mmapper_unmap_memory",   crt_ok);
      ps3_hle_register_ctx(ps3_compute_nid("sys_mmapper_free_memory"),    "sys_mmapper_free_memory",    crt_ok);
 diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
-index a55afb05..f5fdada9 100644
+index a55afb05..4ca88949 100644
 --- a/runtime/ppu/tests/boot_main.cpp
 +++ b/runtime/ppu/tests/boot_main.cpp
-@@ -73,7 +73,7 @@ void     ps3_load_prx_modules(void) {}
+@@ -43,6 +43,19 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ 
++/* ps3_on_loaded(fn), called from a title source file's static initializer: fn runs once the ELF
++ * is in guest memory, before any guest code (for data a title changes, such as a constant).
++ * Zero-initialised statics, so registering before main's own initialisers is safe. */
++typedef void (*ps3_on_loaded_fn)(void);
++static ps3_on_loaded_fn s_on_loaded[8];
++static int s_on_loaded_n;
++extern "C" void ps3_on_loaded(ps3_on_loaded_fn fn)
++{
++    if (fn && s_on_loaded_n < 8) s_on_loaded[s_on_loaded_n++] = fn;
++}
++/* libs/video/display_aspect.c: the frame size for a 1280x720 mode on this screen. */
++extern "C" void ps3_display_render_size(uint32_t base_w, uint32_t base_h, uint32_t* w, uint32_t* h);
++
+ extern "C" {
+ uint32_t ppu_load_elf(const char* path);
+ void     ppu_recomp_register(void);
+@@ -73,7 +86,7 @@ void     ps3_load_prx_modules(void) {}
  
  #ifdef _WIN32
  #include <windows.h>
@@ -15315,7 +15588,7 @@ index a55afb05..f5fdada9 100644
  /* timeBeginPeriod: windows.h is included with WIN32_LEAN_AND_MEAN, which
   * excludes the multimedia timer API, so it must be asked for by name -- and
   * AFTER windows.h, since timeapi.h uses UINT and friends. */
-@@ -118,28 +118,28 @@ char* __cdecl cached_getenv(const char* name)
+@@ -118,28 +131,28 @@ char* __cdecl cached_getenv(const char* name)
          const char* k = s_env[i].key;
          MemoryBarrier();
          if (!k) break;
@@ -15366,7 +15639,7 @@ index a55afb05..f5fdada9 100644
      }
      AcquireSRWLockExclusive(&s_env_lock);
      const char* val = NULL; int found = 0;
-@@ -307,6 +307,7 @@ extern "C" int  rsx_null_backend_pump_messages(void);
+@@ -307,6 +320,7 @@ extern "C" int  rsx_null_backend_pump_messages(void);
  extern "C" void cellGcm_rsx_process_fifo(void);   /* cellGcmSys.c: drain get->put */
  extern "C" void cellGcm_fifo_kick_wait(unsigned ms); /* idle wait, woken by a kick */
  extern "C" unsigned cellGcm_flip_request_count(void);
@@ -15374,7 +15647,7 @@ index a55afb05..f5fdada9 100644
  extern "C" unsigned cellGcmGetCurrentDisplayBufferId(void);
  extern "C" int sys_event_queue_inject(unsigned int, unsigned long long, unsigned long long, unsigned long long, unsigned long long);
  
-@@ -446,8 +447,68 @@ static DWORD WINAPI guest_prof_thread(LPVOID)
+@@ -446,8 +460,68 @@ static DWORD WINAPI guest_prof_thread(LPVOID)
  
  extern "C" const char* cellGame_get_title(void);   /* PARAM.SFO TITLE, for the caption */
  
@@ -15443,7 +15716,16 @@ index a55afb05..f5fdada9 100644
      /* Window caption: $PS3_TITLE wins, else the TITLE field PARAM.SFO already
       * gave cellGame, else a neutral name. It used to fall back to a specific
       * other title, so every port announced itself as that game. */
-@@ -485,7 +546,16 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -461,6 +535,8 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+      * backbuffer when its clip EQUALS the backend size, so a title that renders
+      * into something other than 1280x720 must say so: RSX_W / RSX_H. */
+     uint32_t rsx_w = 1280, rsx_h = 720;
++    /* Wider on a screen wider than 16:9: the title's 720p mode is that wide too (cellVideoOut). */
++    ps3_display_render_size(1280, 720, &rsx_w, &rsx_h);
+     if (const char* e = getenv("RSX_W")) rsx_w = (uint32_t)strtoul(e, 0, 0);
+     if (const char* e = getenv("RSX_H")) rsx_h = (uint32_t)strtoul(e, 0, 0);
+     int rsx_ok;
+@@ -485,7 +561,16 @@ static DWORD WINAPI vblank_ticker(LPVOID)
       * window DXGI Present throttles hard, which previously stalled these ticks and
       * paced the game's main loop to ~0.5fps. Drive the ticks off REAL elapsed time
       * and catch up in a bounded burst so present latency never slows the game. */
@@ -15461,7 +15743,7 @@ index a55afb05..f5fdada9 100644
      for (;;) {
          /* Was Sleep(4). The FIFO kick event existed, was signalled on a dry
           * fence queue, and had no waiter -- so a guest starved for `get` or a
-@@ -494,8 +564,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -494,8 +579,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
           * does. */
          cellGcm_fifo_kick_wait(4);
          ULONGLONG now = GetTickCount64();
@@ -15472,7 +15754,7 @@ index a55afb05..f5fdada9 100644
              cellGcmTickVBlank();
              cellGcmTickFlip();
              /* Present a pending flip BEFORE draining further: the flip fires
-@@ -505,8 +576,8 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -505,8 +591,8 @@ static DWORD WINAPI vblank_ticker(LPVOID)
               * writes and showed empty or mixed batches. */
              {
                  if (rsx_ok && cellGcm_take_flip_pending()) {
@@ -15483,7 +15765,7 @@ index a55afb05..f5fdada9 100644
                  }
              }
              /* Drain the game's GCM FIFO every tick -- this writes the RSX sync-fence
-@@ -514,20 +585,21 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -514,20 +600,21 @@ static DWORD WINAPI vblank_ticker(LPVOID)
               * Doing it here (not after present) keeps those fences advancing at 60Hz
               * even when present() throttles on a hidden/occluded window. */
              if (rsx_ok) cellGcm_rsx_process_fifo();
@@ -15509,7 +15791,7 @@ index a55afb05..f5fdada9 100644
          }
          /* YDKJ_INJECT_Q3: the main thread polls q3 (load/state-complete) each frame but
           * it's never posted (producer signals a condvar, never enqueues). Inject a q3
-@@ -538,7 +610,13 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -538,7 +625,13 @@ static DWORD WINAPI vblank_ticker(LPVOID)
              if(++s_q3 % 8 == 0){ int r=sys_event_queue_inject(qid, 0x1234, 0, 0, 0);
                static int _n=0; if(_n++<12) fprintf(stderr,"[INJQ3] injected q%u event rc=%d\n",qid,r); } }
          if (rsx_ok) {
@@ -15524,7 +15806,7 @@ index a55afb05..f5fdada9 100644
              if (getenv("YDKJ_PACETRACE")) {
                  static ULONGLONG s_win=0; static int s_pf=0, s_pres=0; static ULONGLONG s_presms=0;
                  s_pf += fired; s_pres++;
-@@ -557,9 +635,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -557,9 +650,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
                   * flash a partial frame (clear + a few draws). Before the
                   * first flip present freely so the window isn't stuck white
                   * during boot. */
@@ -15536,7 +15818,7 @@ index a55afb05..f5fdada9 100644
                      last_flip = fc;
                  } else if (fc == 0) {
                      rsx_backend_present();
-@@ -934,45 +1012,45 @@ static DWORD WINAPI debug_console(LPVOID param)
+@@ -934,45 +1027,45 @@ static DWORD WINAPI debug_console(LPVOID param)
              dump_threads("console", self);
          } else if (!strcmp(verb, "find32") && sscanf(cmd, "%*s %x", &a) == 1) {
              /* find32 <hex>: every aligned big-endian u32 equal to <hex> in committed
@@ -15611,7 +15893,7 @@ index a55afb05..f5fdada9 100644
          } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
              dbg_prof((DWORD)a, b ? b : 5);
          } else if (!strcmp(verb, "hle")) {
-@@ -1136,7 +1214,12 @@ int main(int argc, char** argv)
+@@ -1136,7 +1229,12 @@ int main(int argc, char** argv)
      /* Reserve the full 4 GB guest space; pages commit on first touch via the VEH. */
      AddVectoredExceptionHandler(1, guard_report_veh);  /* diagnose 0x80000001 silent deaths */
      AddVectoredExceptionHandler(1, vm_commit_veh);
@@ -15625,6 +15907,32 @@ index a55afb05..f5fdada9 100644
      ppu_vm_size = 0;   /* full 32-bit space backed -> OOB guard unnecessary */
  #else
      vm_base = (uint8_t*)calloc(1, 0xE0000000u);
+@@ -1147,6 +1245,25 @@ int main(int argc, char** argv)
+     uint32_t entry = ppu_load_elf(elf);
+     if (!entry) { printf("load failed\n"); return 1; }
+ 
++    /* A title's own code (GT5's src/gt5_widescreen.cpp) runs here, image loaded, nothing run yet. */
++    for (int i = 0; i < s_on_loaded_n; i++) s_on_loaded[i]();
++
++    /* PS3_POKE32=<ea>=<word>[,<ea>=<word>...] (hex): overwrite big-endian words of the loaded
++     * image, to try a data change such as a constant without a re-lift. Old values are logged. */
++    if (const char* pk = getenv("PS3_POKE32")) {
++        for (const char* p = pk; *p;) {
++            char* e1; char* e2;
++            const uint32_t ea = (uint32_t)strtoul(p, &e1, 16);
++            if (e1 == p || *e1 != '=') break;
++            const uint32_t v = (uint32_t)strtoul(e1 + 1, &e2, 16);
++            if (e2 == e1 + 1) break;
++            uint32_t old; memcpy(&old, vm_base + ea, 4); old = __builtin_bswap32(old);
++            const uint32_t be = __builtin_bswap32(v); memcpy(vm_base + ea, &be, 4);
++            fprintf(stderr, "[poke] 0x%08X: 0x%08X -> 0x%08X\n", ea, old, v);
++            p = (*e2 == ',') ? e2 + 1 : e2;
++        }
++    }
++
+     derive_vfs_root(elf);
+     printf("[boot] VFS root: %s\n", ppu_vfs_root);
+ 
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
 index 5fc50208..440fb21d 100644
 --- a/runtime/spu/spu_channels.c

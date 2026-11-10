@@ -42,6 +42,12 @@ A game-code mod changes instructions in the game's own code. It lives in a folde
 `GT5\mods\unlock-fps` is a working example. It's experimental: GT5's clock counts frames, so with it
 on, races run faster than real time whenever the frame rate goes over 60.
 
+Some changes are data rather than instructions, such as a constant the game reads. Try one without
+building anything with `set "PS3_POKE32=<address>=<value>"` (hex, big-endian 32-bit words, comma
+separated; `logs\play.err` shows the old values). To keep one, do as `GT5\src\gt5_widescreen.cpp`
+does for ultrawide: a function registered with `ps3_on_loaded` runs once the EBOOT is loaded and
+before the game starts, checks the values it expects, and writes the new ones.
+
 Finding what to change: the lifted code in `GT5\generated` is readable C++ with one function per game
 function (`func_<address>`), and the scripts help you watch the running game:
 

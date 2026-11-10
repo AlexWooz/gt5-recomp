@@ -41,6 +41,12 @@ REM set "PS3_WHEEL_FFB=60"         force strength in percent
 REM set "PS3_WHEEL_RANGE=900"      the rotation your wheel is set to, in degrees
 REM set "PS3_WHEEL_TRACE=1"        log every pedal, button and force, to fix a mapping
 REM set "PS3_WHEEL=off"            don't look for a wheel
+REM Screen shape. auto = your monitor's: on an ultrawide (21:9, 32:9) the game draws a wider view,
+REM more of the track at the sides, with the HUD and menus kept 16:9 in the middle. The window opens
+REM at that shape; maximize it. On a 16:9 monitor nothing changes. Or a fixed shape: 21:9, 32:9,
+REM 3440x1440. 16:9 = the PS3's own picture.
+set "PS3_ASPECT=auto"
+REM set "PS3_WINDOW_SIZE=2560x1080"   open the window at exactly this size
 if not exist "%HERE%hdd0" mkdir "%HERE%hdd0"
 if not exist "%HERE%hdd1" mkdir "%HERE%hdd1"
 if not exist "%HERE%logs" mkdir "%HERE%logs"

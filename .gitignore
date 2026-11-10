@@ -56,6 +56,8 @@ GT5/build/
 build/
 ps3recomp/
 ffmpeg/
+# GT5-Installer.bat's helpers (RPCS3, the shortcut icon)
+tools/
 venv/
 __pycache__/
 *.pyc

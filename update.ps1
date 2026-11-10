@@ -45,7 +45,9 @@ if (-not $Here -and -not (Test-Path (Join-Path $base ".git"))) {
 }
 if (Test-Path (Join-Path $base ".git\gt5-publish-repo")) { Fail "this is the publishing copy of the repository, not an install" }
 if (-not (Test-Path (Join-Path $gt5 "scripts\relift.ps1"))) { Fail "GT5\scripts is missing: this isn't a full checkout" }
-if (Get-Process gt5 -ErrorAction SilentlyContinue) { Fail "close the game first" }
+# Only this install's game matters (another copy elsewhere can keep running).
+$mine = Get-Process gt5 -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($base, [StringComparison]::OrdinalIgnoreCase) }
+if ($mine) { Fail "close the game first" }
 
 # ---- List the versions ------------------------------------------------------------------------------
 if ($List) {

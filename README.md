@@ -70,7 +70,7 @@ your way around. [CONTRIBUTING.md](CONTRIBUTING.md) has the few rules.
 | Steering wheels? | 🧪 New, not yet tried on a real wheel: [wheel owners wanted](#-faq) |
 | Force feedback? | 🧪 New, with wheel support, also untried on a real wheel |
 | Widescreen (16:9)? | ✅ Yes, GT5 is a 16:9 game |
-| Ultrawide (21:9, 32:9)? | ❌ Not yet: black bars at the sides |
+| Ultrawide (21:9, 32:9)? | ✅ New: a wider view, with the HUD kept 16:9 in the middle |
 | Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard |
 | US copy (BCUS98114)? | ⚠️ Should work, not tested yet |
 | Online? | ❌ No |
@@ -113,16 +113,31 @@ get force feedback the same way but may need the pedal and button lines above.
 
 **Q: Does it support widescreen and ultrawide?**
 
-**A: Widescreen yes, ultrawide not yet.** GT5 is a 16:9 game, so a normal widescreen monitor (1920×1080,
-2560×1440, 4K) is filled edge to edge. On an ultrawide monitor (21:9 or 32:9) the game still draws 16:9,
-and the window adds black bars at the sides. True ultrawide means widening the game's own camera and
-moving its HUD, which takes changes to the game's code (a job for a [game-code mod](MODDING.md)). It's
-on the list.
+**A: Yes, both; ultrawide is new.** GT5 is a 16:9 game, so a normal widescreen monitor (1920×1080,
+2560×1440, 4K) is filled edge to edge, as on a PS3. On an ultrawide monitor (21:9 or 32:9) the game now
+draws a wider picture itself: races and replays show more of the track at the sides (nothing is
+stretched), the 3D scenes behind the menus widen the same way, and the HUD and menus stay a 16:9 block
+in the middle of the screen. `play.bat` sets `PS3_ASPECT=auto`, the shape of your monitor; the window
+opens at that shape, so maximize it or drag it to the size you like.
+
+| In `play.bat` | What you get |
+|---|---|
+| `set "PS3_ASPECT=auto"` | the shape of your monitor (the default; on a 16:9 monitor nothing changes) |
+| `set "PS3_ASPECT=21:9"` (or `32:9`, `3440x1440`, `2.37`) | that shape, whatever the monitor |
+| `set "PS3_ASPECT=16:9"` | the PS3's own 16:9 picture, as before |
+| `set "PS3_WINDOW_SIZE=2560x1080"` | the window opens at exactly that size (and shape, unless `PS3_ASPECT` says otherwise) |
+
+The game draws 720 lines at the wider shape, as many pixels across as it needs up to 1920: about
+1700×720 for 21:9, as sharp as its usual 1280×720. Shapes wider than 8:3 (32:9) are drawn at 1920×720
+and spread sideways to fill the window, so they're a little softer side to side. The window title shows
+the size it draws at. This works on the European release (BCES00569, disc 01.00); on any other release
+the picture stays 16:9 for now, and `logs\play.err` says so in a `[widescreen]` line.
 
 **Q: What resolution does it render at?**
 
 **A: Whatever the game picks, as on a PS3, scaled to fit your window.** The window title shows the
-current one (races have shown 1280×720). Rendering at a higher resolution is on the list.
+current one (races have shown 1280×720; on an ultrawide monitor it's wider, see above). Rendering at a
+higher resolution is on the list.
 
 **Q: Which controllers work?**
 

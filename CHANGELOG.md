@@ -9,6 +9,27 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 10 Nov 2026
 
+🏷️ Released as **v0.1.5**
+
+🖥️ **Ultrawide monitors (21:9, 32:9)** (new)
+- On a screen wider than 16:9 the game now draws a wider picture itself: race and replay cameras see
+  more at the sides (nothing is stretched), the 3D scenes behind the menus widen too, and the HUD and
+  menus stay a 16:9 block in the middle. It's GT5's own way of fitting a TV of another shape: it takes
+  the shape of the picture from two constants it chooses by the PS3's TV setting, and the port now sets
+  them to the shape of your window (`GT5\src\gt5_widescreen.cpp`, European disc 01.00).
+- The game also renders every pixel of the wider picture: the port reports a wider 720p mode (about
+  1700×720 for 21:9, at most 1920×720), the game sizes its frame from it, and the window shows that
+  frame. Shapes wider than 8:3 (32:9) are drawn at 1920×720 and spread sideways to fill the window.
+- `play.bat` sets `PS3_ASPECT=auto`, the shape of your monitor; on a 16:9 monitor nothing changes.
+  `PS3_ASPECT=21:9` (or `32:9`, `3440x1440`) picks a shape, `PS3_ASPECT=16:9` keeps the PS3's
+  picture, and `PS3_WINDOW_SIZE=2560x1080` opens the window at an exact size. On another release the
+  picture stays 16:9 for now (`logs\play.err` says so in a `[widescreen]` line).
+- Checked without an ultrawide monitor, in 2560×1080, 3440×1440 and 3840×1080 windows: an Arcade race
+  with its HUD, the menus on the way there (car select, colour, options), and the attract demo.
+- Runtime: the shape is decided in one place (`display_aspect.c`), cellVideoOut reports the wider
+  mode, the window opens at the shape, a title's own code can change data before the game starts
+  (`ps3_on_loaded`), and `PS3_POKE32=<address>=<value>` tries such a change without building anything.
+
 🏷️ Released as **v0.1.4**
 
 - v0.1.3 didn't build: it picked up one file of the unfinished ultrawide work without the rest of it.

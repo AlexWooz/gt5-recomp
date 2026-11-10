@@ -106,6 +106,19 @@ def newest(dirname):
         return None
 
 
+def unsqueeze(img, widen, content_w=0):
+    """A run wider than 16:9 (PS3_ASPECT, PS3_WINDOW_SIZE) has the game draw a wider picture with its
+    menus as a 16:9 block in the middle. Cut that block out at 1280x720 so the references still match.
+    content_w is how many pixels across the whole picture spans in the dump: the game draws 720 lines
+    at the wide shape, a multiple of 8 across, at most 1920 (display_aspect.c); a wider shape than
+    that is squeezed into the 1920 and the block with it, so it is stretched back here."""
+    if widen <= 1.001:
+        return img
+    cw = content_w or min(8 * round(1280 * widen / 8), 1920)
+    cx, half = cw / 2, cw / 2 / widen
+    return img.crop((round(cx - half), 0, round(cx + half), 720)).resize((1280, 720), Image.BILINEAR)
+
+
 TEST_EXE = os.path.join(os.path.dirname(HERE), "build", "gt5.exe")
 
 
@@ -156,6 +169,7 @@ def drive(a):
         if now - last_keep >= a.keep:
             last_keep = now
             img.save(os.path.join(a.dir, "frame_t%05d.png" % (now - t0)))
+        img = unsqueeze(img, a.widen, a.content_width)
         # The opening movie's frames can look like a menu (an orange steel mill matches the selected
         # icon), so past the first dialog nothing is read until the movie has been skipped.
         if a.skip_movie and i > 0 and not skipped:
@@ -200,6 +214,13 @@ def drive(a):
                 say("top_arc not reached, press right again")
                 press(a.pad, RIGHT, 16)
                 left_at = now
+                continue
+            if d <= s[5] and a.stop_at == s[0]:
+                # --stop-at: arrived; press nothing more (the top menu then idles into its attract demo).
+                if not tries.get("stopped"):
+                    tries["stopped"] = 1
+                    say("at %s, stopping here (--stop-at)" % s[0])
+                    img.save(os.path.join(a.dir, "step_%02d_%s.png" % (i, s[0])))
                 continue
             if d <= s[5]:
                 # The top menu's icon bar fades about 10 s after the last press, so don't wait out the usual gap there.
@@ -294,6 +315,9 @@ if __name__ == "__main__":
                    " wait pauses. The first press only wakes the cursor. Tsukuba: wait,wait,up,wait,select,right,cross,wait,wait,select,right,right,right,right")
     p.add_argument("--key-gap", type=float, default=2.5, help="seconds after each --track-keys press")
     p.add_argument("--explore", action="store_true", help="stop the game after the --track-keys presses")
+    p.add_argument("--stop-at", default="", help="a step name (e.g. top_gt) to stop pressing at; top_gt then shows the attract demo")
+    p.add_argument("--content-width", type=float, default=0, help="pixels across the whole wide picture in a dump, see unsqueeze")
+    p.add_argument("--widen", type=float, default=1.0, help="the run's picture shape over 16:9 (2560x1080: 1.333), see unsqueeze")
     a = p.parse_args()
     if a.make_refs:
         make_refs(a.make_refs)

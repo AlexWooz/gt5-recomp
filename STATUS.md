@@ -43,6 +43,9 @@ performance matters more than the graphics card.
 - Buying cars and saving, on-screen keyboard (a Windows text box)
 - DualSense, DualShock 4, Xbox/XInput pads and keyboard
 - Watch mode for B-Spec and replays (F9): half the drawing work, full race speed
+- Ultrawide monitors (21:9, 32:9), new: the game draws a wider view itself and keeps the HUD and
+  menus 16:9 in the middle (checked in 2560×1080, 3440×1440 and 3840×1080 windows, not yet on a real
+  ultrawide monitor: [tell us how it looks](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml))
 
 ## 🔧 Being worked on
 
@@ -57,7 +60,7 @@ performance matters more than the graphics card.
 
 ## ❌ Not supported yet
 
-- Ultrawide (the game draws 16:9; the window adds black bars on wider screens)
+- Ultrawide on releases other than the European disc 01.00: they keep the 16:9 picture for now
 
 ## ⚠️ Known issues
 
@@ -71,7 +74,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **10 Nov 2026:** black screen on start fixed for everyone building from GitHub (the SPU code is
+- **10 Nov 2026:** ultrawide monitors (21:9, 32:9): a wider view, HUD kept 16:9 in the middle;
+  black screen on start fixed for everyone building from GitHub (the SPU code is
   now compiled; run `update.ps1`); steering wheels and force feedback (v0.1.2, untested on real wheels: owners
   wanted); one-command setup that checks your files and builds the game (`setup.ps1`); numbered
   versions and one-command updates (`update.ps1`); FAQ at the top of the README.
