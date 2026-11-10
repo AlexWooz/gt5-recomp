@@ -33,6 +33,14 @@ REM set "LD_WATCH=1"
 REM The mouse is no longer held inside the window. While you use the controller with the game in
 REM front, mouse movement and clicks that Steam makes from the controller are ignored; your real
 REM mouse always works. (PAD_CURSOR_CLIP=1 brings back the old clipping.)
+REM Steering wheel: plug it in before starting; the game sees it as a Logitech G27, with force
+REM feedback. New and not yet tried on a real wheel. logs\play.err says what was found ([wheel]).
+REM Remove a REM to use a line (more in the README's FAQ):
+REM set "PS3_WHEEL_FFB_INVERT=1"   forces push the wrong way
+REM set "PS3_WHEEL_FFB=60"         force strength in percent
+REM set "PS3_WHEEL_RANGE=900"      the rotation your wheel is set to, in degrees
+REM set "PS3_WHEEL_TRACE=1"        log every pedal, button and force, to fix a mapping
+REM set "PS3_WHEEL=off"            don't look for a wheel
 if not exist "%HERE%hdd0" mkdir "%HERE%hdd0"
 if not exist "%HERE%hdd1" mkdir "%HERE%hdd1"
 if not exist "%HERE%logs" mkdir "%HERE%logs"

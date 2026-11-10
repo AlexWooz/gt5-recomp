@@ -9,6 +9,25 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 10 Nov 2026
 
+🏷️ Released as **v0.1.2**
+
+🎮 **Steering wheels and force feedback** (new, not yet tried on a real wheel: owners wanted)
+- Your PC wheel now appears to the game as a Logitech G27, the wheel GT5 drives itself over USB on a
+  PS3: 900°, three pedals, paddles and an H-shifter. The port plays the USB side (the game's own wheel
+  driver attaches to it, reads its reports and sends it force-feedback commands), and turns those
+  commands into effects on your wheel through DirectInput: the centring spring in the menus, the
+  steering forces in a race. Any DirectInput wheel should work; buttons and pedals are preset for
+  Logitech G29 / G923 / G920, and `PS3_WHEEL_*` settings in `play.bat` remap them (README FAQ).
+- Checked without a wheel: the game accepts the G27, a race steers from it (a simulated wheel held to
+  one side turned the car), and the game's force-feedback commands are decoded. Not checked: the feel
+  on a real wheel, including which way the forces push (`PS3_WHEEL_FFB_INVERT=1` flips them).
+- Nothing changes without a wheel: the port looks for one every few seconds on a thread of its own
+  and stays out of the way (`PS3_WHEEL=off` stops even that). `logs\play.err` lists the controllers
+  it saw, the wheel's axes, and what the game asked of the wheel.
+- Runtime: the USB library (`cellUsbd`) is now real for this case, custom controllers (`cellPadLdd*`)
+  work, and `sys_mempool_*` exists; the game's wheel driver keeps its state in those pools and failed
+  without them.
+
 🏷️ Released as **v0.1.1**
 
 🧰 **Setup made easier** (after a player got stuck)

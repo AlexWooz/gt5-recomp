@@ -46,14 +46,17 @@ performance matters more than the graphics card.
 
 ## 🔧 Being worked on
 
+- Steering wheels with force feedback: new in v0.1.2 and **not yet tried on a real wheel**. Your PC
+  wheel appears to the game as a Logitech G27; without a wheel it was checked that the game accepts
+  it, a race steers from it, and the game's force-feedback commands arrive. Wheel owners:
+  [tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml),
+  with `GT5\logs\play.err` attached (settings are in the README's FAQ).
 - More speed in busy race scenes (the graphics thread is the limit)
 - The US release (BCUS98114) is supported by the tools but nobody has tried it yet:
   [tell us if you do](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml)
 
 ## ❌ Not supported yet
 
-- Steering wheels and force feedback (GT5 reaches its Logitech wheels over USB, which the port doesn't
-  pass through yet; requested by players, high on the list)
 - Ultrawide (the game draws 16:9; the window adds black bars on wider screens)
 
 ## ⚠️ Known issues
@@ -68,9 +71,9 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **10 Nov 2026:** one-command setup that checks your files and builds the game (`setup.ps1`);
-  numbered versions and one-command updates (`update.ps1`); FAQ at the top of the README. Steering
-  wheels and force feedback are being built.
+- **10 Nov 2026:** steering wheels and force feedback (v0.1.2, untested on real wheels: owners
+  wanted); one-command setup that checks your files and builds the game (`setup.ps1`); numbered
+  versions and one-command updates (`update.ps1`); FAQ at the top of the README.
 - **9 Nov 2026:** noisy distant road and track textures fixed (Tsukuba); each frame shown once
   (fixes flicker); the mouse is no longer held inside the window; optional watch mode (F9); tools
   for other releases (US untested); feedback forms, modding guide and game-code mods.

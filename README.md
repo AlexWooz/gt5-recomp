@@ -67,8 +67,8 @@ your way around. [CONTRIBUTING.md](CONTRIBUTING.md) has the few rules.
 
 | Question | Short answer |
 |---|---|
-| Steering wheels? | 🔧 Being built now, coming in the next version |
-| Force feedback? | 🔧 Being built with wheel support |
+| Steering wheels? | 🧪 New, not yet tried on a real wheel: [wheel owners wanted](#-faq) |
+| Force feedback? | 🧪 New, with wheel support, also untried on a real wheel |
 | Widescreen (16:9)? | ✅ Yes, GT5 is a 16:9 game |
 | Ultrawide (21:9, 32:9)? | ❌ Not yet: black bars at the sides |
 | Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard |
@@ -80,15 +80,35 @@ your way around. [CONTRIBUTING.md](CONTRIBUTING.md) has the few rules.
 
 **Q: Does it support steering wheels and force feedback?**
 
-**A: Not yet, but they're being built now and should arrive in the next version.** On a PS3, GT5 talks
-to its Logitech wheels (Driving Force GT, G25, G27) directly over USB, for both steering and force
-feedback. The port is learning to present your PC wheel to the game as one of those Logitech wheels,
-and to turn the game's force-feedback commands into effects on your wheel. It's being written for any
-standard PC wheel (Logitech, Thrustmaster, Fanatec and others). Nobody has tested it on a real wheel
-yet, so **wheel owners are wanted**: when it comes out, please
-[tell us how it went](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml).
-Until then, you could map a wheel to an Xbox controller layout in Steam Input: it should steer and
-work the pedals like a pad, without force feedback (untested).
+**A: Yes, new in v0.1.2, but nobody has tried it on a real wheel yet.** On a PS3, GT5 talks to its
+Logitech wheels directly over USB, for both steering and force feedback. The port now plays that
+part: your PC wheel appears to the game as a **Logitech G27** (900°, three pedals, paddles and an
+H-shifter), and the game's force-feedback commands (the centring spring, the steering forces in a race)
+are played on your wheel through DirectInput, which Logitech, Thrustmaster, Fanatec and other wheels
+support. Plug the wheel in before you start the game; it's picked up by itself, and pads work as before.
+
+What has been checked, without a wheel: the game accepts the emulated G27, a race steers from it, and
+the force-feedback commands the game sends are decoded and logged. What hasn't: the feel on a real
+wheel, including which way the forces push. So **wheel owners are wanted**: please
+[tell us how it went](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml)
+(or [report a problem](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml)),
+and attach `GT5\logs\play.err`: its `[wheel]` lines say which wheel was found, its axes, and what the
+game asked of it.
+
+If something is off, add a line to `play.bat` (next to the other `set` lines):
+
+| Problem | Fix |
+|---|---|
+| The forces push the wrong way (the wheel pulls away from the centre) | `set "PS3_WHEEL_FFB_INVERT=1"` |
+| Forces too strong or too weak | `set "PS3_WHEEL_FFB=60"` (percent, 0 = off) |
+| Steering too quick or too slow | set your wheel's rotation to 900° in its software (G HUB, ...), or tell the port what it is: `set "PS3_WHEEL_RANGE=1080"` |
+| A pedal does nothing, or the wrong thing | `set "PS3_WHEEL_TRACE=1"`, press each pedal, and see which axis moves in the `[wheel] axes` lines of `play.err`; then e.g. `set "PS3_WHEEL_PEDALS=throttle=Y,brake=RZ,clutch=Z"` (add `inv` to one that works backwards: `brake=RZinv`) |
+| A button is wrong | `set "PS3_WHEEL_BUTTONS=cross=1,circle=3,start=10"`, with button numbers as Windows' *Set up USB game controllers* window (`joy.cpl`) shows them; names: cross square circle triangle r1 l1 r2 l2 select start r3 l3 gear1..gear6 gearr plus minus dialcw dialccw |
+| The wrong device is used, or none | `set "PS3_WHEEL=G29"` (part of its name, or its `046d:c24f` VID:PID); `play.err` lists every controller it saw |
+| You don't want it | `set "PS3_WHEEL=off"` |
+
+Buttons and pedals are set up for Logitech's G29 / G923 / G920 out of the box; other wheels steer and
+get force feedback the same way but may need the pedal and button lines above.
 
 **Q: Does it support widescreen and ultrawide?**
 
@@ -361,7 +381,8 @@ To play the previous build right away instead, copy `GT5\build\gt5.previous.exe`
 A DualSense, DualShock 4 or XInput pad works. Without one, the keyboard:
 Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
 
-Steering wheels and force feedback: see the [FAQ](#-faq).
+A steering wheel works too, with force feedback (new and untested on real wheels): see the
+[FAQ](#-faq).
 
 ## ⚙️ Switches
 
@@ -370,6 +391,7 @@ Steering wheels and force feedback: see the [FAQ](#-faq).
 | Variable | Effect |
 |---|---|
 | `PAD_BACKGROUND=1` | The pad keeps working when another window has focus. |
+| `PS3_WHEEL=off` | Don't look for a steering wheel. The other `PS3_WHEEL_*` settings are in the [FAQ](#-faq). |
 | `LD_WATCH=1` (or **F9** in the game) | Watch mode for B-Spec races and replays: draws every other frame while the race keeps full speed, draws nothing while minimized, and lowers the game's priority. Off unless you turn it on; with `LD_WATCH=1` it comes on after 10 s without input and goes off when you touch the controls. |
 | `PAD_CURSOR_CLIP=1` | Keep the mouse inside the window while the controller is in use (the old behaviour). By default the mouse is free, and only the mouse movement and clicks Steam makes from the controller are ignored. |
 | `GCM_DRAIN_STAT=1` | Timing lines every 5 s in `logs\play.err`. |

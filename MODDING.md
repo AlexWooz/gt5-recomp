@@ -76,7 +76,8 @@ git -C ps3recomp diff --output=../GT5/patches/ps3recomp.patch
 
 ## Ideas people would like
 
-Steering-wheel support and force feedback, a resolution or render-scale setting, a wider field of view,
+Tuning the new steering-wheel support (button and pedal defaults for more wheels, rev lights), a
+resolution or render-scale setting, a wider field of view,
 a frame-rate unlock that keeps the clock at real time, HUD toggles for screenshots, and anything that
 makes setup easier. If you start on one, say so in the
 [discussions](https://github.com/MormonFTP-hub/gt5-recomp/discussions) so work isn't doubled.
