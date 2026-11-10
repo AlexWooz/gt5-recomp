@@ -25,13 +25,7 @@ if ($Capture) {
 if ($DriveArgs) { $extra = "$extra $DriveArgs" }
 if ($env:FS_HIDE) { $e["FS_HIDE"] = $env:FS_HIDE }
 foreach ($k in $Env.Keys) { $e[$k] = $Env[$k] }
-# A run wider than 16:9 (PS3_ASPECT or PS3_WINDOW_SIZE) has the menus drawn squeezed; screendrive stretches them back.
-$shape = if ($e["PS3_ASPECT"]) { $e["PS3_ASPECT"] } elseif ($e["PS3_WINDOW_SIZE"]) { $e["PS3_WINDOW_SIZE"] } else { "" }
-if ($shape -match '^([\d.]+)[xX:]([\d.]+)$') {
-    $widen = ([double]$Matches[1] / [double]$Matches[2]) / (16.0 / 9.0)
-    if ($widen -gt 1.005) { $extra = "$extra --widen $($widen.ToString([cultureinfo]::InvariantCulture))" }
-}
-$drive =Start-Process python -WindowStyle Hidden -PassThru -ArgumentList "`"$s\screendrive.py`" --dir `"$frames`" --pad `"$env:LOCALAPPDATA\Temp\gt5_pad.txt`" --race --log `"$root\logs\$Tag.drive`" --prof `"$root\logs\prof_$Tag`" --end-after $EndAfter --timeout $Seconds --skip-movie $SkipMovie $extra"
+$drive = Start-Process python -WindowStyle Hidden -PassThru -ArgumentList "`"$s\screendrive.py`" --dir `"$frames`" --pad `"$env:LOCALAPPDATA\Temp\gt5_pad.txt`" --race --log `"$root\logs\$Tag.drive`" --prof `"$root\logs\prof_$Tag`" --end-after $EndAfter --timeout $Seconds --skip-movie $SkipMovie $extra"
 & "$s\run.ps1" -Seconds $Seconds -Tag $Tag -Env $e
 if (-not $drive.HasExited) { Stop-Process -Id $drive.Id -Force -Confirm:$false }
 Get-Content "$root\logs\$Tag.drive" -ErrorAction SilentlyContinue

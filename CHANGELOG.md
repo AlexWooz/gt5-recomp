@@ -9,6 +9,11 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 10 Nov 2026
 
+🏷️ Released as **v0.1.4**
+
+- v0.1.3 didn't build: it picked up one file of the unfinished ultrawide work without the rest of it.
+  v0.1.4 is v0.1.3 without that file. Updated to v0.1.3? Run `update.ps1` again.
+
 🏷️ Released as **v0.1.3**
 
 🛠️ **Black screen on start fixed** (every build made from GitHub until now)
