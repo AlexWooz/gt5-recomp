@@ -38,6 +38,7 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
 board (tested rig, what works, what's being worked on, known issues, recent changes) is in
 [STATUS.md](STATUS.md); updates are also posted in
 [Announcements](https://github.com/MormonFTP-hub/gt5-recomp/discussions/categories/announcements).
+Everything done on the port since the first day, with dates, is in [CHANGELOG.md](CHANGELOG.md).
 
 ## 🏁 Try it, then tell me how it went
 
