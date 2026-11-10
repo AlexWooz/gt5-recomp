@@ -9,6 +9,11 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 10 Nov 2026
 
+🏷️ Released as **v0.1.6**
+
+- v0.1.5 left out the game's half of ultrawide (`GT5\src\gt5_widescreen.cpp`), so on an ultrawide
+  monitor it still drew 16:9. This release adds it. Updated to v0.1.5? Run `update.ps1` again.
+
 🏷️ Released as **v0.1.5**
 
 🖥️ **Ultrawide monitors (21:9, 32:9)** (new)
