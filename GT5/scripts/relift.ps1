@@ -38,3 +38,5 @@ Run "setjmp_patch"   @("scripts\setjmp_patch.py")
 
 New-Item -ItemType Directory -Force src\gen | Out-Null
 Run "gen_hle_nids"   @("$tk\gen_hle_nids.py", "--all", "--out", "src\gen\ppu_hle_nids.cpp")
+# Record what this lift was made from, so update.ps1 re-lifts only when that changes.
+Run "lift_stamp"     @("scripts\lift_stamp.py", "--write")

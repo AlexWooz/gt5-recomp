@@ -3,6 +3,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/MormonFTP-hub/gt5-recomp/releases"><img src="https://img.shields.io/github/v/release/MormonFTP-hub/gt5-recomp?style=for-the-badge&color=34C759&label=version" alt="Newest version"></a>
   <img src="https://img.shields.io/badge/Europe_BCES00569-tested-2E8BFF?style=for-the-badge" alt="Europe BCES00569: tested">
   <img src="https://img.shields.io/badge/US_BCUS98114-untested-6E7681?style=for-the-badge" alt="US BCUS98114: untested">
   <img src="https://img.shields.io/badge/Windows_x64-Direct3D_12-5CC8FF?style=for-the-badge" alt="Windows x64, Direct3D 12">
@@ -133,9 +134,17 @@ Check a file's hash with `Get-FileHash <file> -Algorithm SHA1` in PowerShell.
 
 ## 🚦 Setup
 
-1. Clone this repository and run `setup.ps1` in PowerShell. It clones ps3recomp at the commit the
-   patch was made against and applies the patch, creates the Python environment, and downloads the
-   FFmpeg LGPL build that plays the game's movies.
+1. Clone this repository with Git (not the ZIP download, so you can update later), then run
+   `setup.ps1` in PowerShell from that folder:
+
+   ```
+   git clone https://github.com/MormonFTP-hub/gt5-recomp
+   cd gt5-recomp
+   powershell -ExecutionPolicy Bypass -File setup.ps1
+   ```
+
+   It clones ps3recomp at the commit the patch was made against and applies the patch, creates the
+   Python environment, and downloads the FFmpeg LGPL build that plays the game's movies.
 2. Dump your own GT5 disc (BCES00569 or BCUS98114) and copy its `PS3_GAME` folder to
    `GT5\vfs\PS3_GAME`.
 3. In RPCS3, install the PS3 firmware (File > Install Firmware, with `PS3UPDAT.PUP` from Sony), then copy
@@ -153,7 +162,7 @@ When it is set up, the folder looks like this (the parts you add are marked):
 
 ```
 gt5-recomp\
-  setup.ps1, README.md, LICENSE
+  setup.ps1, update.ps1, README.md, LICENSE
   ps3recomp\          fetched and patched by setup.ps1
   ffmpeg\             fetched by setup.ps1
   venv\               made by setup.ps1
@@ -169,6 +178,88 @@ gt5-recomp\
 Optional, for speed: GT5 runs many SPU jobs. They run in an interpreter until they are captured and
 recompiled. Run the game once with `SPU_DUMP_MISS=<GT5 folder>\analysis\spu_miss` set, then run
 `python GT5\scripts\lift_spu_jobs.py` and build again (see the comments at the top of that script).
+
+## 🔄 Updating
+
+Every change to the port comes out as a numbered version (v0.1.0, v0.1.1, ...) on the
+[Releases page](https://github.com/MormonFTP-hub/gt5-recomp/releases), with what changed. To hear
+about new ones, click **Watch** at the top of this page, then **Custom** and tick **Releases**.
+
+### Are you out of date?
+
+Close the game, open PowerShell in your `gt5-recomp` folder and run:
+
+```
+powershell -ExecutionPolicy Bypass -File update.ps1 -List
+```
+
+It lists every version and marks the one you have (`<- installed`) and the newest (`[newest]`).
+If they're different, you're out of date.
+
+### Update to the newest version
+
+```
+powershell -ExecutionPolicy Bypass -File update.ps1
+```
+
+That one command does everything:
+
+1. It downloads the new version.
+2. It swaps the old ps3recomp patch for the new one.
+3. It re-generates the game code only if that version needs it (about 10 minutes).
+4. It rebuilds only what changed.
+
+Kept as they are:
+- your saves (`GT5\hdd0`) and game files (`GT5\input`, `GT5\vfs`, `GT5\dev_flash`);
+- the shader cache;
+- edits you made to files such as `play.bat`.
+
+The previous `gt5.exe` is kept as `GT5\build\gt5.previous.exe`. If one of your edits clashes with a
+change in the new version, the new version's file is used and your edit is saved in `backups\` so
+you can copy it back.
+
+**If you're several versions behind,** run the same command. It goes straight to the newest version;
+there's no need to step through the ones in between.
+
+### Installed before update.ps1 existed?
+
+If your folder has no `update.ps1` (you set up before v0.1.0), get it first, then update:
+
+```
+git pull
+powershell -ExecutionPolicy Bypass -File update.ps1
+```
+
+If `git pull` says your local changes would be overwritten (usually `play.bat`), run `git stash`,
+then `git pull`, then `git stash pop`, then the update. Your first update re-generates the game code
+once (about 10 minutes), because older installs have no record of what their code was made from.
+
+### Downloaded the ZIP instead of cloning?
+
+A ZIP download can't update itself. Clone the repository fresh as in [Setup](#-setup), step 1. Then
+move these folders over from your old copy and run `update.ps1`:
+- your game files: `GT5\input`, `GT5\vfs`, `GT5\dev_flash`;
+- your saves: `GT5\hdd0`.
+
+### Go back to an older version
+
+If a new version gives you trouble, switch back to the one that worked (see `-List` for the names):
+
+```
+powershell -ExecutionPolicy Bypass -File update.ps1 -Version v0.1.0
+```
+
+To play the previous build right away instead, copy `GT5\build\gt5.previous.exe` over
+`GT5\build\gt5.exe` (the last update kept it). Please also
+[report what went wrong](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml).
+
+### Other options
+
+| Command | What it does |
+|---|---|
+| `update.ps1 -Dev` | The newest changes, before they're released. |
+| `update.ps1 -NoBuild` | Switch versions without building; build later with `GT5\scripts\build.cmd gt5`. |
+| `update.ps1 -Force` | Re-generate and rebuild everything, even when nothing changed. |
 
 ## 🎮 Controls
 

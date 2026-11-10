@@ -48,6 +48,9 @@ GT5/scripts/refs/
 *.jpg
 *.f32
 *.wav
+# update.ps1's record of what's installed, and the edits it saved
+.gt5/
+backups/
 # Build output and fetched dependencies
 GT5/build/
 build/

@@ -68,6 +68,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
+- **10 Nov 2026:** numbered versions and one-command updates (`update.ps1`, see "Updating" in the
+  README); FAQ on wheels and ultrawide.
 - **9 Nov 2026:** noisy distant road and track textures fixed (Tsukuba); each frame shown once
   (fixes flicker); the mouse is no longer held inside the window; optional watch mode (F9); tools
   for other releases (US untested); feedback forms, modding guide and game-code mods.

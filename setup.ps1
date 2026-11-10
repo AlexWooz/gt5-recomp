@@ -1,33 +1,18 @@
 # One-time setup, run from the folder this repository was cloned to:
 #   powershell -ExecutionPolicy Bypass -File setup.ps1
-# Fetches ps3recomp at the commit GT5\patches\ps3recomp.patch was made against and applies the patch,
-# creates the Python environment for the lift tools, and downloads the FFmpeg LGPL build the game's
-# movie player loads at run time. Safe to run again.
+# Fetches ps3recomp at the commit GT5\patches\ps3recomp.patch was made against and applies the patch
+# (update.ps1 does that part, the same way it does for every later update), creates the Python
+# environment for the lift tools, and downloads the FFmpeg LGPL build the game's movie player loads at
+# run time. Safe to run again. To update later, run update.ps1 instead.
 # Errors are checked through exit codes: with "Stop", Windows PowerShell turns a native command's
 # redirected stderr into a terminating error before the check can run.
 $ErrorActionPreference = "Continue"
 $base = $PSScriptRoot
-$commit = "4e8f3ca87a3e1d87bb83b8b7e9348fe2685cd514"
-$patch = Join-Path $base "GT5\patches\ps3recomp.patch"
-
-# 1. ps3recomp, patched
 $rc = Join-Path $base "ps3recomp"
-if (-not (Test-Path (Join-Path $rc ".git"))) {
-    # No line-ending conversion: the patch matches the files as stored upstream.
-    git clone --config core.autocrlf=false https://github.com/sp00nznet/ps3recomp.git $rc
-    if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
-    git -C $rc checkout --quiet $commit
-    if ($LASTEXITCODE -ne 0) { throw "checkout of $commit failed" }
-}
-git -C $rc apply --check $patch 2>$null
-if ($LASTEXITCODE -eq 0) {
-    git -C $rc apply $patch
-    Write-Output "ps3recomp patched"
-} else {
-    git -C $rc apply --reverse --check $patch 2>$null
-    if ($LASTEXITCODE -eq 0) { Write-Output "ps3recomp already patched" }
-    else { throw "the patch does not apply: ps3recomp must be at $commit with no other changes" }
-}
+
+# 1. ps3recomp, patched for the version checked out here
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $base "update.ps1") -Here
+if ($LASTEXITCODE -ne 0) { throw "setup stopped: see the message above" }
 
 # 2. Python environment for the lift tools
 $venv = Join-Path $base "venv"
@@ -59,3 +44,4 @@ New-Item -ItemType Directory -Force (Join-Path $base "GT5\input"), (Join-Path $b
 Write-Output ""
 Write-Output "Next: put your own game files in GT5\vfs and GT5\input and the firmware in GT5\dev_flash"
 Write-Output "(see README.md), then run GT5\scripts\relift.ps1 and GT5\scripts\build.cmd gt5."
+Write-Output "Later, update.ps1 updates to new versions (or switches to any other: update.ps1 -List)."

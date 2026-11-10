@@ -9,7 +9,16 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 10 Nov 2026
 
+🏷️ Released as **v0.1.0**
+
 🧰 **Tools and repo**
+- Versions and updates: every change now comes out as a numbered version on the Releases page.
+  `update.ps1` updates an install to the newest one or switches to any other (`-List`,
+  `-Version v0.1.0`, `-Dev`). It swaps the ps3recomp patch, re-lifts only when the lift tools change,
+  rebuilds only what changed, and keeps saves, game files, the shader cache and edits to files like
+  `play.bat`. It also works on installs made before it existed. See "Updating" in the README.
+- `setup.ps1` uses the same patch step as `update.ps1`, and the patch's ps3recomp base commit is now
+  part of each version (`GT5/patches/ps3recomp-base.txt`).
 - README FAQ: steering wheels and force feedback, ultrawide, resolution, US copies. STATUS.md lists
   what isn't supported yet. Wheels with force feedback and ultrawide are on the list after player
   requests.
