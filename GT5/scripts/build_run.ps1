@@ -1,0 +1,39 @@
+# Runs the build for build.cmd (inside its Visual Studio environment) and recovers from a crashed or
+# damaged compile, which heavy parallel builds do now and then, especially on some 13th/14th-gen Intel
+# CPUs: a compiler crash leaves no object and is simply redone; a damaged object (the link then fails
+# with undefined "llvm." symbols) is deleted so it gets compiled again. Each retry halves the jobs.
+#   build_run.ps1 -Jobs <n> [targets...]      (the whole output also goes to build\last_build.log)
+param([int]$Jobs = 8, [Parameter(ValueFromRemainingArguments = $true)][string[]]$Targets)
+$build = Join-Path (Split-Path $PSScriptRoot -Parent) "build"
+$log = Join-Path $build "last_build.log"
+
+function Invoke-Build([int]$j) {
+    $t = if ($Targets) { " --target " + ($Targets -join " ") } else { "" }
+    cmd /c "cmake --build `"$build`" -j $j$t 2>&1" | Tee-Object -FilePath $log | Out-Host
+    return $LASTEXITCODE
+}
+
+# Objects the linker found calling "llvm.*" (compiler-internal names): written damaged, so delete them.
+function Remove-DamagedObjects {
+    $bad = @{}; $inLlvm = $false
+    foreach ($l in (Get-Content -LiteralPath $log -ErrorAction SilentlyContinue)) {
+        if ($l -match 'error: undefined symbol: (\S+)') { $inLlvm = $Matches[1].StartsWith("llvm.") }
+        elseif ($inLlvm -and $l -match '>>>\s+(\S+\.obj):') { $bad[$Matches[1]] = $true }
+    }
+    foreach ($o in $bad.Keys) {
+        $p = Join-Path $build $o
+        if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force; Write-Host "  removed damaged $o (it will be compiled again)" }
+    }
+}
+
+Write-Host "Building with $Jobs parallel jobs (set GT5_JOBS to change)."
+if ((Invoke-Build $Jobs) -eq 0) { exit 0 }
+# Up to four retries: the linker names only a few files per error, so damaged objects surface one at a time.
+foreach ($try in 1..4) {
+    $Jobs = [math]::Max(1, [int][math]::Floor($Jobs / 2))
+    Write-Host ""
+    Write-Host "The build stopped. Trying again with $Jobs parallel jobs; it carries on where it stopped..." -ForegroundColor Yellow
+    Remove-DamagedObjects
+    if ((Invoke-Build $Jobs) -eq 0) { exit 0 }
+}
+exit 1

@@ -9,13 +9,24 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 10 Nov 2026
 
+🏷️ Released as **v0.1.8**
+
+🧰 **Damaged compiles are found and redone**
+- The same installer test then failed to link: two SPU job objects compiled during that crash were
+  written damaged (the linker found calls to the compiler's internal `llvm.lifetime` markers; the same
+  source compiles cleanly otherwise). Long, heavy parallel builds do this now and then, especially on
+  some 13th/14th-gen Intel CPUs. The build's last step is now `scripts\build_run.ps1`: when the build
+  stops, it deletes any object the linker reports as damaged and tries again (up to four times, halving
+  the parallel jobs each time). The whole output also goes to `GT5\build\last_build.log`.
+- Checked on that broken install: two passes each found and removed one damaged object, and the third
+  linked `gt5.exe`.
+
 🏷️ Released as **v0.1.7**
 
 🧰 **A crashed compile no longer stops the build**
 - In an installer test with other builds running at the same time, the compiler crashed on one of
-  the biggest generated files (an SPU job): it ran short of memory, and setup stopped. `build.cmd` now
-  tries again with half the parallel jobs, carrying on from where it stopped, so the same thing on a
-  PC with less memory just takes a little longer.
+  the biggest generated files (an SPU job), and setup stopped. `build.cmd` now tries again with half
+  the parallel jobs, carrying on from where it stopped.
 - README: an **Install** section at the top, for the one-click installer.
 
 🏷️ Released as **v0.1.6**
