@@ -9,6 +9,22 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 10 Nov 2026
 
+🏷️ Released as **v0.1.1**
+
+🧰 **Setup made easier** (after a player got stuck)
+- `setup.ps1` now does the whole job in one command, run as often as you like. It finds Python (the
+  `py` launcher first, avoiding the Microsoft Store stub), makes the environment, fetches and patches
+  ps3recomp, downloads FFmpeg, and checks Git and Visual Studio. It checks your game files and says
+  exactly what's missing, catching the common mistakes: a still-encrypted EBOOT, `PS3_GAME` or
+  `dev_flash` one folder too deep. Once everything is there it generates the code and builds the game.
+- `relift.ps1` checks for the Python environment, ps3recomp and EBOOT.elf before starting, and says to
+  run setup instead of printing a cascade of errors.
+- `build.cmd` finds any Visual Studio edition with the Clang tools (not only 2022 Community), and
+  picks the number of parallel compiles from the PC's memory, so 16 GB PCs don't run out.
+- Setup works from a ZIP download again (updating still needs a git clone).
+- README: Setup rewritten around `setup.ps1`. The FAQ moved to the top as questions and answers, with
+  new entries: widescreen vs ultrawide, ready-made builds (there can't be any), and setup errors.
+
 🏷️ Released as **v0.1.0**
 
 🧰 **Tools and repo**

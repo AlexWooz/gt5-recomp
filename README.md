@@ -63,6 +63,85 @@ so it can come back into the main repo. [MODDING.md](MODDING.md) covers the ways
 game-code mods in `GT5\mods`, the graphics, controller and sound code, and the tools for finding
 your way around. [CONTRIBUTING.md](CONTRIBUTING.md) has the few rules.
 
+## ❓ FAQ
+
+| Question | Short answer |
+|---|---|
+| Steering wheels? | 🔧 Being built now, coming in the next version |
+| Force feedback? | 🔧 Being built with wheel support |
+| Widescreen (16:9)? | ✅ Yes, GT5 is a 16:9 game |
+| Ultrawide (21:9, 32:9)? | ❌ Not yet: black bars at the sides |
+| Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard |
+| US copy (BCUS98114)? | ⚠️ Should work, not tested yet |
+| Online? | ❌ No |
+| Is it legal? | ✅ No game files here: you build it from your own disc |
+| Ready-made download? | ❌ No, and there never can be (see below) |
+| Errors during setup? | 🛠️ Run `setup.ps1` (see below) |
+
+**Q: Does it support steering wheels and force feedback?**
+
+**A: Not yet, but they're being built now and should arrive in the next version.** On a PS3, GT5 talks
+to its Logitech wheels (Driving Force GT, G25, G27) directly over USB, for both steering and force
+feedback. The port is learning to present your PC wheel to the game as one of those Logitech wheels,
+and to turn the game's force-feedback commands into effects on your wheel. It's being written for any
+standard PC wheel (Logitech, Thrustmaster, Fanatec and others). Nobody has tested it on a real wheel
+yet, so **wheel owners are wanted**: when it comes out, please
+[tell us how it went](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml).
+Until then, you could map a wheel to an Xbox controller layout in Steam Input: it should steer and
+work the pedals like a pad, without force feedback (untested).
+
+**Q: Does it support widescreen and ultrawide?**
+
+**A: Widescreen yes, ultrawide not yet.** GT5 is a 16:9 game, so a normal widescreen monitor (1920×1080,
+2560×1440, 4K) is filled edge to edge. On an ultrawide monitor (21:9 or 32:9) the game still draws 16:9,
+and the window adds black bars at the sides. True ultrawide means widening the game's own camera and
+moving its HUD, which takes changes to the game's code (a job for a [game-code mod](MODDING.md)). It's
+on the list.
+
+**Q: What resolution does it render at?**
+
+**A: Whatever the game picks, as on a PS3, scaled to fit your window.** The window title shows the
+current one (races have shown 1280×720). Rendering at a higher resolution is on the list.
+
+**Q: Which controllers work?**
+
+**A: DualSense and DualShock 4 (USB or Bluetooth), Xbox and other XInput pads, and the keyboard.** See
+[Controls](#-controls) for the keyboard layout.
+
+**Q: Can I use a US copy?**
+
+**A: Probably.** The tools find the few spots that differ between releases in your own copy (see
+[Which copy of GT5](#which-copy-of-gt5)). Nobody has tried a US copy yet, so please report if you do.
+
+**Q: Does online work?**
+
+**A: No.** GT5's online services were shut down, and the port doesn't connect to anything.
+
+**Q: Is there a ready-to-go build I can just download?**
+
+**A: No, and there can't be.** A built `gt5.exe` contains GT5's own code converted for PC, so
+sharing one would be sharing the game itself. That's what gets projects like this taken down, and
+it's why this one only works from your own disc. Please don't ask for builds or share them. What we
+can do is make building easy: `setup.ps1` does nearly all of it, checks every file you add, and tells
+you exactly what's missing. If you get stuck, post setup's output in the
+[discussions](https://github.com/MormonFTP-hub/gt5-recomp/discussions) and someone will help.
+
+**Q: I get errors like "venv\Scripts\python.exe is not recognized" or "cannot find analysis\version.json". What's wrong?**
+
+**A: Setup hasn't finished, so the tools that later steps use aren't there yet.** `venv` is the Python
+environment `setup.ps1` makes. `analysis\version.json` is made by the build itself from your EBOOT.elf,
+so it isn't a file you add. Open PowerShell in the `gt5-recomp` folder (the one with `setup.ps1`, not
+`GT5\scripts`) and run `powershell -ExecutionPolicy Bypass -File setup.ps1`. It installs what's
+missing, lists any of your files that are missing or in the wrong place, and once everything is there
+it generates and builds the game for you. If Python itself is missing, install Python 3.11 or newer
+from python.org with "Add python.exe to PATH" ticked, then run setup again.
+
+**Q: Is this legal? Do I need the game?**
+
+**A: You need your own copy of GT5, and nothing from the game is in this repository.** It holds only
+code written for the port. You build the game yourself from your own disc, and builds must never be
+shared (see below).
+
 ## ⚖️ What this repository contains, and what it does not
 
 This repository holds only code and scripts written for the port:
@@ -134,8 +213,13 @@ Check a file's hash with `Get-FileHash <file> -Algorithm SHA1` in PowerShell.
 
 ## 🚦 Setup
 
-1. Clone this repository with Git (not the ZIP download, so you can update later), then run
-   `setup.ps1` in PowerShell from that folder:
+**`setup.ps1` does almost everything.** Run it as often as you like. Each time it does what's still
+to do, checks your files, and tells you exactly what's missing and how to fix it. Once everything is
+in place it builds the game for you. You never need to run the scripts in `GT5\scripts` yourself.
+
+1. Install the tools from [Requirements](#-requirements): Git, Python 3.11 or newer (tick "Add
+   python.exe to PATH"), and Visual Studio 2022 with C++ and the Clang tools.
+2. Get the port and run setup once. In PowerShell:
 
    ```
    git clone https://github.com/MormonFTP-hub/gt5-recomp
@@ -143,20 +227,31 @@ Check a file's hash with `Get-FileHash <file> -Algorithm SHA1` in PowerShell.
    powershell -ExecutionPolicy Bypass -File setup.ps1
    ```
 
-   It clones ps3recomp at the commit the patch was made against and applies the patch, creates the
-   Python environment, and downloads the FFmpeg LGPL build that plays the game's movies.
-2. Dump your own GT5 disc (BCES00569 or BCUS98114) and copy its `PS3_GAME` folder to
-   `GT5\vfs\PS3_GAME`.
-3. In RPCS3, install the PS3 firmware (File > Install Firmware, with `PS3UPDAT.PUP` from Sony), then copy
-   RPCS3's `dev_flash` folder to `GT5\dev_flash`.
-4. In RPCS3, decrypt the executable (Utilities > Decrypt PS3 Binaries) by choosing your disc's
-   `PS3_GAME\USRDIR\EBOOT.BIN`. Copy the decrypted file to `GT5\input\EBOOT.elf`, and copy the disc's
-   `EBOOT.BIN` and `PS3_GAME\PARAM.SFO` to `GT5\input` as well. For the European release, check both
-   hashes against the table above.
-5. Generate the recompiled code from your executable: `GT5\scripts\relift.ps1` (about 10 minutes).
-   Read the `version_addrs` lines it prints first (see [Which copy of GT5](#which-copy-of-gt5)).
-6. Build: `GT5\scripts\build.cmd gt5` (the first build takes a while).
-7. Play: `GT5\play.bat`. Saves go to `GT5\hdd0`; logs go to `GT5\logs`.
+   It fetches and patches ps3recomp, makes the Python environment and downloads FFmpeg. Then it lists
+   the game files you still need to add, marked `[missing]`. Use Git rather than the ZIP download, so
+   you can update later.
+3. Add your own game files (setup checks each one and catches the usual mistakes):
+   - **Game data:** dump your own GT5 disc (BCES00569 or BCUS98114) and copy its `PS3_GAME` folder to
+     `GT5\vfs`, so that `GT5\vfs\PS3_GAME\USRDIR` exists.
+   - **System software:** in RPCS3, install the PS3 firmware (File > Install Firmware, with
+     `PS3UPDAT.PUP` from Sony). Then copy RPCS3's `dev_flash` folder to `GT5\dev_flash`, so that
+     `GT5\dev_flash\sys` exists.
+   - **The executable:** in RPCS3, Utilities > Decrypt PS3 Binaries, choose your disc's
+     `PS3_GAME\USRDIR\EBOOT.BIN`, and save the decrypted file as `GT5\input\EBOOT.elf`. It must be the
+     decrypted one: setup tells you if it's still encrypted.
+4. Run setup again:
+
+   ```
+   powershell -ExecutionPolicy Bypass -File setup.ps1
+   ```
+
+   When nothing is missing, it generates the game code from your EBOOT.elf (about 10 minutes) and
+   builds `gt5.exe` (20 to 50 minutes the first time, depending on your PC).
+5. Play: `GT5\play.bat`. Saves go to `GT5\hdd0`; logs go to `GT5\logs`.
+
+If setup stops with an error, post its whole output in the
+[discussions](https://github.com/MormonFTP-hub/gt5-recomp/discussions) or the
+[problem form](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml).
 
 When it is set up, the folder looks like this (the parts you add are marked):
 
@@ -167,11 +262,11 @@ gt5-recomp\
   ffmpeg\             fetched by setup.ps1
   venv\               made by setup.ps1
   GT5\
-    input\            YOU ADD: EBOOT.BIN, EBOOT.elf (decrypted), PARAM.SFO
+    input\            YOU ADD: EBOOT.elf (decrypted)
     vfs\PS3_GAME\     YOU ADD: the PS3_GAME folder from your disc
     dev_flash\        YOU ADD: from RPCS3 after installing Sony's firmware
-    generated\, src\gen\   made by relift.ps1 from your EBOOT.elf
-    build\            made by build.cmd (gt5.exe)
+    generated\, src\gen\, analysis\   made by setup.ps1 from your EBOOT.elf
+    build\            made by setup.ps1 (gt5.exe)
     hdd0\, logs\      made when you play
 ```
 
@@ -266,31 +361,7 @@ To play the previous build right away instead, copy `GT5\build\gt5.previous.exe`
 A DualSense, DualShock 4 or XInput pad works. Without one, the keyboard:
 Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
 
-Steering wheels and force feedback aren't supported yet; see the FAQ below.
-
-## ❓ FAQ
-
-**Does it support steering wheels and force feedback?**
-Not yet. On a PS3, GT5 talks to its Logitech wheels (Driving Force GT, G25, G27) directly over USB, for
-both steering and force feedback. The port doesn't pass USB devices through to the game yet, so the
-game never sees a wheel. Real support means presenting a Windows wheel to the game as one of those
-Logitech wheels and turning the game's force-feedback commands into effects on your wheel. It's
-known to be possible (RPCS3 does it for GT5) and it's high on the list. Until then, a wheel mapped to
-an Xbox controller layout through Steam Input should steer and work the pedals like a pad, without
-force feedback; that hasn't been tested.
-
-**Does it support ultrawide?**
-Not yet. GT5 only knows 16:9 screens, so it draws a 16:9 picture and the window adds black bars at the
-sides on a wider monitor. True ultrawide means widening the game's own camera and moving its HUD,
-which takes changes to the game's code (a job for a [game-code mod](MODDING.md)). It's on the list.
-
-**What resolution does it render at?**
-The game picks its own resolution, as on a PS3, and the picture is scaled to fit your window. The
-window title shows the current one (races have shown 1280×720). Rendering at a higher resolution is
-on the list.
-
-**Can I use a US copy?**
-Probably: see [Which copy of GT5](#which-copy-of-gt5). Nobody has tried one yet, so please report if you do.
+Steering wheels and force feedback: see the [FAQ](#-faq).
 
 ## ⚙️ Switches
 

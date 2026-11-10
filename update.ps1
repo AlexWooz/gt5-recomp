@@ -27,6 +27,7 @@ $fallbackBase = "4e8f3ca87a3e1d87bb83b8b7e9348fe2685cd514"   # versions from bef
 function Fail([string]$m) { Write-Host "update: $m" -ForegroundColor Red; exit 1 }
 function Warn([string]$m) { Write-Host $m -ForegroundColor Yellow }
 function Describe {
+    if (-not (Test-Path (Join-Path $base ".git"))) { return "a downloaded copy (not a git clone)" }
     $t = git -C $base describe --tags --exact-match HEAD 2>$null
     if ($t) { return $t }
     $d = git -C $base describe --tags 2>$null
@@ -38,7 +39,8 @@ function Read-Base([string]$file) {
     return $fallbackBase
 }
 
-if (-not (Test-Path (Join-Path $base ".git"))) {
+# -Here (setup.ps1's step) also works in a ZIP download; switching versions needs a git clone.
+if (-not $Here -and -not (Test-Path (Join-Path $base ".git"))) {
     Fail "this folder isn't a git clone. Install with: git clone https://github.com/MormonFTP-hub/gt5-recomp (see README.md)"
 }
 if (Test-Path (Join-Path $base ".git\gt5-publish-repo")) { Fail "this is the publishing copy of the repository, not an install" }
