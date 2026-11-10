@@ -22,6 +22,8 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 REFS = os.path.join(HERE, "refs")
 CROSS, RIGHT = 0x4000, 0x0020
+MASK = {"cross": 0x4000, "circle": 0x2000, "square": 0x8000, "triangle": 0x1000, "start": 0x0008, "select": 0x0001,
+        "up": 0x0010, "right": 0x0020, "down": 0x0040, "left": 0x0080, "l2": 0x0100, "r2": 0x0200, "l1": 0x0400, "r1": 0x0800}
 # name, source frame for the reference, crop in the 1280x720 picture, press, polls, largest difference
 STEPS = [
     ("dialog", "frames_p1/frame_000097.png", (360, 184, 920, 544), CROSS, 16, 10),
@@ -102,6 +104,17 @@ def newest(dirname):
         return read_ppm(fs[-1])
     except (ValueError, OSError, IndexError):
         return None
+
+
+TEST_EXE = os.path.join(os.path.dirname(HERE), "build", "gt5.exe")
+
+
+def stop_test_game():
+    """Stop only the test build (GT5\build\gt5.exe here); a gt5.exe from anywhere else is the player's own game."""
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name='gt5.exe'\" | "
+          "Where-Object { $_.ExecutablePath -and $_.ExecutablePath -ieq '%s' } | "
+          "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" % TEST_EXE)
+    subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True)
 
 
 def press(pad, mask, polls):
@@ -205,6 +218,21 @@ def drive(a):
                         with open(a.prof + "_stuck%d.txt" % tries[i], "w") as out:
                             subprocess.run([sys.executable, os.path.join(HERE, "gstack.py"), "--depth", "12"], stdout=out, stderr=subprocess.STDOUT)
                         profile("stuck%d" % tries[i])
+                    if s[0] == "track" and a.track_keys and not tries.get("track_keys"):
+                        # Another track: move the cursor first, keeping a frame after each press.
+                        tries["track_keys"] = 1
+                        for n, key in enumerate(a.track_keys.split(",")):
+                            say("track key %s" % key)
+                            if key != "wait":   # "wait": a pause, e.g. while the list first appears and ignores input
+                                press(a.pad, MASK[key], 16)
+                            time.sleep(a.key_gap)
+                            shot = newest(a.dir)
+                            if shot is not None:
+                                shot.save(os.path.join(a.dir, "step_05_key%02d_%s.png" % (n, key)))
+                        if a.explore:
+                            say("explored the track list, stopping the game")
+                            stop_test_game()
+                            return
                     press(a.pad, s[3], s[4])
                     pressed_at, armed = now, True
                     if s[3] == RIGHT:  # stays on the same screen, with the cursor moved
@@ -231,7 +259,7 @@ def drive(a):
             profiled = True
         if race_at and a.end_after and now - race_at >= a.end_after:
             say("done, stopping the game")
-            subprocess.run(["taskkill", "/IM", "gt5.exe", "/F"], capture_output=True)
+            stop_test_game()
             return
 
 
@@ -262,6 +290,10 @@ if __name__ == "__main__":
     p.add_argument("--skip-movie", type=float, default=0, help="press Cross at this many seconds to skip the opening movie; menus are not read before it")
     p.add_argument("--capture", default="", help="car, race or both")
     p.add_argument("--end-after", type=float, default=0, help="stop the game this long after the race starts")
+    p.add_argument("--track-keys", default="", help="buttons pressed on the track list before Cross, e.g. up,right,down;"
+                   " wait pauses. The first press only wakes the cursor. Tsukuba: wait,wait,up,wait,select,right,cross,wait,wait,select,right,right,right,right")
+    p.add_argument("--key-gap", type=float, default=2.5, help="seconds after each --track-keys press")
+    p.add_argument("--explore", action="store_true", help="stop the game after the --track-keys presses")
     a = p.parse_args()
     if a.make_refs:
         make_refs(a.make_refs)

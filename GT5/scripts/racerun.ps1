@@ -2,7 +2,7 @@
 #   racerun.ps1 -Tag p2 [-Seconds 900] [-EndAfter 120] [-Env @{...}]
 # Frames land in %LOCALAPPDATA%\Temp\gt5_frames_<Tag>, samples in logs\prof_<Tag>_car.txt and _race.txt, the route in logs\<Tag>.drive.
 # -Capture car|race|both writes logs\<Tag>.csv (RSX_DRAW_CSV) and analysis\surf_<Tag> (LD_SURF_DUMP) at that point.
-param([string]$Tag = "rr", [int]$Seconds = 900, [int]$EndAfter = 120, [hashtable]$Env = @{}, [string]$Capture = "", [int]$SkipMovie = 50)
+param([string]$Tag = "rr", [int]$Seconds = 900, [int]$EndAfter = 120, [hashtable]$Env = @{}, [string]$Capture = "", [int]$SkipMovie = 50, [string]$DriveArgs = "")
 $root = "$(Split-Path $PSScriptRoot -Parent)"
 $s = "$root\scripts"
 Set-Content -Path "$env:LOCALAPPDATA\Temp\gt5_pad.txt" -Value "" -Encoding ascii -NoNewline
@@ -21,6 +21,8 @@ if ($Capture) {
     $e["LD_PS_DUMP"] = "$root\analysis\ps_$Tag"
     $extra = "--gate `"$gate`" --capture $Capture"
 }
+# -DriveArgs passes more screendrive.py options, e.g. "--track-keys up,right,down" for another track.
+if ($DriveArgs) { $extra = "$extra $DriveArgs" }
 if ($env:FS_HIDE) { $e["FS_HIDE"] = $env:FS_HIDE }
 foreach ($k in $Env.Keys) { $e[$k] = $Env[$k] }
 $drive = Start-Process python -WindowStyle Hidden -PassThru -ArgumentList "`"$s\screendrive.py`" --dir `"$frames`" --pad `"$env:LOCALAPPDATA\Temp\gt5_pad.txt`" --race --log `"$root\logs\$Tag.drive`" --prof `"$root\logs\prof_$Tag`" --end-after $EndAfter --timeout $Seconds --skip-movie $SkipMovie $extra"

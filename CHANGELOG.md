@@ -10,6 +10,12 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 ## 9 Nov 2026
 
 🎨 **Graphics**
+- Distant track surfaces no longer turn into blocky noise or another texture. At Tsukuba the road went
+  black-and-white or grass green a few metres ahead, and banners and buildings were speckled. Many track
+  textures arrive with only their top two or three detail levels filled in; the rest held whatever an
+  earlier scene had left in that memory. Each level is now checked against the one above it, and missing
+  ones are rebuilt from the last good level (`LD_MIP_REBUILD=0` turns this off). Far-away track also
+  looks smoother on other circuits, where those levels used to be cut off.
 - Every frame is shown once. Each frame was being presented twice, the first time half drawn, which
   flickered and made textures look wrong. It also made the window's FPS counter read double.
 
