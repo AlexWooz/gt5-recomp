@@ -29,6 +29,27 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
 >
 > See [Which copy of GT5](#which-copy-of-gt5) for how to check your files.
 
+<a id="install"></a>
+
+## ⬇️ Install
+
+**The easy way, on Windows 10 or 11:**
+
+1. Download **[GT5-Installer.bat](https://github.com/MormonFTP-hub/gt5-recomp/releases/latest/download/GT5-Installer.bat)**
+   and double-click it. If Windows warns about a downloaded file, choose **Run** (or **More info**, then
+   **Run anyway**).
+2. In its window, pick two things and press **Install**:
+   - **your GT5 game**: the folder of your disc dump (the one with `PS3_GAME` in it) or an `.iso`;
+   - **PS3UPDAT.PUP**, Sony's free PS3 system software (the window has a button that opens Sony's page).
+
+That's all. It installs whatever's missing (Git, Python, Microsoft's C++ build tools), downloads this
+code, unlocks your game's executable and the system software with RPCS3 (used only as a tool for that:
+the game itself runs natively as `gt5.exe`, not in an emulator), builds the game (about an hour the
+first time) and puts **Gran Turismo 5 (PC)** on your desktop. Run it again later to update to the
+newest version. Nothing from the game is ever uploaded or shared.
+
+Rather do it by hand? See [Setup](#-setup).
+
 ## 📋 Current state
 
 <p align="center">
@@ -75,8 +96,8 @@ your way around. [CONTRIBUTING.md](CONTRIBUTING.md) has the few rules.
 | US copy (BCUS98114)? | ⚠️ Should work, not tested yet |
 | Online? | ❌ No |
 | Is it legal? | ✅ No game files here: you build it from your own disc |
-| Ready-made download? | ❌ No, and there never can be (see below) |
-| Errors during setup? | 🛠️ Run `setup.ps1` (see below) |
+| Ready-made download? | ❌ No, but [GT5-Installer.bat](#install) builds it for you |
+| Errors during setup? | 🛠️ Use [GT5-Installer.bat](#install), or run `setup.ps1` (see below) |
 | Black screen, `draws: 0`? | 🛠️ Fixed: update (see below) |
 
 **Q: Does it support steering wheels and force feedback?**
@@ -158,8 +179,8 @@ higher resolution is on the list.
 **A: No, and there can't be.** A built `gt5.exe` contains GT5's own code converted for PC, so
 sharing one would be sharing the game itself. That's what gets projects like this taken down, and
 it's why this one only works from your own disc. Please don't ask for builds or share them. What we
-can do is make building easy: double-click `setup.bat` (or run `setup.ps1`) and it does nearly all of
-it, checks every file you add, and tells you exactly what's missing. If you get stuck, post setup's output in the
+can do is make building easy: [GT5-Installer.bat](#install) asks for your game and Sony's PS3 system
+software file and does all the rest, ending with a shortcut on your desktop. If you get stuck, post its output in the
 [discussions](https://github.com/MormonFTP-hub/gt5-recomp/discussions) and someone will help.
 
 **Q: I get errors like "venv\Scripts\python.exe is not recognized" or "cannot find analysis\version.json". What's wrong?**

@@ -9,6 +9,15 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 10 Nov 2026
 
+🏷️ Released as **v0.1.7**
+
+🧰 **A crashed compile no longer stops the build**
+- In an installer test with other builds running at the same time, the compiler crashed on one of
+  the biggest generated files (an SPU job): it ran short of memory, and setup stopped. `build.cmd` now
+  tries again with half the parallel jobs, carrying on from where it stopped, so the same thing on a
+  PC with less memory just takes a little longer.
+- README: an **Install** section at the top, for the one-click installer.
+
 🏷️ Released as **v0.1.6**
 
 - v0.1.5 left out the game's half of ultrawide (`GT5\src\gt5_widescreen.cpp`), so on an ultrawide
@@ -34,6 +43,19 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 - Runtime: the shape is decided in one place (`display_aspect.c`), cellVideoOut reports the wider
   mode, the window opens at the shape, a title's own code can change data before the game starts
   (`ps3_on_loaded`), and `PS3_POKE32=<address>=<value>` tries such a change without building anything.
+
+🧰 **One-click installer** (after a player asked for one)
+- `GT5-Installer.bat`, attached to every release (README, Install): double-click it, pick your game
+  (a disc-dump folder or an `.iso`) and Sony's `PS3UPDAT.PUP`, press Install. It installs Git, Python
+  and Microsoft's C++ build tools if they're missing (winget), downloads the code, downloads RPCS3 and
+  uses it only to unlock the game's EBOOT.BIN and install the PS3 system software (RPCS3 holds keys
+  that can't be published here; the game never runs in it), copies the game in, runs setup, and puts a
+  **Gran Turismo 5 (PC)** shortcut with the game's own icon on the desktop. Running it again updates
+  an install, or carries on after a stop, skipping what's done.
+- Checked on the European disc image: the window recognises the game from the `.iso`, the system
+  software installs (the same 1,075 files as a hand install), and the unlocked EBOOT.elf is identical
+  to the hand-made one.
+- `update.ps1` now only waits for this install's own game to close, not for any `gt5.exe` running.
 
 🏷️ Released as **v0.1.4**
 

@@ -30,6 +30,15 @@ for /f %%m in ('powershell -NoProfile -Command "[math]::Max(1, [int][math]::Floo
 if defined RAMJOBS if %RAMJOBS% LSS %GT5_JOBS% set GT5_JOBS=%RAMJOBS%
 :have_jobs
 echo Building with %GT5_JOBS% parallel jobs (set GT5_JOBS to change).
+call :build %* && exit /b 0
+REM A compiler that runs short of memory can crash on the biggest files (the SPU jobs). Carry on
+REM with half the jobs: the build picks up where it stopped.
+set /a GT5_JOBS=GT5_JOBS/2
+if %GT5_JOBS% LSS 1 set GT5_JOBS=1
+echo The build stopped. Trying again with %GT5_JOBS% parallel jobs; it carries on where it stopped...
+call :build %* && exit /b 0
+exit /b 1
+:build
 if "%~1"=="" (
   cmake --build "%~dp0..\build" -j %GT5_JOBS% || exit /b 1
 ) else (
