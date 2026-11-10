@@ -28,6 +28,17 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
 >
 > See [Which copy of GT5](#which-copy-of-gt5) for how to check your files.
 
+## 📋 Current state
+
+<p align="center">
+  <img src="docs/status.png" alt="Playable: 45 to 58 fps in races on an i9-14900KF and RTX 4070 Ti SUPER" width="100%">
+</p>
+
+**Playable.** Races run at 45 to 58 fps on the tested rig, and most of the game's modes work. The full
+board (tested rig, what works, what's being worked on, known issues, recent changes) is in
+[STATUS.md](STATUS.md); updates are also posted in
+[Announcements](https://github.com/MormonFTP-hub/gt5-recomp/discussions/categories/announcements).
+
 ## 🏁 Try it, then tell me how it went
 
 If you own the game, please set it up and play. Every result helps decide what gets fixed next,
