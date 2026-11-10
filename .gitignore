@@ -43,6 +43,7 @@ GT5/scripts/refs/
 *.png
 !docs/banner.png
 !docs/social.png
+!docs/status.png
 *.ppm
 *.jpg
 *.f32

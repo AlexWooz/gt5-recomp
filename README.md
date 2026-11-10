@@ -82,8 +82,8 @@ with, endorsed by, or connected to Sony Interactive Entertainment or Polyphony D
 
 - Boots, menus, A-Spec and B-Spec races, licence tests, special events, replays, Photo Mode, the
   Course Maker and GT TV work in testing.
-- Performance depends mostly on the CPU: on a fast desktop CPU menus run at 60 fps and races at roughly
-  45 to 60 fps. The first visit to a scene stutters while its shaders compile; later visits load them
+- Performance depends mostly on the CPU: on a fast desktop CPU races run at roughly 45 to 58 fps (see
+  [STATUS.md](STATUS.md) for the tested rig). The first visit to a scene stutters while its shaders compile; later visits load them
   from the shader cache.
 - Online features do not work. Some graphics issues remain.
 
