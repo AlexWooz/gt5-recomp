@@ -50,6 +50,12 @@ performance matters more than the graphics card.
 - The US release (BCUS98114) is supported by the tools but nobody has tried it yet:
   [tell us if you do](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml)
 
+## ❌ Not supported yet
+
+- Steering wheels and force feedback (GT5 reaches its Logitech wheels over USB, which the port doesn't
+  pass through yet; requested by players, high on the list)
+- Ultrawide (the game draws 16:9; the window adds black bars on wider screens)
+
 ## ⚠️ Known issues
 
 - The first visit to a scene stutters while its shaders compile; later visits load them from the cache.

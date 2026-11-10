@@ -175,6 +175,32 @@ recompiled. Run the game once with `SPU_DUMP_MISS=<GT5 folder>\analysis\spu_miss
 A DualSense, DualShock 4 or XInput pad works. Without one, the keyboard:
 Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
 
+Steering wheels and force feedback aren't supported yet; see the FAQ below.
+
+## ❓ FAQ
+
+**Does it support steering wheels and force feedback?**
+Not yet. On a PS3, GT5 talks to its Logitech wheels (Driving Force GT, G25, G27) directly over USB, for
+both steering and force feedback. The port doesn't pass USB devices through to the game yet, so the
+game never sees a wheel. Real support means presenting a Windows wheel to the game as one of those
+Logitech wheels and turning the game's force-feedback commands into effects on your wheel. It's
+known to be possible (RPCS3 does it for GT5) and it's high on the list. Until then, a wheel mapped to
+an Xbox controller layout through Steam Input should steer and work the pedals like a pad, without
+force feedback; that hasn't been tested.
+
+**Does it support ultrawide?**
+Not yet. GT5 only knows 16:9 screens, so it draws a 16:9 picture and the window adds black bars at the
+sides on a wider monitor. True ultrawide means widening the game's own camera and moving its HUD,
+which takes changes to the game's code (a job for a [game-code mod](MODDING.md)). It's on the list.
+
+**What resolution does it render at?**
+The game picks its own resolution, as on a PS3, and the picture is scaled to fit your window. The
+window title shows the current one (races have shown 1280×720). Rendering at a higher resolution is
+on the list.
+
+**Can I use a US copy?**
+Probably: see [Which copy of GT5](#which-copy-of-gt5). Nobody has tried one yet, so please report if you do.
+
 ## ⚙️ Switches
 
 `play.bat` sets the usual environment variables. Some useful ones:

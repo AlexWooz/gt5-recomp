@@ -7,6 +7,13 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 > or repeated frames (fixed on 4 Nov and 9 Nov), so treat them as rough before-and-after comparisons.
 > From 9 Nov on, numbers are the game's own frames.
 
+## 10 Nov 2026
+
+🧰 **Tools and repo**
+- README FAQ: steering wheels and force feedback, ultrawide, resolution, US copies. STATUS.md lists
+  what isn't supported yet. Wheels with force feedback and ultrawide are on the list after player
+  requests.
+
 ## 9 Nov 2026
 
 🎨 **Graphics**
