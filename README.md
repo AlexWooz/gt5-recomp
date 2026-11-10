@@ -77,6 +77,7 @@ your way around. [CONTRIBUTING.md](CONTRIBUTING.md) has the few rules.
 | Is it legal? | ✅ No game files here: you build it from your own disc |
 | Ready-made download? | ❌ No, and there never can be (see below) |
 | Errors during setup? | 🛠️ Run `setup.ps1` (see below) |
+| Black screen, `draws: 0`? | 🛠️ Fixed: update (see below) |
 
 **Q: Does it support steering wheels and force feedback?**
 
@@ -142,8 +143,8 @@ current one (races have shown 1280×720). Rendering at a higher resolution is on
 **A: No, and there can't be.** A built `gt5.exe` contains GT5's own code converted for PC, so
 sharing one would be sharing the game itself. That's what gets projects like this taken down, and
 it's why this one only works from your own disc. Please don't ask for builds or share them. What we
-can do is make building easy: `setup.ps1` does nearly all of it, checks every file you add, and tells
-you exactly what's missing. If you get stuck, post setup's output in the
+can do is make building easy: double-click `setup.bat` (or run `setup.ps1`) and it does nearly all of
+it, checks every file you add, and tells you exactly what's missing. If you get stuck, post setup's output in the
 [discussions](https://github.com/MormonFTP-hub/gt5-recomp/discussions) and someone will help.
 
 **Q: I get errors like "venv\Scripts\python.exe is not recognized" or "cannot find analysis\version.json". What's wrong?**
@@ -155,6 +156,17 @@ so it isn't a file you add. Open PowerShell in the `gt5-recomp` folder (the one 
 missing, lists any of your files that are missing or in the wrong place, and once everything is there
 it generates and builds the game for you. If Python itself is missing, install Python 3.11 or newer
 from python.org with "Add python.exe to PATH" ticked, then run setup again.
+
+**Q: The game starts but the window stays black, and the title says `draws: 0`. What's wrong?**
+
+**A: Builds made before 10 November did that; it's fixed.** Setup didn't compile the game's SPU code
+(the PS3's co-processors), so the game waited forever for work that never ran. Update and it's
+rebuilt with that code: in the `gt5-recomp` folder run `powershell -ExecutionPolicy Bypass -File update.ps1`
+(or double-click `setup.bat`; if you downloaded the ZIP, download it again and move your `input`,
+`vfs` and `dev_flash` folders into the new `GT5` folder). While it builds, it prints
+`SPU jobs found in EBOOT.elf: N of 15`. If it's still black afterwards, attach the whole
+`GT5\logs\play.err` to a [problem report](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml),
+with that line.
 
 **Q: Is this legal? Do I need the game?**
 
@@ -247,6 +259,9 @@ in place it builds the game for you. You never need to run the scripts in `GT5\s
    powershell -ExecutionPolicy Bypass -File setup.ps1
    ```
 
+   Or, without typing commands: after the `git clone`, double-click **`setup.bat`** in the
+   `gt5-recomp` folder. It runs the same setup and keeps the window open so you can read the result.
+
    It fetches and patches ps3recomp, makes the Python environment and downloads FFmpeg. Then it lists
    the game files you still need to add, marked `[missing]`. Use Git rather than the ZIP download, so
    you can update later.
@@ -259,7 +274,7 @@ in place it builds the game for you. You never need to run the scripts in `GT5\s
    - **The executable:** in RPCS3, Utilities > Decrypt PS3 Binaries, choose your disc's
      `PS3_GAME\USRDIR\EBOOT.BIN`, and save the decrypted file as `GT5\input\EBOOT.elf`. It must be the
      decrypted one: setup tells you if it's still encrypted.
-4. Run setup again:
+4. Run setup again (the same command, or double-click `setup.bat`):
 
    ```
    powershell -ExecutionPolicy Bypass -File setup.ps1
@@ -277,7 +292,7 @@ When it is set up, the folder looks like this (the parts you add are marked):
 
 ```
 gt5-recomp\
-  setup.ps1, update.ps1, README.md, LICENSE
+  setup.bat, setup.ps1, update.ps1, README.md, LICENSE
   ps3recomp\          fetched and patched by setup.ps1
   ffmpeg\             fetched by setup.ps1
   venv\               made by setup.ps1

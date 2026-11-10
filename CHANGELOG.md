@@ -9,6 +9,23 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 10 Nov 2026
 
+🏷️ Released as **v0.1.3**
+
+🛠️ **Black screen on start fixed** (every build made from GitHub until now)
+- The game stayed black with `draws: 0` in the window title. Setup never compiled the game's SPU code
+  (the PS3's co-processors, which do the physics, sound and graphics set-up), and the port can't run a
+  SPU job that wasn't compiled: it drops it, and the game waits for it forever. Only the developer's
+  own build had that code, so the problem never showed there.
+- `relift.ps1` now builds it too: the SPU programs and all 43 SPU jobs, found in your own EBOOT.elf
+  (`scripts\spu_jobs_from_eboot.py` looks for each job by its hashes; no game data is in the repo). Its
+  output says `SPU jobs found in EBOOT.elf: 15 of 15` for the European release.
+- Checked with a fresh install straight from GitHub on the European release: it now boots and draws,
+  and no SPU job is dropped. The US release gets every job whose code is the same as in the European
+  one; the count above says how many.
+- **Already installed?** Run `update.ps1` (or double-click `setup.bat`): it re-generates the code and
+  rebuilds.
+- `setup.bat`: double-click to run setup without typing commands; the window stays open at the end.
+
 🏷️ Released as **v0.1.2**
 
 🎮 **Steering wheels and force feedback** (new, not yet tried on a real wheel: owners wanted)

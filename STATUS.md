@@ -1,6 +1,6 @@
 # 📋 Current state
 
-*Last updated: 9 November 2026*
+*Last updated: 10 November 2026*
 
 ## 🟢 Playable
 
@@ -71,7 +71,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **10 Nov 2026:** steering wheels and force feedback (v0.1.2, untested on real wheels: owners
+- **10 Nov 2026:** black screen on start fixed for everyone building from GitHub (the SPU code is
+  now compiled; run `update.ps1`); steering wheels and force feedback (v0.1.2, untested on real wheels: owners
   wanted); one-command setup that checks your files and builds the game (`setup.ps1`); numbered
   versions and one-command updates (`update.ps1`); FAQ at the top of the README.
 - **9 Nov 2026:** noisy distant road and track textures fixed (Tsukuba); each frame shown once

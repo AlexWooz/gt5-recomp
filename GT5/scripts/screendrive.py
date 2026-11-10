@@ -106,6 +106,19 @@ def newest(dirname):
         return None
 
 
+def unsqueeze(img, widen, content_w=0):
+    """A run wider than 16:9 (PS3_ASPECT, PS3_WINDOW_SIZE) has the game draw its menus as a 16:9 block in
+    the middle of a wider picture. Cut that block out at 1280x720 so the references still match.
+    content_w is how many pixels across the whole picture spans in the dump: 1280 when the game draws
+    it squeezed into its usual frame, more when the renderer widened its surfaces (any width but the
+    game's own 1280 and 2048 means that), or --content-width when the game itself drew wider."""
+    if widen <= 1.001:
+        return img
+    cw = content_w or (1280.0 if img.width in (1280, 2048) else 1280.0 * widen)
+    cx, half = cw / 2, cw / 2 / widen
+    return img.crop((round(cx - half), 0, round(cx + half), 720)).resize((1280, 720), Image.BILINEAR)
+
+
 TEST_EXE = os.path.join(os.path.dirname(HERE), "build", "gt5.exe")
 
 
@@ -156,6 +169,7 @@ def drive(a):
         if now - last_keep >= a.keep:
             last_keep = now
             img.save(os.path.join(a.dir, "frame_t%05d.png" % (now - t0)))
+        img = unsqueeze(img, a.widen, a.content_width)
         # The opening movie's frames can look like a menu (an orange steel mill matches the selected
         # icon), so past the first dialog nothing is read until the movie has been skipped.
         if a.skip_movie and i > 0 and not skipped:
@@ -294,6 +308,8 @@ if __name__ == "__main__":
                    " wait pauses. The first press only wakes the cursor. Tsukuba: wait,wait,up,wait,select,right,cross,wait,wait,select,right,right,right,right")
     p.add_argument("--key-gap", type=float, default=2.5, help="seconds after each --track-keys press")
     p.add_argument("--explore", action="store_true", help="stop the game after the --track-keys presses")
+    p.add_argument("--content-width", type=float, default=0, help="pixels across the whole wide picture in a dump, see unsqueeze")
+    p.add_argument("--widen", type=float, default=1.0, help="the run's picture shape over 16:9 (2560x1080: 1.333), see unsqueeze")
     a = p.parse_args()
     if a.make_refs:
         make_refs(a.make_refs)

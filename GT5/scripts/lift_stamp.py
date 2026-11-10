@@ -17,7 +17,7 @@ GT5 = Path(__file__).resolve().parent.parent
 BASE = GT5.parent
 STAMP = GT5 / "analysis" / "lift_stamp.txt"
 SCRIPTS = ["relift.ps1", "filter_functions.py", "setjmp_patch.py", "version_addrs.py", "mods.py",
-           "lift_spu_jobs.py"]
+           "lift_spu_jobs.py", "spu_jobs_from_eboot.py"]
 
 
 def inputs():

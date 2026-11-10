@@ -55,6 +55,16 @@ if (Test-Path "analysis\insn_patches.json") { $liftArgs += @("--insn-patches", "
 Run "ppu_lifter"     $liftArgs
 Run "setjmp_patch"   @("scripts\setjmp_patch.py")
 
+# The SPU code (the PS3's co-processors: physics, sound, graphics set-up), compiled like the main code:
+# the SPU programs and the SPURS jobs this copy's EBOOT carries. Without it every SPU job runs in the
+# SPU interpreter, many times slower. Anything not found in a release still runs, interpreted.
+Run "spu_programs"   @("$tk\build_spu_workloads.py", "--input", "input\EBOOT.elf", "--lifted", "spu",
+                       "--out", "spu\spu_workloads.c", "--constructor", "--allow-partial")
+Run "spu_jobs_find"  @("scripts\spu_jobs_from_eboot.py")
+if (Get-ChildItem "analysis\spu_miss\spujob_*.bin" -ErrorAction SilentlyContinue) {
+    Run "spu_jobs"   @("scripts\lift_spu_jobs.py")
+}
+
 New-Item -ItemType Directory -Force src\gen | Out-Null
 Run "gen_hle_nids"   @("$tk\gen_hle_nids.py", "--all", "--out", "src\gen\ppu_hle_nids.cpp")
 # Record what this lift was made from, so update.ps1 re-lifts only when that changes.
