@@ -29,6 +29,11 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 - README FAQ: other disc versions (1.02) and game updates (2.xx, needed by the GT5 Master Mod).
 - Known issue added: the picture can freeze on one screen at the first start while the game carries
   on ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10)). Being looked into.
+- That freeze didn't happen in a test of a brand-new install on the tested rig (empty save, empty shader
+  cache, through the first-start screens, the intro movie, the menu and driver creation; only 66
+  pipelines were needed, so it isn't shader compiling). The renderer does stop for good when the
+  graphics driver fails a present or a command list, logging `[d3d-fail]`, which fits both reports (an
+  AMD card and a switchable-graphics laptop). README FAQ: how to send that log before restarting.
 
 ## 10 Nov 2026
 

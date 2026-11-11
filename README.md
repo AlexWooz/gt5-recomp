@@ -215,6 +215,14 @@ rebuilt with that code: in the `gt5-recomp` folder run `powershell -ExecutionPol
 `GT5\logs\play.err` to a [problem report](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml),
 with that line.
 
+**Q: The picture froze on one screen, but the menu sounds still react when I press buttons. What now?**
+
+**A: Restart the game, but save the log first.** The game kept running; only the picture stopped,
+most likely because the graphics driver reset or refused a frame. Before you start it again (each start
+overwrites the log), copy `GT5\logs\play.err` and attach it to
+[issue #10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10), with your graphics card. A line in it
+starting with `[d3d-fail]` says what failed, and that decides the fix.
+
 **Q: Is this legal? Do I need the game?**
 
 **A: You need your own copy of GT5, and nothing from the game is in this repository.** It holds only

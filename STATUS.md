@@ -59,7 +59,10 @@ performance matters more than the graphics card.
   with `GT5\logs\play.err` attached (settings are in the README's FAQ).
 - **The picture can freeze on one screen at the first start** while the game carries on behind it
   (the menu sounds still react to the controller). Two players have seen it; restarting the game got
-  past it. Being looked into ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10)).
+  past it. Being looked into ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10)). The
+  likely cause is the graphics driver resetting or refusing a frame, after which the port stops
+  drawing. **If it happens to you:** close the game and attach `GT5\logs\play.err` to #10 *before* you
+  start it again (each start overwrites that file); a line starting with `[d3d-fail]` says what failed.
 - More speed in busy race scenes (the graphics thread is the limit), and on laptops and integrated
   graphics
 - Shorter shader-compile stutter the first time a scene is seen
