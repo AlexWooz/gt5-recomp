@@ -113,9 +113,11 @@ if (-not (Test-Path $elf)) {
         Todo "a valid GT5\input\EBOOT.elf" "This file isn't a PS3 executable. Decrypt your disc's PS3_GAME\USRDIR\EBOOT.BIN in RPCS3 and use the result."
     } elseif ($sha1 -eq "1535B865EC7DD58E7704B378B8621532ECF844E1") {
         Ok "GT5\input\EBOOT.elf: Europe BCES00569, version 01.00 (the tested one)"
+    } elseif ($sha1 -eq "40126D2D14B0A95B9601BB11E3A6E778186067AC") {
+        Ok "GT5\input\EBOOT.elf: North America BCUS98114 (players have raced on it)"
     } else {
         Ok "GT5\input\EBOOT.elf (SHA-1 $sha1)"
-        Write-Host "            Not the tested European 01.00 executable. The US release should work (untested). One from a game update won't." -ForegroundColor Yellow
+        Write-Host "            Not one tried yet (Europe and US 01.00 are). Another disc version may work: please report how it goes. One from a game update (2.xx) won't." -ForegroundColor Yellow
     }
 }
 

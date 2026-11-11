@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/MormonFTP-hub/gt5-recomp/releases"><img src="https://img.shields.io/github/v/release/MormonFTP-hub/gt5-recomp?style=for-the-badge&color=34C759&label=version" alt="Newest version"></a>
   <img src="https://img.shields.io/badge/Europe_BCES00569-tested-2E8BFF?style=for-the-badge" alt="Europe BCES00569: tested">
-  <img src="https://img.shields.io/badge/US_BCUS98114-untested-6E7681?style=for-the-badge" alt="US BCUS98114: untested">
+  <img src="https://img.shields.io/badge/US_BCUS98114-works_(players)-2E8BFF?style=for-the-badge" alt="US BCUS98114: works, run by players">
   <img src="https://img.shields.io/badge/Windows_x64-Direct3D_12-5CC8FF?style=for-the-badge" alt="Windows x64, Direct3D 12">
   <img src="https://img.shields.io/badge/license-MIT-E8312F?style=for-the-badge" alt="MIT license">
   <img src="https://img.shields.io/badge/Discord-mormonftp-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord: mormonftp">
@@ -24,7 +24,7 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
 > executable (version **01.00**, with **no game update** installed):
 >
 > - **Europe, BCES00569**: tested. This is the copy the port was built from.
-> - **North America, BCUS98114**: expected to work, not tested yet. The lift finds the few addresses
+> - **North America, BCUS98114**: works; players have raced on it (thanks!). The lift finds the few addresses
 >   that differ between releases in your own executable.
 >
 > See [Which copy of GT5](#which-copy-of-gt5) for how to check your files.
@@ -65,8 +65,8 @@ Everything done on the port since the first day, with dates, is in [CHANGELOG.md
 ## 🏁 Try it, then tell me how it went
 
 If you own the game, please set it up and play. Every result helps decide what gets fixed next,
-whether it runs great, half works, or doesn't build at all. US players especially: the US release
-hasn't been tested yet.
+whether it runs great, half works, or doesn't build at all. Laptops, integrated graphics and AMD cards
+especially: the port was tuned on one desktop with an NVIDIA card.
 
 | You want to... | Go here |
 |---|---|
@@ -93,7 +93,8 @@ your way around. [CONTRIBUTING.md](CONTRIBUTING.md) has the few rules.
 | Widescreen (16:9)? | ✅ Yes, GT5 is a 16:9 game |
 | Ultrawide (21:9, 32:9)? | ✅ New: a wider view, with the HUD kept 16:9 in the middle |
 | Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard |
-| US copy (BCUS98114)? | ⚠️ Should work, not tested yet |
+| US copy (BCUS98114)? | ✅ Yes, players have raced on it |
+| Version 1.02, or a game update (2.xx)? | ⚠️ 1.02 untried; updates not yet (see below) |
 | Online? | ❌ No |
 | Is it legal? | ✅ No game files here: you build it from your own disc |
 | Ready-made download? | ❌ No, but [GT5-Installer.bat](#install) builds it for you |
@@ -167,8 +168,18 @@ higher resolution is on the list.
 
 **Q: Can I use a US copy?**
 
-**A: Probably.** The tools find the few spots that differ between releases in your own copy (see
-[Which copy of GT5](#which-copy-of-gt5)). Nobody has tried a US copy yet, so please report if you do.
+**A: Yes.** Players have raced on the US disc. Its executable has the same layout as the European one,
+and the tools find the few spots that could differ between releases in your own copy anyway (see
+[Which copy of GT5](#which-copy-of-gt5)). Only ultrawide is still Europe-only.
+
+**Q: My copy says version 1.02, or I have a game update (2.xx). Does that work? What about the Master Mod?**
+
+**A: The port is built from the disc's own executable, version 01.00.** Another disc version, like
+1.02, hasn't been tried: it may well work, since the tools look for what they need in your own
+executable. Setup prints `SPU jobs found in EBOOT.elf: N of 15` while it builds, and that number (15 is
+everything) plus `version_addrs.py`'s output tell us how close it is, so please report them. Executables
+from game updates (2.xx) are a much bigger change to the game's code and data and aren't supported yet;
+so mods that need one, like the GT5 Master Mod (2.11), don't work yet. It's on the list.
 
 **Q: Does online work?**
 
@@ -254,7 +265,7 @@ with, endorsed by, or connected to Sony Interactive Entertainment or Polyphony D
   (provides clang-cl, CMake and Ninja).
 - Python 3.11 or newer, and Git.
 - About 25 GB free: the game files are about 17 GB, the build a few more.
-- Your own GT5 disc (BCES00569, or BCUS98114 untested) and the means to dump it, and
+- Your own GT5 disc (BCES00569 or BCUS98114) and the means to dump it, and
   [RPCS3](https://rpcs3.net) to install PS3 firmware and decrypt the game's executable.
 
 ## Which copy of GT5
@@ -265,7 +276,7 @@ Use the Blu-ray disc's own executable, `PS3_GAME\USRDIR\EBOOT.BIN`, application 
 | Release | Title ID | Status | SHA-1 of the disc's files |
 |---|---|---|---|
 | Europe / PAL | **BCES00569** | tested | `EBOOT.BIN` `1FFABF4C029CF3099579B73425C91C1FD48CAFCA`, decrypted `EBOOT.elf` `1535B865EC7DD58E7704B378B8621532ECF844E1` |
-| North America | **BCUS98114** | expected to work, not tested yet | |
+| North America | **BCUS98114** | works (run by players) | decrypted `EBOOT.elf` `40126D2D14B0A95B9601BB11E3A6E778186067AC` |
 
 Almost everything in the port works for any release, because the recompiled code is generated from
 your own executable. Only three things are tied to where the code sits in one executable: the end of

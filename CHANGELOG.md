@@ -7,6 +7,29 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 > or repeated frames (fixed on 4 Nov and 9 Nov), so treat them as rough before-and-after comparisons.
 > From 9 Nov on, numbers are the game's own frames.
 
+## 11 Nov 2026
+
+🏷️ Released as **v0.1.9**
+
+🧰 **Installer fixes from the first reports**
+- High-DPI screens: on a 4K monitor with Windows scaling the installer's window was squashed, with text
+  over text and cut off ([#11](https://github.com/MormonFTP-hub/gt5-recomp/issues/11)). The layout now
+  scales with the screen; checked at 100%, 150% and 200%.
+- Windows 10: its built-in `tar` can't open RPCS3's `.7z` download ("LZMA codec is unsupported",
+  [#8](https://github.com/MormonFTP-hub/gt5-recomp/issues/8)). The installer now falls back to 7-Zip if
+  it's installed, or downloads 7-Zip's own small extractor (`7zr.exe`, from 7-zip.org). Checked with
+  `tar` switched off.
+- The installer writes everything it shows to `GT5-Installer.log` next to itself, and asks for that log
+  when something stops it.
+
+🏁 **US release confirmed**
+- Players have raced on the US disc (BCUS98114), so it's listed as working, and setup recognises its
+  executable (SHA-1 40126D2D14B0A95B9601BB11E3A6E778186067AC). Its release-specific addresses turned
+  out the same as the European disc's.
+- README FAQ: other disc versions (1.02) and game updates (2.xx, needed by the GT5 Master Mod).
+- Known issue added: the picture can freeze on one screen at the first start while the game carries
+  on ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10)). Being looked into.
+
 ## 10 Nov 2026
 
 🏷️ Released as **v0.1.8**

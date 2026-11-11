@@ -1,6 +1,6 @@
 # 📋 Current state
 
-*Last updated: 10 November 2026*
+*Last updated: 11 November 2026*
 
 ## 🟢 Playable
 
@@ -43,6 +43,9 @@ performance matters more than the graphics card.
 - Buying cars and saving, on-screen keyboard (a Windows text box)
 - DualSense, DualShock 4, Xbox/XInput pads and keyboard
 - Watch mode for B-Spec and replays (F9): half the drawing work, full race speed
+- The US release (BCUS98114) too: players have raced on it (an i5-1135G7 laptop with Iris Xe graphics,
+  and a GTX 1650 laptop), with frame rates to match those machines. Thanks for the reports!
+- One-click install: `GT5-Installer.bat` (README, Install)
 - Ultrawide monitors (21:9, 32:9), new: the game draws a wider view itself and keeps the HUD and
   menus 16:9 in the middle (checked in 2560×1080, 3440×1440 and 3840×1080 windows, not yet on a real
   ultrawide monitor: [tell us how it looks](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml))
@@ -54,13 +57,18 @@ performance matters more than the graphics card.
   it, a race steers from it, and the game's force-feedback commands arrive. Wheel owners:
   [tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml),
   with `GT5\logs\play.err` attached (settings are in the README's FAQ).
-- More speed in busy race scenes (the graphics thread is the limit)
-- The US release (BCUS98114) is supported by the tools but nobody has tried it yet:
-  [tell us if you do](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml)
+- **The picture can freeze on one screen at the first start** while the game carries on behind it
+  (the menu sounds still react to the controller). Two players have seen it; restarting the game got
+  past it. Being looked into ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10)).
+- More speed in busy race scenes (the graphics thread is the limit), and on laptops and integrated
+  graphics
+- Shorter shader-compile stutter the first time a scene is seen
 
 ## ❌ Not supported yet
 
 - Ultrawide on releases other than the European disc 01.00: they keep the 16:9 picture for now
+- Executables from game updates (2.xx), so mods that need one, like the GT5 Master Mod (2.11), don't
+  work yet
 
 ## ⚠️ Known issues
 
@@ -74,7 +82,9 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **10 Nov 2026:** ultrawide monitors (21:9, 32:9): a wider view, HUD kept 16:9 in the middle;
+- **11 Nov 2026:** the installer fits high-DPI (4K) screens, unpacks RPCS3 on Windows 10 too, and
+  keeps a log; the US release confirmed working by players.
+- **10 Nov 2026:** one-click installer (`GT5-Installer.bat`); ultrawide monitors (21:9, 32:9): a wider view, HUD kept 16:9 in the middle;
   black screen on start fixed for everyone building from GitHub (the SPU code is
   now compiled; run `update.ps1`); steering wheels and force feedback (v0.1.2, untested on real wheels: owners
   wanted); one-command setup that checks your files and builds the game (`setup.ps1`); numbered

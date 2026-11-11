@@ -41,9 +41,17 @@ function Stop-Install([string]$t) {
     Write-Host ""
     Write-Host "Stopped: $t" -ForegroundColor Red
     Write-Host "Fix that and run GT5-Installer.bat again: it skips everything that's already done."
-    Write-Host "Stuck? Post this window's text here: $HelpPage"
+    Write-Host "Stuck? Report it here and attach the log ($script:LogPath): $HelpPage"
     exit 1
 }
+
+# Everything this window shows also goes to GT5-Installer.log next to the installer, for reports.
+$script:LogPath = Join-Path $env:TEMP "GT5-Installer.log"
+if ($env:GT5_INSTALLER) {
+    $p = Join-Path (Split-Path $env:GT5_INSTALLER) "GT5-Installer.log"
+    try { [IO.File]::AppendAllText($p, ""); $script:LogPath = $p } catch {}
+}
+try { Start-Transcript -Path $script:LogPath -Append | Out-Null } catch {}
 
 # ---- Game, firmware and folder checks (used by the window and again before installing) -------------
 
@@ -154,31 +162,37 @@ function Show-Installer($game0, $fw0, $dest0) {
     Add-Type -AssemblyName System.Windows.Forms, System.Drawing
     try { Add-Type -Namespace Gt5 -Name Dpi -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();'; [void][Gt5.Dpi]::SetProcessDPIAware() } catch {}
     [Windows.Forms.Application]::EnableVisualStyles()
+    # The layout is in 100%-scaling pixels; S() scales it to the screen (fonts in points scale by themselves).
+    $dpi = 96.0; try { $gr = [Drawing.Graphics]::FromHwnd([IntPtr]::Zero); $dpi = $gr.DpiX; $gr.Dispose() } catch {}
+    $script:k = $dpi / 96.0; $fk = 1.0
+    if ($env:GT5_INSTALL_UISCALE) { $want = [double]$env:GT5_INSTALL_UISCALE; $fk = $want / $script:k; $script:k = $want }   # testing
+    function S([double]$v) { return [int][math]::Round($v * $script:k) }
     $red = [Drawing.Color]::FromArgb(176, 20, 30); $ok = [Drawing.Color]::FromArgb(20, 120, 50); $bad = [Drawing.Color]::FromArgb(180, 30, 30)
-    $font = New-Object Drawing.Font("Segoe UI", 10); $bold = New-Object Drawing.Font("Segoe UI Semibold", 10)
+    $font = New-Object Drawing.Font("Segoe UI", (10 * $fk)); $bold = New-Object Drawing.Font("Segoe UI Semibold", (10 * $fk))
 
     $f = New-Object Windows.Forms.Form
-    $f.Text = "Gran Turismo 5 for PC - installer"; $f.ClientSize = New-Object Drawing.Size(760, 520)
+    $f.AutoScaleMode = "None"
+    $f.Text = "Gran Turismo 5 for PC - installer"; $f.ClientSize = New-Object Drawing.Size((S 760), (S 520))
     $f.FormBorderStyle = "FixedDialog"; $f.MaximizeBox = $false; $f.StartPosition = "CenterScreen"
     $f.Font = $font; $f.BackColor = [Drawing.Color]::White
 
-    $band = New-Object Windows.Forms.Panel; $band.SetBounds(0, 0, 760, 78); $band.BackColor = $red
+    $band = New-Object Windows.Forms.Panel; $band.SetBounds(0, 0, (S 760), (S 78)); $band.BackColor = $red
     $t1 = New-Object Windows.Forms.Label; $t1.Text = "GRAN TURISMO 5  for PC"; $t1.ForeColor = [Drawing.Color]::White
-    $t1.Font = New-Object Drawing.Font("Segoe UI Semibold", 20); $t1.AutoSize = $true; $t1.Location = New-Object Drawing.Point(22, 6)
+    $t1.Font = New-Object Drawing.Font("Segoe UI Semibold", (20 * $fk)); $t1.AutoSize = $true; $t1.Location = New-Object Drawing.Point((S 22), (S 6))
     $t2 = New-Object Windows.Forms.Label; $t2.Text = "Builds the PC version from your own copy of the game. Point it at two things and press Install."
-    $t2.ForeColor = [Drawing.Color]::FromArgb(255, 225, 225); $t2.AutoSize = $true; $t2.Location = New-Object Drawing.Point(25, 48)
+    $t2.ForeColor = [Drawing.Color]::FromArgb(255, 225, 225); $t2.AutoSize = $true; $t2.Location = New-Object Drawing.Point((S 25), (S 48))
     $band.Controls.AddRange(@($t1, $t2)); $f.Controls.Add($band)
 
     function New-Row([int]$y, [string]$title, [string]$hint) {
-        $l = New-Object Windows.Forms.Label; $l.Text = $title; $l.Font = $bold; $l.AutoSize = $true; $l.Location = New-Object Drawing.Point(22, $y)
-        $h = New-Object Windows.Forms.Label; $h.Text = $hint; $h.ForeColor = [Drawing.Color]::DimGray; $h.AutoSize = $true; $h.Location = New-Object Drawing.Point(22, ($y + 21))
-        $tb = New-Object Windows.Forms.TextBox; $tb.SetBounds(22, ($y + 46), 470, 26)
-        $st = New-Object Windows.Forms.Label; $st.SetBounds(22, ($y + 76), 720, 22); $st.AutoEllipsis = $true
+        $l = New-Object Windows.Forms.Label; $l.Text = $title; $l.Font = $bold; $l.AutoSize = $true; $l.Location = New-Object Drawing.Point((S 22), (S $y))
+        $h = New-Object Windows.Forms.Label; $h.Text = $hint; $h.ForeColor = [Drawing.Color]::DimGray; $h.AutoSize = $true; $h.Location = New-Object Drawing.Point((S 22), (S ($y + 21)))
+        $tb = New-Object Windows.Forms.TextBox; $tb.SetBounds((S 22), (S ($y + 46)), (S 470), (S 26))
+        $st = New-Object Windows.Forms.Label; $st.SetBounds((S 22), (S ($y + 76)), (S 720), (S 22)); $st.AutoEllipsis = $true
         $f.Controls.AddRange(@($l, $h, $tb, $st))
         return @{ Box = $tb; Status = $st; Y = $y + 45 }
     }
     function New-Button([string]$text, [int]$x, [int]$y, [int]$w) {
-        $b = New-Object Windows.Forms.Button; $b.Text = $text; $b.SetBounds($x, $y, $w, 28); $b.FlatStyle = "System"; $f.Controls.Add($b); return $b
+        $b = New-Object Windows.Forms.Button; $b.Text = $text; $b.SetBounds((S $x), (S $y), (S $w), (S 28)); $b.FlatStyle = "System"; $f.Controls.Add($b); return $b
     }
 
     $rg = New-Row 92  "1.  Your Gran Turismo 5 game" "Your disc dump: its folder (the one with PS3_GAME in it) or an .iso file. Europe or US."
@@ -188,7 +202,7 @@ function Show-Installer($game0, $fw0, $dest0) {
     $bfB = New-Button "Browse..." 502 $rf.Y 110; $bfS = New-Button "Get it from Sony" 620 $rf.Y 118
     $bdB = New-Button "Browse..." 502 $rd.Y 110
 
-    $note = New-Object Windows.Forms.Label; $note.SetBounds(22, 412, 716, 44); $note.ForeColor = [Drawing.Color]::DimGray
+    $note = New-Object Windows.Forms.Label; $note.SetBounds((S 22), (S 412), (S 716), (S 44)); $note.ForeColor = [Drawing.Color]::DimGray
     $note.Text = "Takes about an hour the first time. Anything missing (Git, Python, Microsoft's C++ build tools) is installed for you, and Windows may ask for permission. Nothing from the game is ever uploaded or shared."
     $f.Controls.Add($note)
     $go = New-Button "Install" 520 470 110; $go.Font = $bold; $cancel = New-Button "Cancel" 638 470 100
@@ -288,9 +302,19 @@ function Get-Rpcs3([string]$dir) {
         $want = ((curl.exe -sSL $sum.browser_download_url) -split '\s+')[0]
         if ($want -and ((Get-FileHash $arc -Algorithm SHA256).Hash -ne $want.ToUpper())) { Remove-Item $arc; Stop-Install "the RPCS3 download was damaged (checksum). Try again." }
     }
-    tar -xf $arc -C $dir
+    if (-not $env:GT5_INSTALL_NOTAR) { tar -xf $arc -C $dir 2>&1 | Out-Null }
+    if (-not (Test-Path $exe)) {
+        # Windows 10's tar can't read this archive (no LZMA): use 7-Zip, or 7-Zip's own small extractor.
+        $sz = @("$env:ProgramFiles\7-Zip\7z.exe", "${env:ProgramFiles(x86)}\7-Zip\7z.exe") | Where-Object { (Test-Path $_) -and -not $env:GT5_INSTALL_NO7Z } | Select-Object -First 1
+        if ($sz) { Say "  unpacking it with your 7-Zip..." } else {
+            Say "  getting 7-Zip's extractor (7zr.exe) from 7-zip.org to unpack it..."
+            $sz = Join-Path $dir "7zr.exe"
+            curl.exe -sSL -o $sz "https://www.7-zip.org/a/7zr.exe"
+        }
+        & $sz x -y "-o$dir" $arc | Out-Null
+    }
     Remove-Item $arc -ErrorAction SilentlyContinue
-    if (-not (Test-Path $exe)) { Stop-Install "unpacking RPCS3 failed." }
+    if (-not (Test-Path $exe)) { Stop-Install "unpacking RPCS3 failed. Install 7-Zip from https://www.7-zip.org and run this again." }
     # No welcome box or pop-ups: it's only used from here.
     New-Item -ItemType Directory -Force (Join-Path $dir "GuiConfigs") | Out-Null
     $ini = "[main_window]`r`ninfoBoxEnabledWelcome=false`r`ninfoBoxEnabledInstallPUP=false`r`ninfoBoxEnabledInstallPKG=false`r`n"
@@ -507,11 +531,11 @@ Step 7 "Building the game (about 10 minutes of code generation, then 20-50 minut
 Push-Location $base
 if ($dest.Existing -and (Test-Path (Join-Path $base ".git"))) {
     Say "  getting the newest version first..."
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $base "update.ps1") -NoBuild
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $base "update.ps1") -NoBuild | Out-Host
 }
 $setupArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $base "setup.ps1"))
 if ($env:GT5_INSTALL_NOBUILD) { $setupArgs += "-NoBuild" }
-& powershell @setupArgs
+& powershell @setupArgs | Out-Host     # through Out-Host so the log gets setup's output too
 $built = $LASTEXITCODE
 Pop-Location
 if ($built -ne 0) { Stop-Install "setup stopped (see its message above)." }
