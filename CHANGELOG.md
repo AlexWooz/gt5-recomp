@@ -9,6 +9,25 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 11 Nov 2026
 
+🏷️ Released as **v0.1.10**
+
+🖥️ **1080p** (after a report from a 4K TV, [#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14))
+- The port always told the game it was on a 720p TV, so everyone got GT5's 720p mode: races drawn at
+  1152×648, inside the game's own black border. It now offers the 1080p mode, as a PS3 on a 1080p TV
+  does, and the game switches to it by itself: races are drawn at 1728×972 (2.25 times the pixels), the
+  HUD and menus at 1920×1080. `play.bat` sets `PS3_VIDEO_MODE=1080`; `720` brings back the 720p mode for a
+  slow graphics chip.
+- Tested on the tested rig in an Arcade race: 32 to 42 fps at 1080p against 32 to 43 fps at 720p in the
+  same race, so on a desktop graphics card it costs nothing (the CPU is the limit). The intro, menus,
+  car select and the race all ran at 1080p. In a 21:9 window (2560×1080) the game draws the wider view
+  into 1920×1080 with the HUD a 16:9 block in the middle, and the window spreads it sideways.
+- The black border around races is the game's own (its display margin, kept for TVs that cut off the
+  edges), not the port's.
+
+📝 **Logs survive a restart**
+- `play.bat` now keeps the previous run's log as `GT5\logs\play.prev.err`, so the log of a frozen picture
+  ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10)) can still be sent after restarting.
+
 🏷️ Released as **v0.1.9**
 
 🧰 **Installer fixes from the first reports**

@@ -169,7 +169,12 @@ def drive(a):
         if now - last_keep >= a.keep:
             last_keep = now
             img.save(os.path.join(a.dir, "frame_t%05d.png" % (now - t0)))
-        img = unsqueeze(img, a.widen, a.content_width)
+        cw = a.content_width
+        if img.size == (1920, 1080):
+            # 1080p mode (PS3_VIDEO_MODE=1080): the whole picture, at any shape, fills the 1920x1080.
+            img = img.resize((1280, 720), Image.BILINEAR)
+            cw = cw or 1280
+        img = unsqueeze(img, a.widen, cw)
         # The opening movie's frames can look like a menu (an orange steel mill matches the selected
         # icon), so past the first dialog nothing is read until the movie has been skipped.
         if a.skip_movie and i > 0 and not skipped:

@@ -47,8 +47,14 @@ REM at that shape; maximize it. On a 16:9 monitor nothing changes. Or a fixed sh
 REM 3440x1440. 16:9 = the PS3's own picture.
 set "PS3_ASPECT=auto"
 REM set "PS3_WINDOW_SIZE=2560x1080"   open the window at exactly this size
+REM Resolution: the TV mode the game is told it's on, as on a PS3. 1080 = its 1080p mode (races drawn
+REM at 1728x972, sharp HUD and menus at 1920x1080). 720 = its 720p mode (races at 1152x648), for a slow
+REM graphics chip. The window title shows the mode.
+set "PS3_VIDEO_MODE=1080"
 if not exist "%HERE%hdd0" mkdir "%HERE%hdd0"
 if not exist "%HERE%hdd1" mkdir "%HERE%hdd1"
 if not exist "%HERE%logs" mkdir "%HERE%logs"
 cd /d "%HERE%"
+REM Keep the last run's log as play.prev.err, so a problem report can still include it after a restart.
+if exist "%HERE%logs\play.err" copy /y "%HERE%logs\play.err" "%HERE%logs\play.prev.err" >nul
 "%HERE%build\gt5.exe" "%HERE%input\EBOOT.elf" > "%HERE%logs\play.out" 2> "%HERE%logs\play.err"

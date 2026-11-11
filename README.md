@@ -157,9 +157,19 @@ the picture stays 16:9 for now, and `logs\play.err` says so in a `[widescreen]` 
 
 **Q: What resolution does it render at?**
 
-**A: Whatever the game picks, as on a PS3, scaled to fit your window.** The window title shows the
-current one (races have shown 1280×720; on an ultrawide monitor it's wider, see above). Rendering at a
-higher resolution is on the list.
+**A: GT5's own 1080p mode, as on a PS3 connected to a 1080p TV, scaled to fit your window.** Races are
+drawn at 1728×972 (the game keeps a black border around them for TVs that cut off the edges), the HUD
+and menus at 1920×1080; the window title shows the mode. It's set in `play.bat`:
+
+| In `play.bat` | |
+|---|---|
+| `set "PS3_VIDEO_MODE=1080"` | the 1080p mode (the default since v0.1.10) |
+| `set "PS3_VIDEO_MODE=720"` | the 720p mode, races at 1152×648: for a slow graphics chip (it was the only mode before v0.1.10) |
+
+On the tested rig both run at the same speed, since the CPU is the limit; on a laptop's built-in
+graphics 720 may be faster. On an ultrawide monitor the 720p mode draws the wider view pixel for pixel
+(about 1700×720), and the 1080p mode draws it into 1920×1080 and spreads it sideways: sharper top to
+bottom, a little softer side to side. Rendering above the PS3's resolutions is on the list.
 
 **Q: Which controllers work?**
 
@@ -217,11 +227,12 @@ with that line.
 
 **Q: The picture froze on one screen, but the menu sounds still react when I press buttons. What now?**
 
-**A: Restart the game, but save the log first.** The game kept running; only the picture stopped,
-most likely because the graphics driver reset or refused a frame. Before you start it again (each start
-overwrites the log), copy `GT5\logs\play.err` and attach it to
-[issue #10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10), with your graphics card. A line in it
-starting with `[d3d-fail]` says what failed, and that decides the fix.
+**A: Restart the game, and send us the log of the frozen run.** The game kept running; only the picture
+stopped, most likely because the graphics driver reset or refused a frame. Attach that run's log to
+[issue #10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10), with your graphics card: it's
+`GT5\logs\play.err` until you start the game again, then `GT5\logs\play.prev.err` (each start keeps the
+previous log under that name; builds before v0.1.10 didn't, so there copy `play.err` before restarting). A
+line in it starting with `[d3d-fail]` says what failed, and that decides the fix.
 
 **Q: Is this legal? Do I need the game?**
 
@@ -460,6 +471,7 @@ A steering wheel works too, with force feedback (new and untested on real wheels
 
 | Variable | Effect |
 |---|---|
+| `PS3_VIDEO_MODE=1080` | The game's 1080p mode (default); `720` for its 720p mode on a slow graphics chip. See the [FAQ](#-faq). |
 | `PAD_BACKGROUND=1` | The pad keeps working when another window has focus. |
 | `PS3_WHEEL=off` | Don't look for a steering wheel. The other `PS3_WHEEL_*` settings are in the [FAQ](#-faq). |
 | `LD_WATCH=1` (or **F9** in the game) | Watch mode for B-Spec races and replays: draws every other frame while the race keeps full speed, draws nothing while minimized, and lowers the game's priority. Off unless you turn it on; with `LD_WATCH=1` it comes on after 10 s without input and goes off when you touch the controls. |

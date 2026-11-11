@@ -8123,18 +8123,20 @@ index 298ee7de..8ea23d2c 100644
  }
  
 diff --git a/libs/video/cellVideoOut.c b/libs/video/cellVideoOut.c
-index c67a6eaa..cd4e1df1 100644
+index c67a6eaa..289d6e1e 100644
 --- a/libs/video/cellVideoOut.c
 +++ b/libs/video/cellVideoOut.c
-@@ -8,6 +8,7 @@
+@@ -8,7 +8,9 @@
  #include "cellVideoOut.h"
  #include "ps3emu/endian.h"
  #include "../../runtime/ppu/ppu_memory.h"   /* vm_base (guest mem) */
 +#include "display_aspect.h"
  #include <stdio.h>
++#include <stdlib.h>
  #include <string.h>
  #include <stdint.h>
-@@ -51,8 +52,14 @@ static void get_resolution_wh(u32 resId, u16* w, u16* h)
+ 
+@@ -51,8 +53,14 @@ static void get_resolution_wh(u32 resId, u16* w, u16* h)
      switch (resId) {
      case CELL_VIDEO_OUT_RESOLUTION_1080:
          *w = 1920; *h = 1080; break;
@@ -8151,6 +8153,33 @@ index c67a6eaa..cd4e1df1 100644
      case CELL_VIDEO_OUT_RESOLUTION_480:
          *w = 720;  *h = 480;  break;
      case CELL_VIDEO_OUT_RESOLUTION_576:
+@@ -74,10 +82,26 @@ static void get_resolution_wh(u32 resId, u16* w, u16* h)
+  * API implementations
+  * -----------------------------------------------------------------------*/
+ 
++/* PS3_VIDEO_MODE=1080 offers the game the PS3's 1080p mode instead of 720p (the TV mode a game
++ * finds at start-up, before it configures one itself). */
++static void video_mode_from_env(void)
++{
++    static int done;
++    if (done) return;
++    done = 1;
++    const char* e = getenv("PS3_VIDEO_MODE");
++    if (!e || !*e) return;
++    if (!strcmp(e, "1080") || !strcmp(e, "1080p")) s_resolution_id = CELL_VIDEO_OUT_RESOLUTION_1080;
++    else if (!strcmp(e, "720") || !strcmp(e, "720p")) s_resolution_id = CELL_VIDEO_OUT_RESOLUTION_720;
++    fprintf(stderr, "[cellVideoOut] PS3_VIDEO_MODE=%s: the game is offered resolution id %u\n",
++            e, s_resolution_id);
++}
++
+ s32 cellVideoOutGetState(u32 videoOut, u32 deviceIndex, CellVideoOutState* state)
+ {
+     printf("[cellVideoOut] GetState(videoOut=%u, deviceIndex=%u)\n",
+            videoOut, deviceIndex);
++    video_mode_from_env();
+ 
+     if (!state)
+         return CELL_VIDEO_OUT_ERROR_ILLEGAL_PARAMETER;
 diff --git a/libs/video/display_aspect.c b/libs/video/display_aspect.c
 new file mode 100644
 index 00000000..6aa79ae2

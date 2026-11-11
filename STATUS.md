@@ -17,7 +17,7 @@ progress: see the known issues below, and please [report what you find](https://
 | Memory | 32 GB DDR5-6000 |
 | Storage | 1 TB NVMe SSD (the game and its shader cache live here) |
 | System | Windows 11 Home (build 26200) |
-| Monitor | 2560×1440 at 164 Hz; the game renders its 1080p mode (2048×1080) |
+| Monitor | 2560×1440 at 164 Hz; the game draws its 1080p mode (races at 1728×972), scaled to the window |
 | Controller | DualSense over Bluetooth |
 | Game | Europe **BCES00569**, disc executable 01.00, no update |
 | Port settings | `play.bat` as shipped (live D3D12 renderer, 2 extra SPU threads, pad works in the background) |
@@ -61,8 +61,9 @@ performance matters more than the graphics card.
   (the menu sounds still react to the controller). Two players have seen it; restarting the game got
   past it. Being looked into ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10)). The
   likely cause is the graphics driver resetting or refusing a frame, after which the port stops
-  drawing. **If it happens to you:** close the game and attach `GT5\logs\play.err` to #10 *before* you
-  start it again (each start overwrites that file); a line starting with `[d3d-fail]` says what failed.
+  drawing. **If it happens to you:** attach that run's log to #10: `GT5\logs\play.err`, or
+  `GT5\logs\play.prev.err` once you've started the game again (since v0.1.10 each start keeps the
+  previous log); a line starting with `[d3d-fail]` says what failed.
 - More speed in busy race scenes (the graphics thread is the limit), and on laptops and integrated
   graphics
 - Shorter shader-compile stutter the first time a scene is seen
@@ -85,8 +86,10 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **11 Nov 2026:** the installer fits high-DPI (4K) screens, unpacks RPCS3 on Windows 10 too, and
-  keeps a log; the US release confirmed working by players.
+- **11 Nov 2026:** 1080p: the game now uses its own 1080p mode (races at 1728×972 instead of 1152×648,
+  same speed on the tested rig; `PS3_VIDEO_MODE=720` for slow graphics chips); the previous run's log is
+  kept as `play.prev.err`; the installer fits high-DPI (4K) screens, unpacks RPCS3 on Windows 10 too,
+  and keeps a log; the US release confirmed working by players.
 - **10 Nov 2026:** one-click installer (`GT5-Installer.bat`); ultrawide monitors (21:9, 32:9): a wider view, HUD kept 16:9 in the middle;
   black screen on start fixed for everyone building from GitHub (the SPU code is
   now compiled; run `update.ps1`); steering wheels and force feedback (v0.1.2, untested on real wheels: owners
