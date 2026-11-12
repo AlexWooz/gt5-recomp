@@ -63,8 +63,10 @@ performance matters more than the graphics card.
   (the menu sounds still react to the controller). Two players have seen it; restarting the game got
   past it. Being looked into ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10)). One
   sure cause, **Alt+Enter** (found by a player), is fixed since v0.1.17: Alt+Enter now does nothing,
-  and the launcher's borderless full screen fills the screen instead. The other possible cause is the
-  graphics driver resetting or refusing a frame. **If it still happens to you:** attach that run's log to #10: `GT5\logs\play.err`, or
+  and the launcher's borderless full screen fills the screen instead. A second one, found in testing:
+  under heavy CPU load the opening movie could stop on one frame for good; since v0.1.21 it's skipped
+  (GT TV still has it). The last possible cause is the graphics driver resetting or refusing a frame.
+  **If it still happens to you:** attach that run's log to #10: `GT5\logs\play.err`, or
   `GT5\logs\play.prev.err` once you've started the game again (since v0.1.10 each start keeps the
   previous log); a line starting with `[d3d-fail]` says what failed.
 - More speed on 4-6 core CPUs and laptops. Measured on 6 slow cores of the tested rig: races at about
@@ -94,7 +96,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **12 Nov 2026:** laptops draw on their dedicated graphics card, and the launcher has a **Speed**
+- **12 Nov 2026:** the opening movie is skipped, so it can't freeze the first start (v0.1.21);
+  laptops draw on their dedicated graphics card, and the launcher has a **Speed**
   setting (30 fps) picked for your PC (v0.1.20); a black screen from a split or missing `GT.VOL` is
   fixed or explained (v0.1.19); the Hong Kong release runs; wrong track textures fixed (banners across the road at Chamonix, scrambled Eiger):
   the game's graphics-memory copies now happen (v0.1.16); Alt+Enter no longer freezes the picture

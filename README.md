@@ -396,7 +396,8 @@ that line.
 stopped. Before v0.1.17, **Alt+Enter** always did this (Windows switched the window to exclusive full
 screen behind the port's back); it's switched off now, so update, and use the launcher's **borderless
 full screen** for full screen. If it froze without Alt+Enter, the graphics driver most likely reset or
-refused a frame. Attach that run's log to
+refused a frame. (A frozen opening movie at the first start, the Earth from space, was another cause;
+since v0.1.21 that movie is skipped.) Attach that run's log to
 [issue #10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10), with your graphics card: it's
 `GT5\logs\play.err` until you start the game again, then `GT5\logs\play.prev.err` (each start keeps the
 previous log under that name; builds before v0.1.10 didn't, so there copy `play.err` before restarting). A

@@ -9,6 +9,19 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.21**
+
+🎬 **The opening movie is skipped, so it can't freeze the first start** ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10))
+- Found while testing on a slower PC: under heavy CPU load GT5's opening movie (the Earth from space)
+  could stop on one frame for good. The movie's decode jobs stopped coming, skipping did nothing, and
+  only a restart helped. That fits the "stuck at the start, restarting got past it" reports.
+- The port now tells the game the opening movie isn't there while it looks for it at startup, and GT5
+  goes straight on to its menus: about 40 s quicker to the menus in a test run. GT TV still plays it.
+- On by default (`PS3_SKIP_INTRO=1` in `play.bat`); the launcher's Game page has **Skip the opening
+  movie** to switch it off.
+- Speed on 4-6 core CPUs: the next step was measuring which SPU settings help; those runs were spoiled
+  by other programs using the CPU at the same time, so there's no result to report yet.
+
 🏷️ Released as **v0.1.20**
 
 🔁 **Updating to v0.1.20 re-lifts the game once**, so it takes longer than a normal update. The lift

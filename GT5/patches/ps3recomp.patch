@@ -17550,3 +17550,54 @@ diff --git a/tools/spu_program_pipeline.py b/tools/spu_program_pipeline.py
      report = dict(schema_version=1, generator='build_spu_workloads', complete=False,
                    inputs=[], programs=[], errors=[], provenance={})
      try:
+diff --git a/runtime/syscalls/sys_fs.c b/runtime/syscalls/sys_fs.c
+--- a/runtime/syscalls/sys_fs.c
++++ b/runtime/syscalls/sys_fs.c
+@@ -9,6 +9,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <errno.h>
++#include <time.h>
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ 
+@@ -93,9 +94,39 @@
+  * only weak reference to it: under COFF each one emits its own fallback. */
+ extern __attribute__((weak)) const char* cellGame_get_hdd_title_id(void);
+ 
++/* PS3_SKIP_INTRO=1 (play.bat's default): the first movie a title looks for in USRDIR/MOVIE -- GT5's
++ * opening, a .pam -- is reported missing while the title is checking for it at boot (the first lookup
++ * and the minute after), so it is skipped. GT5 checks for the file and goes straight on to its menus:
++ * a quicker start, and no opening movie that under heavy CPU load could stop on one frame for good
++ * (its decode tasks stopped coming; #10). Lookups after that minute, GT TV's, find it as usual. */
++static int skip_intro(char* path, size_t cap)
++{
++    static int on = -1;
++    static time_t boot, first;
++    static char intro[1024];
++    if (on < 0) { const char* e = getenv("PS3_SKIP_INTRO"); on = e && atoi(e) != 0; boot = time(NULL); }
++    if (!on) return 0;
++    const size_t n = strlen(path);
++    if (n < 5 || n + 9 > cap) return 0;
++    const char* ext = path + n - 4;
++    if (strcmp(ext, ".pam") != 0 && strcmp(ext, ".PAM") != 0) return 0;
++    if (!strstr(path, "/MOVIE/") && !strstr(path, "\\MOVIE\\")) return 0;
++    const time_t now = time(NULL);
++    if (!intro[0]) {
++        if (now - boot > 600) { on = 0; return 0; }   /* no movie at boot: nothing to skip */
++        snprintf(intro, sizeof intro, "%s", path);
++        first = now;
++        fprintf(stderr, "[fs] skipping the opening movie (PS3_SKIP_INTRO): %s\n", path);
++    }
++    if (now - first > 60 || strcmp(intro, path) != 0) return 0;
++    memcpy(path + n, ".skipped", 9);   /* a name that does not exist: ENOENT */
++    return 1;
++}
++
+ void ps3_vfs_ps3game_fallback(char* path, size_t cap)
+ {
+     struct stat st;
++    if (path && *path && skip_intro(path, cap)) return;
+     if (!path || !*path || stat(path, &st) == 0)
+         return;
+     /* An HDD game (a PSN title, CATEGORY "HG") boots from /dev_hdd0/game/<id>/,

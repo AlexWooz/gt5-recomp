@@ -131,6 +131,8 @@ namespace Gt5Launcher
             { "size.help", new[] { "The size the window opens at (window mode only).", "窗口打开时的大小（仅窗口模式）。" } },
             { "size.default", new[] { "Default", "默认" } },
             { "speed", new[] { "Speed", "速度" } },
+            { "intro", new[] { "Skip the opening movie", "跳过开场动画" } },
+            { "intro.help", new[] { "A quicker start. On a busy or slower PC the opening movie could stop on one frame at the first start. GT TV still has it.", "启动更快。在繁忙或较慢的电脑上，开场动画在首次启动时可能会卡在一帧。GT TV 中仍可观看。" } },
             { "speed.help", new[] { "For slower PCs. GT5 counts time in frames, so when the PC can't keep up the whole game slows down. 30 fps draws every other frame and leaves that CPU time to the game: about 10% faster on a 6-core test, more where drawing is what holds it back. Picked for your PC the first time the launcher starts.", "适合较慢的电脑。GT5 以帧计时，电脑跟不上时整个游戏都会变慢。30 fps 隔帧绘制，把省下的 CPU 时间留给游戏：在 6 核测试中快约 10%，在绘制是瓶颈的电脑上更多。启动器第一次运行时会按你的电脑自动选择。" } },
             { "speed.full", new[] { "Draw every frame (fast PCs)", "每帧都绘制（高性能电脑）" } },
             { "speed.30", new[] { "30 fps: draw every other frame (slower PCs, laptops)", "30 fps：隔帧绘制（较慢的电脑、笔记本）" } },
@@ -212,7 +214,7 @@ namespace Gt5Launcher
             new[] { "PS3_WHEEL_FFB", "" }, new[] { "PS3_WHEEL_FFB_INVERT", "" }, new[] { "PS3_LANG", "" },
             new[] { "GT5_LAUNCH_WINDOW", "windowed" }, new[] { "GT5_LAUNCHER_LANG", "" },
             new[] { "GT5_LAUNCHER_HIDE", "1" }, new[] { "GT5_LAUNCHER_AUTOCHECK", "1" },
-            new[] { "GT5_SPEED", "" },
+            new[] { "GT5_SPEED", "" }, new[] { "PS3_SKIP_INTRO", "1" },
         };
         // True when there was no settings.bat yet: the launcher's first start on this install.
         public bool Fresh;
@@ -603,6 +605,7 @@ namespace Gt5Launcher
                 new Choice("ru", "Русский"), new Choice("pl", "Polski"), new Choice("tr", "Türkçe"), new Choice("fi", "Suomi"),
                 new Choice("sv", "Svenska"), new Choice("da", "Dansk"), new Choice("no", "Norsk"), new Choice("ja", "日本語"),
                 new Choice("ko", "한국어"), new Choice("zh-t", "中文（繁體）"), new Choice("zh-s", "中文（简体）") }, y);
+            y = AddCheck(p, "intro", "intro.help", "PS3_SKIP_INTRO", "1", y + 4);
             y = AddHeading(p, T.Get("mods"), y + 8);
             var mods = LoadMods();
             if (mods.Count == 0) y = AddHelp(p, T.Get("mods.none"), y, 0);
