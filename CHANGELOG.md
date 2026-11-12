@@ -9,6 +9,16 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.18**
+
+📀 **The installer knows GT5 by its Chinese, Japanese and Korean names too**
+([discussion #18](https://github.com/MormonFTP-hub/gt5-recomp/discussions/18))
+- The Hong Kong release (BCAS20108, titled GT賽車5) was turned away with "not Gran Turismo 5", because
+  only titles with "Gran Turismo" in them got through. Now GT賽車5 / GT赛车5, グランツーリスモ5, 跑車浪漫旅5
+  and 그란 투리스모 5 do too (Prologue still doesn't), with the usual "not tried yet" note.
+- A copy with a game update built in (its game version 2.xx instead of 01.00) now says so straight away:
+  the port needs the disc's own 01.00 executable, and update executables don't work yet.
+
 🏷️ Released as **v0.1.17**
 
 ⌨️ **Alt+Enter no longer freezes the picture** ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10))

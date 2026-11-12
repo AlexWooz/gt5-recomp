@@ -31,6 +31,13 @@ $RepoUrl   = "https://github.com/MormonFTP-hub/gt5-recomp.git"
 $SonyPage  = "https://www.playstation.com/en-us/support/hardware/ps3/system-software/"
 $HelpPage  = "https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml"
 $Supported = @{ "BCES00569" = "Europe"; "BCUS98114" = "North America" }
+# Other GT5 releases, by their title in any language: "Gran Turismo 5" / "GT5", GT + "racing car" + 5
+# (Hong Kong and China, traditional and simplified), "Gran Turismo" in katakana + 5 (Japan), the
+# Taiwanese name + 5, the Korean name + 5. Never a Prologue (English, katakana, Chinese, Korean).
+# The \u escapes keep this file plain ASCII.
+$Gt5Title  = '(?i)((?<![a-z])gran\s*turismo|(?<![a-z])GT|\u30B0\u30E9\u30F3\u30C4\u30FC\u30EA\u30B9\u30E2|\u8DD1[\u8ECA\u8F66]\u6D6A\u6F2B\u65C5|\uADF8\uB780\s*\uD22C\uB9AC\uC2A4\uBAA8)[\s\u00AE\u2122:\-]*([\u8CFD\u8D5B][\u8ECA\u8F66])?[\s\u00AE\u2122]*[5\uFF15](?!\d)'
+$Prologue  = '(?i)prologue|\u30D7\u30ED\u30ED\u30FC\u30B0|\u5E8F\u7AE0|\uD504\uB864\uB85C\uADF8'
+$OtherIds  = @("BCAS20108", "BCAS20218")   # Asian releases players have tried to install
 $RegKey    = "HKCU:\Software\GT5-PC-installer"
 $NeedGB    = 25
 $Total     = 7
@@ -114,17 +121,24 @@ function Get-GameInfo([string]$pick) {
         $sfo = Read-Sfo (Join-Path $g "PARAM.SFO")
         $id = if ($sfo) { [string]$sfo["TITLE_ID"] } else { "" }
         $title = if ($sfo) { [string]$sfo["TITLE"] } else { "" }
+        $appVer = if ($sfo) { [string]$sfo["APP_VER"] } else { "" }
         $info.TitleId = $id
         if (-not (Test-Path -LiteralPath (Join-Path $g "USRDIR\EBOOT.BIN"))) {
             $info.Text = "Found $id, but PS3_GAME\USRDIR\EBOOT.BIN is missing: the dump isn't complete."
         } elseif ($Supported.ContainsKey($id)) {
             $info.Ok = $true; $info.Text = "Found: $title, $($Supported[$id]) ($id)"
-        } elseif ($title -match 'Gran Turismo' -and $title -notmatch 'Prologue') {
+        } elseif ($title -notmatch $Prologue -and ($title -match $Gt5Title -or $OtherIds -contains $id)) {
             # Other releases (Japan, Asia) haven't been tried: let them through, with a warning.
             $info.Ok = $true
             $info.Text = "Found: $title ($id). Not tried yet (Europe and North America work): it may work; please report how it goes."
         } else {
             $info.Text = "That's $title ($id), not Gran Turismo 5."
+        }
+        # A copy with a game update built in (APP_VER 02.xx, the disc says 01.00): its EBOOT.BIN is the
+        # update's, which the port can't run yet. Let it through, but say so.
+        $v = 0.0
+        if ($info.Ok -and [double]::TryParse($appVer, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$v) -and $v -ge 2) {
+            $info.Text = "Found: $title ($id), game version $appVer (an update is built in). The port needs the disc's own version 01.00; update versions (2.xx) don't work yet."
         }
     }
     if ($iso) { Dismount-Iso $iso }
