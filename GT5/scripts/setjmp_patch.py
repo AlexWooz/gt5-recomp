@@ -69,8 +69,32 @@ void func_%(lj)s(ppu_context* ctx)
 
 # The lifted call site looks like:
 #     ctx->lr = 0x00BC8A0C; func_00D00D74(ctx); DRAIN_TRAMPOLINE(ctx);
-CALL_RE = re.compile(
-    r"( *)ctx->lr = (0x[0-9A-Fa-f]+); func_" + SETJMP + r"\(ctx\); DRAIN_TRAMPOLINE\(ctx\);")
+# In the game updates (2.xx) the code needs more than one TOC, so the callers reach setjmp through a
+# linker stub that saves r2, switches it and branches on (std r2,40(r1); addis; addi; b setjmp):
+#     ctx->lr = 0x00CB11DC; func_00E43010(ctx); DRAIN_TRAMPOLINE(ctx);
+# A call to such a stub is a setjmp call too: the stub makes no frame, so setjmp still saves the
+# caller's r1 and return address.
+SETJMP_CALLEES = ["func_" + SETJMP]
+STUB_RE = re.compile(
+    r"^void (func_[0-9A-F]{8})\(ppu_context\* ctx\) \{\n"
+    r"(?:[^\n]*\n){0,6}?"
+    r"[^\n]*\{ g_trampoline_fn = \(void\(\*\)\(void\*\)\)func_" + SETJMP + r"; return; \}\n\}", re.M)
+
+
+def call_re():
+    return re.compile(r"( *)ctx->lr = (0x[0-9A-Fa-f]+); (" + "|".join(SETJMP_CALLEES) +
+                      r")\(ctx\); DRAIN_TRAMPOLINE\(ctx\);")
+
+
+def find_stubs(chunks):
+    """TOC stubs in front of setjmp: tiny functions saving r2 and tail-branching to it."""
+    stubs = []
+    for chunk in chunks:
+        text = chunk.read_text(encoding="utf-8", errors="replace")
+        for m in STUB_RE.finditer(text):
+            if "vm_write64(ctx->gpr[1] + 0x28, ctx->gpr[2]);" in m.group(0):
+                stubs.append(m.group(1))
+    return stubs
 
 
 def patch_call_sites(text):
@@ -80,13 +104,13 @@ def patch_call_sites(text):
     so this cannot live behind a helper -- it is expanded at each site.
     """
     def repl(m):
-        ind, lr = m.group(1), m.group(2)
+        ind, lr, callee = m.group(1), m.group(2), m.group(3)
         return (
             f"{ind}{{ gt5_jmp* _j = gt5_jmp_push((uint32_t)ctx->gpr[3]);\n"
             f"{ind}  if (setjmp(*gt5_jmp_host(_j)) == 0) {{\n"
-            f"{ind}      ctx->lr = {lr}; func_{SETJMP}(ctx); DRAIN_TRAMPOLINE(ctx);\n"
+            f"{ind}      ctx->lr = {lr}; {callee}(ctx); DRAIN_TRAMPOLINE(ctx);\n"
             f"{ind}  }} }}")
-    return CALL_RE.subn(repl, text)
+    return call_re().subn(repl, text)
 
 
 def guard_callers(text, names):
@@ -114,18 +138,24 @@ def guard_callers(text, names):
 
 def main():
     total_sites, total_guards, did_longjmp = 0, 0, False
-    for chunk in sorted(GEN.glob("ppu_recomp_*.cpp")):
+    chunks = sorted(GEN.glob("ppu_recomp_*.cpp"))
+    stubs = find_stubs(chunks)
+    if stubs:
+        print(f"  setjmp is also reached through TOC stubs: {', '.join(stubs)}")
+        SETJMP_CALLEES.extend(stubs)
+    for chunk in chunks:
         text = chunk.read_text(encoding="utf-8", errors="replace")
         original = text
 
         if "setjmp_patch.py" not in text:
             # find which functions contain a setjmp call before rewriting them
             owners = []
-            if f"func_{SETJMP}(ctx);" in text:
+            calls = [f"{c}(ctx);" for c in SETJMP_CALLEES]
+            if any(c in text for c in calls):
                 for m in re.finditer(r"^void (func_[0-9A-F]{8})\(ppu_context\* ctx\) \{", text, re.M):
                     end = text.find("\nvoid ", m.end())
                     body = text[m.start():end if end > 0 else len(text)]
-                    if f"func_{SETJMP}(ctx);" in body:
+                    if m.group(1) not in SETJMP_CALLEES and any(c in body for c in calls):
                         owners.append(m.group(1))
 
             text, sites = patch_call_sites(text)

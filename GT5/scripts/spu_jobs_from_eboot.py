@@ -5,10 +5,12 @@ GT5 hands most of its SPU work (physics, sound, graphics set-up) to SPURS as raw
 stored inside EBOOT.elf. Each one is found here by its hashes (no game data is stored in this
 script) and written to analysis/spu_miss under the name the runtime would have dumped it with,
 the fingerprint the runtime registers it by. lift_spu_jobs.py then lifts them to C, and the build
-compiles them in; a job that isn't found runs in the SPU interpreter instead, which is far slower.
+compiles them in. A job that isn't compiled in can't run: the runtime drops it, and whatever
+waits on it stalls (a black screen after the logos, for one in the game updates).
 
-The list is the European release (BCES00569, disc 01.00). Other releases are searched the same way
-and get every job whose bytes are the same; the summary says how many were found.
+The list is the European release (BCES00569, disc 01.00), which the other discs share, plus the
+versions the game updates (2.xx) changed. A copy needs one version of each job; the summary says
+how many it has.
 
     python scripts/spu_jobs_from_eboot.py [input/EBOOT.elf]
 """
@@ -40,13 +42,19 @@ JOBS = [
     ("FE031AF67ED048DE", 46928, "6872f373fae3b3578750a555b2dbf54d3ad2a5da", "65c1baa23a23c6a15eed04ae15137270fcc4d86c"),
 ]
 
+# Versions changed by game updates: (fingerprint, size, prefix SHA-1, whole SHA-1, the job above it replaces).
+UPDATED = [
+    ("C2A031BC164B4A45", 21952, "c7f26544a13fbe51db2e9f71e56d8c08ea06f0e3", "7ea77243d007ad477175d54ceae94d25297741dc", "650EE1A07AEBB151"),  # 2.01
+    ("E3FDDA10963A6130", 22544, "2a759a61e4fa122c5344b18265352c9ac4836e40", "fe409a4e6c7f4e72c21021aaadd47cd0d7a0eefb", "EB79FDFCD7112702"),  # 2.01
+]
+
 
 def main():
     eboot = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "input" / "EBOOT.elf"
     data = eboot.read_bytes()
     by_prefix = {}
-    for job in JOBS:
-        by_prefix.setdefault(job[2], []).append(job)
+    for job in JOBS + UPDATED:
+        by_prefix.setdefault(job[2], []).append(job[:4])
     found = {}
     sha1 = hashlib.sha1
     for off in range(0, len(data) - PREFIX, STEP):
@@ -59,10 +67,11 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     for fp, (off, blob) in sorted(found.items()):
         (OUT / f"spujob_{fp}_{len(blob)}.bin").write_bytes(blob)
-    missing = [fp for fp, *_ in JOBS if fp not in found]
-    print(f"SPU jobs found in {eboot.name}: {len(found)} of {len(JOBS)}")
+    have = set(found) | {old for fp, *_, old in UPDATED if fp in found}
+    missing = [fp for fp, *_ in JOBS if fp not in have]
+    print(f"SPU jobs found in {eboot.name}: {len(JOBS) - len(missing)} of {len(JOBS)}")
     for fp in missing:
-        print(f"  not found: {fp} (runs in the SPU interpreter)")
+        print(f"  not found: {fp} (or a version of it this script doesn't know yet; the game stalls when it needs it)")
 
 
 if __name__ == "__main__":

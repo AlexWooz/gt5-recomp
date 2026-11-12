@@ -9,6 +9,28 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.20**
+
+💻 **Laptops draw on their dedicated graphics card**
+- The renderer took whichever GPU Windows listed first. On a laptop with two GPUs that's usually the
+  built-in one the screen is wired to, so a GTX 1650 laptop could end up drawing on Intel graphics. It now
+  asks Windows for the high-performance GPU, and tells the NVIDIA and AMD drivers the same.
+- `GT5\logs\play.err` now says which GPU draws: a line starting with `[gpu]`. `PS3_GPU=low` picks the
+  power-saving one instead, `PS3_GPU=<n>` the n-th one Windows lists.
+- Checked on the tested rig (one GPU: it picks it and logs it); not yet on a laptop with two.
+
+🐢 **Speed setting in the launcher (Display)**
+- **30 fps** draws every other frame and leaves that CPU time to the game, which keeps its normal 60 steps
+  a second when it can (GT5 counts time in frames, so a frame limiter like RTSS slows the whole game down
+  instead: discussion #1). Measured on 6 slow cores of the tested rig: races at about 24 game frames a
+  second instead of 22, so a small gain there; more where drawing is what holds a PC back.
+- The first time the launcher starts it picks for your PC: 30 fps and 720p on CPUs with 8 threads or
+  fewer, and on laptops with 12 or fewer.
+- What that test also showed: on those 6 cores the CPU wasn't full and the drawing wasn't the limit; the
+  game's own threads handing work to each other set the pace. That's what's being looked at next.
+- `LD_FRAME_SKIP=1` (experimental, off) now keeps the passes the game doesn't redraw every frame, like
+  watch mode. In a full-speed test race it never needed to skip a frame.
+
 🏷️ Released as **v0.1.19**
 
 🧩 **Black screen from a game copy whose GT.VOL is in pieces, or missing** ([#12](https://github.com/MormonFTP-hub/gt5-recomp/issues/12))

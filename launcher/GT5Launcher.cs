@@ -123,13 +123,17 @@ namespace Gt5Launcher
             { "shape.help", new[] { "Auto uses your monitor's shape: on an ultrawide the game draws a wider view and keeps the HUD 16:9 in the middle.", "自动：使用显示器的比例。超宽屏上游戏会显示更宽的视野，界面保持 16:9 居中。" } },
             { "shape.auto", new[] { "Auto (your monitor)", "自动（跟随显示器）" } },
             { "window", new[] { "Window", "窗口" } },
-            { "window.help", new[] { "Borderless full screen covers the whole monitor. Don't use Alt+Enter: it freezes the picture.", "无边框全屏会铺满整个显示器。请勿使用 Alt+Enter：会导致画面冻结。" } },
+            { "window.help", new[] { "Borderless full screen covers the whole monitor (Alt+Enter is switched off in the game).", "无边框全屏会铺满整个显示器（游戏中已禁用 Alt+Enter）。" } },
             { "window.windowed", new[] { "Window", "窗口模式" } },
             { "window.max", new[] { "Maximized window", "最大化窗口" } },
             { "window.borderless", new[] { "Borderless full screen", "无边框全屏" } },
             { "size", new[] { "Window size", "窗口大小" } },
             { "size.help", new[] { "The size the window opens at (window mode only).", "窗口打开时的大小（仅窗口模式）。" } },
             { "size.default", new[] { "Default", "默认" } },
+            { "speed", new[] { "Speed", "速度" } },
+            { "speed.help", new[] { "For slower PCs. GT5 counts time in frames, so when the PC can't keep up the whole game slows down. 30 fps draws every other frame and leaves that CPU time to the game: about 10% faster on a 6-core test, more where drawing is what holds it back. Picked for your PC the first time the launcher starts.", "适合较慢的电脑。GT5 以帧计时，电脑跟不上时整个游戏都会变慢。30 fps 隔帧绘制，把省下的 CPU 时间留给游戏：在 6 核测试中快约 10%，在绘制是瓶颈的电脑上更多。启动器第一次运行时会按你的电脑自动选择。" } },
+            { "speed.full", new[] { "Draw every frame (fast PCs)", "每帧都绘制（高性能电脑）" } },
+            { "speed.30", new[] { "30 fps: draw every other frame (slower PCs, laptops)", "30 fps：隔帧绘制（较慢的电脑、笔记本）" } },
             { "watch", new[] { "Watch mode by itself", "自动观看模式" } },
             { "watch.help", new[] { "Comes on after 10 s without input (B-Spec, replays): draws every other frame and lowers the game's priority. F9 toggles it any time.", "10 秒无操作后自动开启（B-Spec、回放）：隔帧绘制并降低游戏优先级。随时可按 F9 切换。" } },
             { "spus", new[] { "Extra SPU threads", "额外 SPU 线程" } },
@@ -208,7 +212,10 @@ namespace Gt5Launcher
             new[] { "PS3_WHEEL_FFB", "" }, new[] { "PS3_WHEEL_FFB_INVERT", "" }, new[] { "PS3_LANG", "" },
             new[] { "GT5_LAUNCH_WINDOW", "windowed" }, new[] { "GT5_LAUNCHER_LANG", "" },
             new[] { "GT5_LAUNCHER_HIDE", "1" }, new[] { "GT5_LAUNCHER_AUTOCHECK", "1" },
+            new[] { "GT5_SPEED", "" },
         };
+        // True when there was no settings.bat yet: the launcher's first start on this install.
+        public bool Fresh;
         public Dictionary<string, string> V = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         readonly string path;
         static readonly Regex SetLine = new Regex("^\\s*set\\s+\"([A-Za-z0-9_]+)=(.*)\"\\s*$", RegexOptions.IgnoreCase);
@@ -216,6 +223,7 @@ namespace Gt5Launcher
         public Settings(string path)
         {
             this.path = path;
+            Fresh = !File.Exists(path);
             foreach (var d in Defaults) V[d[0]] = d[1];
             try
             {
@@ -239,6 +247,10 @@ namespace Gt5Launcher
             keys.Sort(StringComparer.OrdinalIgnoreCase);
             foreach (var k in keys)
                 sb.AppendLine(string.Format("set \"{0}={1}\"", k, V[k].Replace("\"", "")));
+            // Speed (GT5_SPEED) turns into the renderer's own switches, after the keys so it wins.
+            // GT5 counts time in frames: these draw fewer frames instead of letting the game slow down.
+            string speed = Get("GT5_SPEED");
+            if (speed == "30") { sb.AppendLine("set \"LD_WATCH=2\""); sb.AppendLine("set \"LD_WATCH_PRIORITY=0\""); }
             File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
         }
     }
@@ -317,10 +329,21 @@ namespace Gt5Launcher
             }
         }
 
+        // First start on this install: a first guess at Speed and resolution from the CPU, which sets the
+        // pace in this port (the graphics work runs on one thread). Everything stays changeable.
+        void AutoPick()
+        {
+            int n = Environment.ProcessorCount;
+            var bs = SystemInformation.PowerStatus.BatteryChargeStatus;
+            bool laptop = (bs & BatteryChargeStatus.NoSystemBattery) == 0 && bs != BatteryChargeStatus.Unknown;
+            if (n <= 8 || (laptop && n <= 12)) { S.Set("GT5_SPEED", "30"); S.Set("PS3_VIDEO_MODE", "720"); }
+        }
+
         public LauncherForm(bool screenshots)
         {
             shots = screenshots;
             S = new Settings(P.Settings);
+            if (S.Fresh) AutoPick();
             T.Zh = S.Get("GT5_LAUNCHER_LANG") == "zh";
             Text = "Gran Turismo 5 — PC";
             BackColor = Look.Bg; ForeColor = Look.Text;
@@ -504,12 +527,12 @@ namespace Gt5Launcher
             var summary = new Label { ForeColor = Look.Text, AutoSize = true, Location = new Point(0, y), MaximumSize = new Size(700, 0), Font = Look.F(10.5f, FontStyle.Regular) };
             p.Controls.Add(summary);
             // Below the settings: what would stop the game (not built, GT.VOL missing or in pieces).
-            var warn = new Label { ForeColor = Color.FromArgb(240, 180, 70), AutoSize = true, Location = new Point(0, y + 112), MaximumSize = new Size(700, 0), Font = Look.F(10f, FontStyle.Bold) };
+            var warn = new Label { ForeColor = Color.FromArgb(240, 180, 70), AutoSize = true, Location = new Point(0, y + 134), MaximumSize = new Size(700, 0), Font = Look.F(10f, FontStyle.Bold) };
             p.Controls.Add(warn);
             Action refresh = delegate { summary.Text = Summary(); warn.Text = Warning(); };
             p.VisibleChanged += delegate { if (p.Visible) refresh(); };
             refresh();
-            y += 112 + 64;
+            y += 134 + 64;
             y = AddHelp(p, T.Get("keys"), y, 0);
             y = AddHelp(p, T.Get("help.about"), y + 6, 0);
             return p;
@@ -525,6 +548,8 @@ namespace Gt5Launcher
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("res"), res));
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("shape"), shape));
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("window"), win));
+            string sp = S.Get("GT5_SPEED");
+            sb.AppendLine(string.Format("{0}:  {1}", T.Get("speed"), T.Get(sp == "30" ? "speed.30" : "speed.full")));
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("wheel"), wheel));
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("lang"), S.Get("PS3_LANG") == "" ? T.Get("lang.system") : S.Get("PS3_LANG")));
             return sb.ToString();
@@ -542,6 +567,7 @@ namespace Gt5Launcher
             var p = NewPage(); int y = 0;
             y = AddHeading(p, T.Get("nav.display"), y);
             y = AddCombo(p, "res", "res.help", "PS3_VIDEO_MODE", new[] { new Choice("1080", T.Get("res.1080")), new Choice("720", T.Get("res.720")) }, y);
+            y = AddCombo(p, "speed", "speed.help", "GT5_SPEED", new[] { new Choice("", T.Get("speed.full")), new Choice("30", T.Get("speed.30")) }, y);
             y = AddCombo(p, "shape", "shape.help", "PS3_ASPECT", new[] { new Choice("auto", T.Get("shape.auto")), new Choice("16:9", "16:9"), new Choice("21:9", "21:9"), new Choice("32:9", "32:9") }, y);
             y = AddCombo(p, "window", "window.help", "GT5_LAUNCH_WINDOW", new[] { new Choice("windowed", T.Get("window.windowed")), new Choice("max", T.Get("window.max")), new Choice("borderless", T.Get("window.borderless")) }, y);
             y = AddCombo(p, "size", "size.help", "PS3_WINDOW_SIZE", new[] { new Choice("", T.Get("size.default")), new Choice("1280x720", "1280 x 720"), new Choice("1600x900", "1600 x 900"), new Choice("1920x1080", "1920 x 1080"), new Choice("2560x1440", "2560 x 1440"), new Choice("2560x1080", "2560 x 1080 (21:9)"), new Choice("3440x1440", "3440 x 1440 (21:9)"), new Choice("3840x2160", "3840 x 2160") }, y);

@@ -45,6 +45,8 @@ performance matters more than the graphics card.
 - Watch mode for B-Spec and replays (F9): half the drawing work, full race speed
 - The US release (BCUS98114) too: players have raced on it (an i5-1135G7 laptop with Iris Xe graphics,
   and a GTX 1650 laptop), with frame rates to match those machines. Thanks for the reports!
+- The Hong Kong / Asian release (BCAS20108), new: a player ran it on v0.1.18, with the launcher and the
+  game's own text in Chinese ([discussion #18](https://github.com/MormonFTP-hub/gt5-recomp/discussions/18))
 - One-click install: `GT5-Installer.bat` (README, Install)
 - Ultrawide monitors (21:9, 32:9), new: the game draws a wider view itself and keeps the HUD and
   menus 16:9 in the middle (checked in 2560×1080, 3440×1440 and 3840×1080 windows, not yet on a real
@@ -65,8 +67,10 @@ performance matters more than the graphics card.
   graphics driver resetting or refusing a frame. **If it still happens to you:** attach that run's log to #10: `GT5\logs\play.err`, or
   `GT5\logs\play.prev.err` once you've started the game again (since v0.1.10 each start keeps the
   previous log); a line starting with `[d3d-fail]` says what failed.
-- More speed in busy race scenes (the graphics thread is the limit), and on laptops and integrated
-  graphics
+- More speed on 4-6 core CPUs and laptops. Measured on 6 slow cores of the tested rig: races at about
+  22 game frames a second, and the CPU wasn't even full, so it's the game's own threads handing work to
+  each other, not the drawing, that sets the pace there (drawing half the frames gave about 10%). That's
+  what's being looked at next. Laptops now draw on their dedicated graphics card (v0.1.20).
 - Shorter shader-compile stutter the first time a scene is seen
 
 ## ❌ Not supported yet
@@ -90,7 +94,9 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **12 Nov 2026:** wrong track textures fixed (banners across the road at Chamonix, scrambled Eiger):
+- **12 Nov 2026:** laptops draw on their dedicated graphics card, and the launcher has a **Speed**
+  setting (30 fps) picked for your PC (v0.1.20); a black screen from a split or missing `GT.VOL` is
+  fixed or explained (v0.1.19); the Hong Kong release runs; wrong track textures fixed (banners across the road at Chamonix, scrambled Eiger):
   the game's graphics-memory copies now happen (v0.1.16); Alt+Enter no longer freezes the picture
   (v0.1.17); the launcher: every setting in one window (resolution, borderless full screen, wheel,
   language, mods), Play, one-click updates and a log saver, in English or Chinese; double-click

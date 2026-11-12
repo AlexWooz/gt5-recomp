@@ -84,8 +84,9 @@ Rather do it by hand? See [Setup](#setup).
 **Gran Turismo 5 (PC)** on your desktop (or `GT5Launcher.exe` in your `gt5-recomp` folder) opens the
 launcher: every setting in one window, then **Play**. No more editing `play.bat`.
 
-- **Display:** 1080p or 720p, screen shape (ultrawide), **borderless full screen**, maximized or a
-  window size, watch mode, SPU threads.
+- **Display:** 1080p or 720p, **Speed** (30 fps for slower PCs: draws every other frame and leaves that
+  CPU time to the game; picked for your PC the first time), screen shape (ultrawide), **borderless full
+  screen**, maximized or a window size, watch mode, SPU threads.
 - **Controls:** steering wheel on/off, wheel rotation, force feedback strength and direction, pad in the
   background, mouse clipping.
 - **Game:** the game's language (as far as your disc has it), your mods from `GT5\mods`, the launcher's
@@ -249,7 +250,8 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Settings without editing files? | ✅ New: the [launcher](#launcher) |
 | Full screen? | ✅ New: borderless full screen in the launcher (Alt+Enter is switched off since v0.1.17: it used to freeze the picture) |
 | Higher than 1080p (4K)? | ⚠️ The game's top mode is its 1080p one (races drawn at 1728x972), scaled up to your window; drawing above that isn't there yet |
-| Japanese or Asian release (BCJS, BCAS)? | ⚠️ Untried; the installer lets them through now. Please report how it goes |
+| Japanese or Asian release (BCJS, BCAS)? | ✅ Hong Kong / Asia (BCAS20108) runs, reported by a player; Japanese untried, please report |
+| Slow PC or laptop? | 🛠️ Laptops now use their dedicated graphics card; the launcher's **Speed: 30 fps** draws every other frame (a little faster on slow CPUs). Bigger speed-ups are being worked on |
 | Linux, Android? | ❌ Windows only for now (an Android build is being worked on) |
 | Online? | ❌ No |
 | Is it legal? | ✅ No game files here: you build it from your own disc |
