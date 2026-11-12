@@ -57,6 +57,11 @@ performance matters more than the graphics card.
 
 ## 🔧 Being worked on
 
+- **Linux, new and early** (a native build: Vulkan, SDL2, `setup.sh`; README, Linux). Its first test
+  ran on Ubuntu 24.04 with no graphics card (software Vulkan): menus, GT Mode and Arcade up to the
+  pre-race screen work, the race itself stayed black there. Not yet tried on a real Linux PC with a
+  graphics card, a Steam Deck, or under Proton/Wine:
+  [tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml).
 - Steering wheels with force feedback: new in v0.1.2 and **not yet tried on a real wheel**. Your PC
   wheel appears to the game as a Logitech G27; without a wheel it was checked that the game accepts
   it, a race steers from it, and the game's force-feedback commands arrive. Wheel owners:
@@ -102,7 +107,7 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **12 Nov 2026:** the opening movie is skipped, so it can't freeze the first start (v0.1.21);
+- **12 Nov 2026:** a native Linux build, new and early (`setup.sh`, `GT5/play.sh`); the opening movie is skipped, so it can't freeze the first start (v0.1.21);
   laptops draw on their dedicated graphics card, and the launcher has a **Speed**
   setting (30 fps, for a graphics card at its limit) (v0.1.20); a black screen from a split or missing `GT.VOL` is
   fixed or explained (v0.1.19); the Hong Kong release runs; wrong track textures fixed (banners across the road at Chamonix, scrambled Eiger):

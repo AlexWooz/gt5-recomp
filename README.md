@@ -31,7 +31,8 @@
 
 An unofficial PC port of **Gran Turismo 5** (PS3) made by static recompilation: the game's
 PowerPC and SPU code is translated into C++ that is compiled for Windows x64, and the PS3's graphics,
-sound, input and system calls are reimplemented on Windows (Direct3D 12 for the RSX).
+sound, input and system calls are reimplemented on Windows (Direct3D 12 for the RSX). A native
+[Linux build](#linux) (Vulkan) is new and early.
 
 It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows from the
 [GT5 Prologue port](https://github.com/sp00nznet/GT5P), both by Ned Heller (sp00nznet).
@@ -53,6 +54,7 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
 | [The launcher](#launcher) | [Try it, tell me how it went](#feedback) | [Which copy of GT5](#which-copy-of-gt5) | [Fork it, mod it](#modding) |
 | [Updating](#updating) | [FAQ](#faq) | [Setup](#setup) | [Credits](#credits) |
 | [Controls](#controls) | | [Switches](#switches) | [License](#license) |
+| [Linux](#linux) | | | |
 
 **More pages:** [Version history](VERSIONS.md) · [Changelog](CHANGELOG.md) · [Status board](STATUS.md) · [Modding guide](MODDING.md) · [Contributing](CONTRIBUTING.md) · [License](LICENSE)
 
@@ -75,7 +77,7 @@ the game itself runs natively as `gt5.exe`, not in an emulator), builds the game
 first time) and puts **Gran Turismo 5 (PC)** on your desktop, which opens the [launcher](#launcher).
 Nothing from the game is ever uploaded or shared.
 
-Rather do it by hand? See [Setup](#setup).
+Rather do it by hand? See [Setup](#setup). On Linux? See [Linux](#linux).
 
 <a id="launcher"></a>
 
@@ -256,7 +258,9 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Higher than 1080p (4K)? | ⚠️ The game's top mode is its 1080p one (races drawn at 1728x972), scaled up to your window; drawing above that isn't there yet |
 | Japanese or Asian release (BCJS, BCAS)? | ✅ Hong Kong / Asia (BCAS20108) runs, reported by a player, and its disc 01.00 and update 2.01 race in tests too; Japanese untried, please report |
 | Slow PC or laptop? | 🛠️ Laptops now use their dedicated graphics card. On most PCs the CPU sets the pace (the game's own threads), so the launcher's **Speed: 30 fps** rarely helps: it's for a graphics card at its limit. Speed-ups for 4-6 core CPUs are being worked on |
-| Linux, Android? | ❌ Windows only for now (an Android build is being worked on) |
+| Linux? | 🧪 New and early: a [native Linux build](#linux). First test (no graphics card) reached the race start; races on a real GPU untested |
+| Steam Deck, Proton, Wine? | ❓ Not tried yet: the Linux build should suit the Deck. Reports welcome |
+| Android? | 🛠️ Being worked on |
 | Online? | ❌ No |
 | Is it legal? | ✅ No game files here: you build it from your own disc |
 | Ready-made download? | ❌ No, but [GT5-Installer.bat](#install) builds it for you |
@@ -420,6 +424,101 @@ snow): some problems show on one track and not another.
 **A: You need your own copy of GT5, and nothing from the game is in this repository.** It holds only
 code written for the port. You build the game yourself from your own disc, and builds must never be
 shared (see below).
+
+<a id="linux"></a>
+
+## 🐧 Linux
+
+**New and early: a native Linux build** (x86-64). The same recompiled game code, built with Clang,
+drawing with Vulkan (the renderer of the Android build) instead of Direct3D 12, with SDL2 for the
+window, keyboard, controllers and sound. It isn't Wine or Proton: `gt5` is a Linux program.
+
+**How far it's been tested (12 Nov 2026):** on Ubuntu 24.04 with no graphics card at all (Mesa's
+software Vulkan driver, on a virtual display), so speed and the picture on a real GPU are untested.
+`setup.sh` ran the whole setup from a fresh clone: tools, ps3recomp, the game code (the same code the
+Windows setup generates, checked file by file) and the build. The game boots, does the first-start
+screens and saves them, and reaches the top menu with its 3D scene, GT Mode (My Home), and Arcade
+through track select, car select (the 3D car), colour and the pre-race screen with the 3D track.
+**The race itself stayed black** in that test: not yet known whether that's the software driver or
+the renderer. If you have a Linux PC with a graphics card, please
+[tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml)
+(attach `GT5/logs/play.err`).
+
+### What you need
+
+- A 64-bit x86 PC whose CPU has AVX2 (Intel from 2013 / Haswell, AMD Ryzen; the same as the Windows
+  build), 16 GB of memory for the first build, and about 30 GB free.
+- A Vulkan graphics driver: Mesa (AMD, Intel) or NVIDIA's own.
+- A distribution with FFmpeg 6.1 or newer: Ubuntu 24.04, Linux Mint 22, Debian 13, Fedora 40, Arch,
+  or newer.
+- The same game files as on Windows (see [Which copy of GT5](#which-copy-of-gt5)): your disc's
+  `PS3_GAME` folder, its executable decrypted to `EBOOT.elf`, and a `dev_flash` folder.
+  [RPCS3](https://rpcs3.net) for Linux (the AppImage) does both jobs, as on Windows:
+  *Utilities > Decrypt PS3 Binaries* for `EBOOT.BIN`, and *File > Install Firmware* with Sony's
+  `PS3UPDAT.PUP`, after which `dev_flash` is in `~/.config/rpcs3/dev_flash`.
+
+### Set it up
+
+```
+git clone https://github.com/MormonFTP-hub/gt5-recomp
+cd gt5-recomp
+bash setup.sh --install-deps
+```
+
+`--install-deps` installs the packages the build needs with your package manager (apt, dnf, pacman
+or zypper; it asks for your password). Without it, `setup.sh` lists what's missing and the one
+command that installs it. Then copy your files in, as on Windows:
+
+| Put this | here |
+|---|---|
+| your disc's `PS3_GAME` folder | `GT5/vfs/PS3_GAME` |
+| the decrypted executable | `GT5/input/EBOOT.elf` |
+| `dev_flash` | `GT5/dev_flash` |
+
+and run `bash setup.sh` again. It checks everything, says exactly what's still missing, and once all
+is in place it generates the game code from your `EBOOT.elf` and builds `GT5/build-linux/gt5` (20 to
+60 minutes the first time).
+
+### Play
+
+```
+bash GT5/play.sh
+```
+
+Logs go to `GT5/logs` (`play.err` is the one to attach to a report). Settings: the switches in
+`GT5/play.sh` (full screen, resolution, watch mode), or your own `export NAME=value` lines in
+`GT5/settings.sh`, which win and survive updates.
+
+Controls: any controller SDL2 knows (DualSense, DualShock 4, Xbox, 8BitDo, the Steam Deck's own
+controls through Steam Input), or the keyboard as on Windows: Z = Cross, X = Circle, A = Square,
+S = Triangle, Q/W = L1/R1, 1/2 = L2/R2, arrows = D-pad, Enter = Start, Tab = Select, Esc = quit.
+
+### Updating
+
+```
+git pull
+bash setup.sh
+```
+
+It re-patches ps3recomp, re-generates the game code only when the new version needs it, and rebuilds
+only what changed. Your saves (`GT5/gamedata`, `GT5/hdd0`) and game files stay.
+
+### Not there yet on Linux
+
+- No launcher and no installer: setup is `setup.sh`, settings are in `play.sh` / `settings.sh`.
+- Steering wheels and force feedback (Windows only so far).
+- Ultrawide (21:9, 32:9): the Linux renderer draws 16:9.
+- The Vulkan renderer is younger than the Windows one; picture bugs the Windows build fixed may
+  still show here. Please report them with a screenshot.
+- Races: black in the one test so far (see above).
+- Movies and the on-screen keyboard (naming a save, Course Maker) are untried on Linux.
+
+### Steam Deck, Proton and Wine
+
+Not tried yet: neither this Linux build on a Steam Deck nor the Windows build under Proton or Wine.
+The Deck's CPU has AVX2 and its graphics do Vulkan, so the Linux build should be able to run there
+(build it in desktop mode, for example inside a Distrobox container, since SteamOS keeps its system
+read-only). Reports welcome.
 
 <a id="requirements"></a>
 

@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.24](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.24) | 12 Nov 2026 | Linux: a native build (setup.sh, GT5/play.sh), new and early |
 | [v0.1.23](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.23) | 12 Nov 2026 | Speed: 30 fps no longer picked by itself, launcher bug that kept it on fixed, title shows game frames; 1 ms timer kept when hidden; installer: Asian release and 2.01; Discord server |
 | [v0.1.22](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.22) | 12 Nov 2026 | Game updates (2.xx) run: SPURS workload flag, 2.01's SPU jobs; Hong Kong/Asian release BCAS20108 tested (01.00 and 2.01) (#18) |
 | [v0.1.21](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.21) | 12 Nov 2026 | Skip the opening movie at startup (PS3_SKIP_INTRO, on by default): under heavy CPU load it could freeze the first start (#10) |

@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 250d8d2c..714be928 100644
+index 250d8d2c..ff17ead6 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -25,8 +25,9 @@ option(PS3RECOMP_BUILD_TESTS "Build unit tests" OFF)
@@ -14,6 +14,36 @@ index 250d8d2c..714be928 100644
      "libs/system/*.c"
      "libs/filesystem/*.c"
      "libs/input/*.c"
+@@ -47,11 +48,13 @@ list(FILTER HLE_SOURCES EXCLUDE REGEX "/tests/")
+ # The Vulkan RSX backend is opt-in while it grows (stage V0: clear + present).
+ # It loads libvulkan at run time, so building needs only the Vulkan headers --
+ # no target-architecture libvulkan, which keeps cross-compiling simple.
+-option(PS3RECOMP_RSX_VULKAN "Build the Vulkan RSX backend (Linux)" OFF)
++option(PS3RECOMP_RSX_VULKAN "Build the Vulkan RSX backend (Linux, Android; Windows for testing)" OFF)
+ list(FILTER HLE_SOURCES EXCLUDE REGEX "rsx_vulkan_backend\\.c$")
+ if(PS3RECOMP_RSX_VULKAN)
+-    if(WIN32 OR APPLE)
+-        message(FATAL_ERROR "PS3RECOMP_RSX_VULKAN is Linux-only for now")
++    # Windows: a test build of the Android renderer (GT5/android/pc_vulkan.ps1),
++    # never the default; it needs SDL2 and glslang from CMAKE_PREFIX_PATH.
++    if(APPLE)
++        message(FATAL_ERROR "PS3RECOMP_RSX_VULKAN is not for Apple (use Metal)")
+     endif()
+     find_path(PS3RECOMP_VULKAN_INCLUDE_DIR vulkan/vulkan.h)
+     if(NOT PS3RECOMP_VULKAN_INCLUDE_DIR)
+@@ -180,6 +183,12 @@ if(PS3RECOMP_RSX_VULKAN)
+     # PUBLIC: ps3recomp_host selects its backend on this definition.
+     target_compile_definitions(ps3recomp_runtime PUBLIC PS3RECOMP_RSX_VULKAN)
+     target_link_libraries(ps3recomp_runtime PUBLIC ${CMAKE_DL_LIBS})
++    if(WIN32)
++        # The backend's window, mutexes and loader come from SDL2 there.
++        find_package(SDL2 CONFIG REQUIRED)
++        target_link_libraries(ps3recomp_runtime PUBLIC SDL2::SDL2)
++        find_package(glslang CONFIG QUIET)
++    endif()
+     message(STATUS "  Vulkan:       RSX backend enabled (rsx_vulkan_backend.c, headers in ${PS3RECOMP_VULKAN_INCLUDE_DIR})")
+ endif()
+ 
 diff --git a/include/ps3emu/thread_name.h b/include/ps3emu/thread_name.h
 index da9c5928..692debc8 100644
 --- a/include/ps3emu/thread_name.h
@@ -68,7 +98,7 @@ index da9c5928..692debc8 100644
 +
  #endif /* PS3EMU_THREAD_NAME_H */
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index 02b751b2..b23628d0 100644
+index 02b751b2..e30f1ffd 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
 @@ -14,6 +14,7 @@
@@ -96,12 +126,13 @@ index 02b751b2..b23628d0 100644
  
          /* Read one block at the current read_index */
          u32 block_idx = (u32)(port->read_index % nblock);
-@@ -492,6 +496,35 @@ static void audio_mix_one_block(void)
+@@ -492,6 +496,37 @@ static void audio_mix_one_block(void)
                          p, (unsigned long long)port->read_index, block_idx, map);
              } } }
  
 +        /* AUDIO_RINGLOG=<file>: one line per block read: time in us, read counter, slot,
 +         * and how many blocks from this one on already hold data (the writer's lead). */
++#ifdef _WIN32   /* a Windows debugging aid (it reads the performance counter) */
 +        { static FILE* _rl = (FILE*)-1;
 +          if (_rl == (FILE*)-1) { const char* e = getenv("AUDIO_RINGLOG"); _rl = e ? fopen(e, "w") : NULL; }
 +          if (_rl) {
@@ -128,11 +159,12 @@ index 02b751b2..b23628d0 100644
 +                      (unsigned long long)port->read_index, block_idx, lead, map, 10);
 +              if ((port->read_index & 255) == 0) fflush(_rl);
 +          } }
++#endif
 +
          for (u32 s = 0; s < CELL_AUDIO_BLOCK_SAMPLES; s++) {
              float left, right;
              if (nch >= 2) {
-@@ -527,16 +560,30 @@ static void audio_mix_one_block(void)
+@@ -527,16 +562,30 @@ static void audio_mix_one_block(void)
           * ring slot to the guest. SurMixer multiplies this value by the block
           * size directly; an unbounded counter walks beyond the audio buffer. */
          port->read_index++;
@@ -168,7 +200,7 @@ index 02b751b2..b23628d0 100644
      }
  }
  
-@@ -565,6 +612,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -565,6 +614,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
  {
      (void)arg;
      ps3_thread_name("audio mix");
@@ -176,7 +208,7 @@ index 02b751b2..b23628d0 100644
      printf("[cellAudio] Mixing thread started\n");
  
      /* The device deadline is every few ms and the guest threads keep every
-@@ -587,10 +635,33 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -587,10 +637,33 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
       * With no device, pace on the performance counter instead. */
      LARGE_INTEGER qf, q0; QueryPerformanceFrequency(&qf); QueryPerformanceCounter(&q0);
      unsigned long long blocks = 0;
@@ -210,7 +242,7 @@ index 02b751b2..b23628d0 100644
          /* Device queue under half a block: it is about to play silence (an
           * audible click/stutter). AUDIO_RATE reports how often. */
          if (room >= 0 && blocks > 64 &&
-@@ -889,11 +960,39 @@ s32 cellAudioPortClose(u32 portNum)
+@@ -889,11 +962,39 @@ s32 cellAudioPortClose(u32 portNum)
  
      s_ports[portNum].in_use  = 0;
      s_ports[portNum].running = 0;
@@ -5752,7 +5784,7 @@ index 00000000..f6988848
 +
 +#endif
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index afdd93de..1f8402d1 100644
+index afdd93de..5a0aaf2e 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -69,6 +69,7 @@ static double pad_clock(unsigned long long t0_ms)
@@ -6104,7 +6136,71 @@ index afdd93de..1f8402d1 100644
  /* XInputGetState on a slot with nothing plugged in costs about 140 us (2 us on
   * a connected one), and the backend is polled at least once a frame: three
   * empty slots beside one pad were 0.6 ms of every frame on God of War HD's
-@@ -693,6 +988,12 @@ static unsigned long long pad_now_ms(void)
+@@ -627,6 +922,63 @@ static void pad_poll_sdl2(void)
+     }
+ }
+ 
++#if !defined(__ANDROID__)
++/* The keyboard as port 0 while no controller is connected: the Windows build's
++ * pad_poll_keyboard, through SDL (Linux). Same keys: arrows = d-pad,
++ * Z/X/A/S = cross/circle/square/triangle, Q/W = L1/R1, 1/2 = L2/R2,
++ * Enter = START, Tab = SELECT. Only while one of this process's windows has the
++ * keyboard focus. SDL updates the key array when the renderer pumps events.
++ * PAD_NO_KEYBOARD=1 turns it off. */
++static void pad_poll_keyboard_sdl(void)
++{
++    static int off = -1;
++    if (off < 0) off = getenv("PAD_NO_KEYBOARD") ? 1 : 0;
++    if (off || !SDL_WasInit(SDL_INIT_VIDEO)) return;
++
++    PadHostState* hs = &s_host_state[0];
++    pad_host_release(hs);   /* nothing held over from a pad that just went away, or a lost focus */
++    hs->connected = 1;
++    if (g_pad_intercept || !SDL_GetKeyboardFocus()) return;
++
++    static const struct { SDL_Scancode sc; u16 btn; } map[] = {
++        { SDL_SCANCODE_UP,     CELL_PAD_CTRL_UP },     { SDL_SCANCODE_DOWN,  CELL_PAD_CTRL_DOWN },
++        { SDL_SCANCODE_LEFT,   CELL_PAD_CTRL_LEFT },   { SDL_SCANCODE_RIGHT, CELL_PAD_CTRL_RIGHT },
++        { SDL_SCANCODE_Z,      CELL_PAD_CTRL_CROSS },  { SDL_SCANCODE_X,     CELL_PAD_CTRL_CIRCLE },
++        { SDL_SCANCODE_A,      CELL_PAD_CTRL_SQUARE }, { SDL_SCANCODE_S,     CELL_PAD_CTRL_TRIANGLE },
++        { SDL_SCANCODE_Q,      CELL_PAD_CTRL_L1 },     { SDL_SCANCODE_W,     CELL_PAD_CTRL_R1 },
++        { SDL_SCANCODE_1,      CELL_PAD_CTRL_L2 },     { SDL_SCANCODE_2,     CELL_PAD_CTRL_R2 },
++        { SDL_SCANCODE_RETURN, CELL_PAD_CTRL_START },  { SDL_SCANCODE_TAB,   CELL_PAD_CTRL_SELECT },
++    };
++    int nkeys = 0;
++    const Uint8* keys = SDL_GetKeyboardState(&nkeys);
++    if (!keys) return;
++    u16 btns = 0;
++    for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++)
++        if ((int)map[i].sc < nkeys && keys[map[i].sc]) btns |= map[i].btn;
++
++    hs->buttons   = btns;
++    hs->analog_lx = (u8)((btns & CELL_PAD_CTRL_LEFT) ? 0 : (btns & CELL_PAD_CTRL_RIGHT) ? 255 : 128);
++    hs->analog_ly = (u8)((btns & CELL_PAD_CTRL_UP) ? 0 : (btns & CELL_PAD_CTRL_DOWN) ? 255 : 128);
++    hs->trigger_l2 = (u8)((btns & CELL_PAD_CTRL_L2) ? 255 : 0);
++    hs->trigger_r2 = (u8)((btns & CELL_PAD_CTRL_R2) ? 255 : 0);
++    hs->press_up       = (btns & CELL_PAD_CTRL_UP)       ? 255 : 0;
++    hs->press_down     = (btns & CELL_PAD_CTRL_DOWN)     ? 255 : 0;
++    hs->press_left     = (btns & CELL_PAD_CTRL_LEFT)     ? 255 : 0;
++    hs->press_right    = (btns & CELL_PAD_CTRL_RIGHT)    ? 255 : 0;
++    hs->press_triangle = (btns & CELL_PAD_CTRL_TRIANGLE) ? 255 : 0;
++    hs->press_circle   = (btns & CELL_PAD_CTRL_CIRCLE)   ? 255 : 0;
++    hs->press_cross    = (btns & CELL_PAD_CTRL_CROSS)    ? 255 : 0;
++    hs->press_square   = (btns & CELL_PAD_CTRL_SQUARE)   ? 255 : 0;
++    hs->press_l1       = (btns & CELL_PAD_CTRL_L1)       ? 255 : 0;
++    hs->press_r1       = (btns & CELL_PAD_CTRL_R1)       ? 255 : 0;
++
++    { static int said = 0;
++      if (!said && btns) { said = 1;
++          printf("[cellPad] keyboard active on port 0 (no controller connected)\n");
++          fflush(stdout); } }
++}
++#endif
++
+ static void pad_init_backend(void)
+ {
+     if (!s_sdl_inited) {
+@@ -693,6 +1045,12 @@ static unsigned long long pad_now_ms(void)
  #endif
  }
  
@@ -6117,12 +6213,14 @@ index afdd93de..1f8402d1 100644
  static void pad_poll_backend(void)
  {
      static unsigned long long s_last_ms = 0;
-@@ -711,12 +1012,32 @@ static void pad_poll_backend(void)
+@@ -711,12 +1069,34 @@ static void pad_poll_backend(void)
      pad_poll_sdl2();
  #endif
  #ifdef _WIN32
 -    if (!s_host_state[0].connected) pad_poll_keyboard();
 +    if (!s_host_state[0].connected) { pad_poll_keyboard(); pad_poll_dualsense(); }
++#elif PAD_BACKEND_SDL2 && !defined(__ANDROID__)
++    if (!s_host_state[0].connected) pad_poll_keyboard_sdl();
  #endif
      pad_track_assign();
 +    /* Someone is playing: a button, a trigger or a stick off centre on any port. */
@@ -6151,7 +6249,7 @@ index afdd93de..1f8402d1 100644
  /* ---------------------------------------------------------------------------
   * API implementations
   * -----------------------------------------------------------------------*/
-@@ -738,6 +1059,8 @@ s32 cellPadInit(u32 max_connect)
+@@ -738,6 +1118,8 @@ s32 cellPadInit(u32 max_connect)
      s_pad_initialized = 1;
      s_max_connect = max_connect > CELL_PAD_MAX_PORT_NUM ? CELL_PAD_MAX_PORT_NUM : max_connect;
      memset(s_port_setting, 0, sizeof(s_port_setting));
@@ -6160,7 +6258,7 @@ index afdd93de..1f8402d1 100644
      for (int i = 0; i < PAD_MAX_HOST_PORTS; i++)
          pad_host_release(&s_host_state[i]);
  
-@@ -786,6 +1109,9 @@ void cellPad_poll(void)
+@@ -786,6 +1168,9 @@ void cellPad_poll(void)
   * were fixed.) These used to be redeclared here with a 64-bit address
   * parameter, which conflicts with the header now that it is included. */
  
@@ -6170,7 +6268,7 @@ index afdd93de..1f8402d1 100644
  s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
  {
      { static int _once = 0;
-@@ -800,6 +1126,23 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
+@@ -800,6 +1185,23 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
      CellPadData _d; CellPadData* data = &_d;
      memset(data, 0, sizeof(CellPadData));
  
@@ -6194,7 +6292,7 @@ index afdd93de..1f8402d1 100644
      /* Poll fresh state */
      pad_poll_backend();
  
-@@ -854,7 +1197,15 @@ skip_inject: ;
+@@ -854,7 +1256,15 @@ skip_inject: ;
       * physical device, which yields no-buttons-pressed data below. */
  
      {
@@ -6210,7 +6308,7 @@ index afdd93de..1f8402d1 100644
      u32 setting = s_port_setting[port_no];
  
      /* Determine data length based on port settings */
-@@ -913,7 +1264,7 @@ skip_inject: ;
+@@ -913,7 +1323,7 @@ skip_inject: ;
       * LEFT 0x0080, RIGHT 0x0020, CROSS 0x4000, CIRCLE 0x2000, TRIANGLE 0x1000.
       * Legit input simulation on the same footing as PAD_AUTOPRESS/PAD_STICK. */
      { static int s_sc = -1;
@@ -6219,7 +6317,7 @@ index afdd93de..1f8402d1 100644
        static unsigned long long t0 = 0;   /* not ULONGLONG: this builds on POSIX too */
        if (s_sc < 0) {
            s_sc = 0;
-@@ -925,7 +1276,10 @@ skip_inject: ;
+@@ -925,7 +1335,10 @@ skip_inject: ;
                    double t = strtod(p, (char**)&p);
                    if (*p == ':') p++;
                    unsigned m = (unsigned)strtoul(p, (char**)&p, 0);
@@ -6231,7 +6329,7 @@ index afdd93de..1f8402d1 100644
                    while (*p == ',' || *p == ' ') p++;
                }
                printf("[cellPad] PAD_SCRIPT: %d event(s)%s\n", n_ev,
-@@ -941,8 +1295,11 @@ skip_inject: ;
+@@ -941,8 +1354,11 @@ skip_inject: ;
             * hold it for a fixed number of polls, which is what a real press
             * looks like regardless of poll rate. */
            static int fired[256], held[256];
@@ -6244,7 +6342,7 @@ index afdd93de..1f8402d1 100644
                if (held[i] > 0) {
                    held[i]--;
                    data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(ev[i].mask & 0xFF);
-@@ -967,21 +1324,27 @@ skip_inject: ;
+@@ -967,21 +1383,27 @@ skip_inject: ;
       *   echo 0x0040 4 > pad.txt  # DOWN for 4 reports (menus auto-repeat a
       *                            # long hold; the default is 40)
       */
@@ -6275,7 +6373,7 @@ index afdd93de..1f8402d1 100644
                                 printf("[cellPad] PAD_FILE press 0x%04X\n", m); fflush(stdout); }
                    }
                    fclose(f);
-@@ -991,8 +1354,18 @@ skip_inject: ;
+@@ -991,8 +1413,18 @@ skip_inject: ;
            if (held_n > 0) {
                if (data->len > 0) held_n--;
                data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(held_mask & 0xFF);
@@ -6296,7 +6394,7 @@ index afdd93de..1f8402d1 100644
  
      /* Analog sticks */
      /* PAD_STICK="lx,ly,rx,ry" (0-255, 128 = centred): hold the analog sticks at
-@@ -1080,7 +1453,9 @@ skip_inject: ;
+@@ -1080,7 +1512,9 @@ skip_inject: ;
              { CELL_PAD_BTN_OFFSET_DIGITAL2, 0x01, CELL_PAD_BTN_OFFSET_PRESS_L2 },
              { CELL_PAD_BTN_OFFSET_DIGITAL2, 0x02, CELL_PAD_BTN_OFFSET_PRESS_R2 } };
          for (unsigned k = 0; k < sizeof pm / sizeof pm[0]; k++)
@@ -6307,7 +6405,7 @@ index afdd93de..1f8402d1 100644
                  data->button[pm[k].off] = 255;
      }
  
-@@ -1095,6 +1470,13 @@ skip_inject: ;
+@@ -1095,6 +1529,13 @@ skip_inject: ;
      }  /* end connected block */
  
  emit:
@@ -6321,7 +6419,7 @@ index afdd93de..1f8402d1 100644
      /* A non-zero len means "here is a CHANGE packet" -- the constant is literally
       * named CELL_PAD_LEN_CHANGE_DEFAULT. Hardware reports len = 0 once the port
       * has nothing new, and titles DRAIN on that: The Simpsons Arcade Game's
-@@ -1120,6 +1502,24 @@ emit:
+@@ -1120,6 +1561,24 @@ emit:
       * attack firing once.
       *
       * PAD_ALWAYS_CHANGE=1 restores the old always-a-packet behaviour. */
@@ -6346,7 +6444,7 @@ index afdd93de..1f8402d1 100644
      {
          unsigned int ea = (unsigned int)(uintptr_t)data_guest;
          vm_write32((unsigned long long)ea + 0, (unsigned int)data->len);   /* len (s32) */
-@@ -1157,8 +1557,8 @@ s32 cellPadGetInfo(CellPadInfo2* info)
+@@ -1157,8 +1616,8 @@ s32 cellPadGetInfo(CellPadInfo2* info)
       * it ever finished booting. Both entry points describe the same hardware
       * and have to answer the same way. */
      u32 connected = 0;
@@ -6357,7 +6455,7 @@ index afdd93de..1f8402d1 100644
  
      vm_write32(gaddr + 0x00, s_max_connect);
      vm_write32(gaddr + 0x04, connected);
-@@ -1168,10 +1568,11 @@ s32 cellPadGetInfo(CellPadInfo2* info)
+@@ -1168,10 +1627,11 @@ s32 cellPadGetInfo(CellPadInfo2* info)
       * Packed for 7 ports, status landed at 0x28 and GH3 -- which reads
       * info+0x208+port -- saw port 0 disconnected and never polled the pad. */
      for (u32 i = 0; i < CELL_PAD_MAX_PORT_NUM; i++) {
@@ -6373,7 +6471,7 @@ index afdd93de..1f8402d1 100644
          vm_write8(gaddr + 0x208 + i, (u8)((on ? CELL_PAD_STATUS_CONNECTED : 0) | pad_status_take(i)));
      }
      return CELL_OK;
-@@ -1194,7 +1595,21 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
+@@ -1194,7 +1654,21 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
      info->max_connect = s_max_connect;
  
      u32 connected = 0;
@@ -6396,7 +6494,7 @@ index afdd93de..1f8402d1 100644
          /* Always present a virtual pad on port 0 (standard emulator behavior) so
           * boot flows that block until a controller is connected can proceed even
           * with no physical device attached. */
-@@ -1251,6 +1666,17 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -1251,6 +1725,17 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
  
      u32 connected = 0;
      for (u32 i = 0; i < s_max_connect && i < CELL_PAD_MAX_PORT_NUM; i++) {
@@ -6414,7 +6512,7 @@ index afdd93de..1f8402d1 100644
          /* Same virtual-pad-on-port-0 rule as cellPadGetInfo2, so both views of
           * the ports agree (a game that cross-checks them must see one truth). */
          if ((i < PAD_MAX_HOST_PORTS && s_host_state[i].connected) || i == 0) {
-@@ -1434,3 +1860,69 @@ s32 cellPadClearBuf(u32 port_no)
+@@ -1434,3 +1919,69 @@ s32 cellPadClearBuf(u32 port_no)
      /* Nothing to clear in our implementation -- state is polled fresh */
      return CELL_OK;
  }
@@ -8322,7 +8420,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
  }
  
 diff --git a/libs/video/cellVideoOut.c b/libs/video/cellVideoOut.c
-index c67a6eaa..8309df26 100644
+index c67a6eaa..5d9e759a 100644
 --- a/libs/video/cellVideoOut.c
 +++ b/libs/video/cellVideoOut.c
 @@ -8,7 +8,9 @@
@@ -8335,7 +8433,24 @@ index c67a6eaa..8309df26 100644
  #include <string.h>
  #include <stdint.h>
  
-@@ -51,8 +53,14 @@ static void get_resolution_wh(u32 resId, u16* w, u16* h)
+@@ -42,6 +44,16 @@ void cellVideoOut_set_resolution(u8 resolutionId)
+     s_pitch = (u32)w * 4;
+ }
+ 
++/* The configured mode's size: what the display scans out from the top-left
++ * of the flipped buffer, which may be larger -- GT5's display buffers are
++ * 2048x1080 in its 720p mode. The draw engine presents that much of it. */
++void cellVideoOut_scanout_size(u32* w, u32* h)
++{
++    u16 rw, rh;
++    get_resolution_wh(s_resolution_id, &rw, &rh);
++    *w = rw; *h = rh;
++}
++
+ /* ---------------------------------------------------------------------------
+  * Helpers
+  * -----------------------------------------------------------------------*/
+@@ -51,8 +63,14 @@ static void get_resolution_wh(u32 resId, u16* w, u16* h)
      switch (resId) {
      case CELL_VIDEO_OUT_RESOLUTION_1080:
          *w = 1920; *h = 1080; break;
@@ -8352,7 +8467,7 @@ index c67a6eaa..8309df26 100644
      case CELL_VIDEO_OUT_RESOLUTION_480:
          *w = 720;  *h = 480;  break;
      case CELL_VIDEO_OUT_RESOLUTION_576:
-@@ -74,10 +82,36 @@ static void get_resolution_wh(u32 resId, u16* w, u16* h)
+@@ -74,10 +92,36 @@ static void get_resolution_wh(u32 resId, u16* w, u16* h)
   * API implementations
   * -----------------------------------------------------------------------*/
  
@@ -14809,11 +14924,17 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      for (u32 i = 0; i < 4; i++)
          if (g.downsample_pso[i]) g.downsample_pso[i]->lpVtbl->Release(g.downsample_pso[i]);
      if (g.downsample_rootsig)
-@@ -10552,3 +14596,31 @@
+@@ -10552,3 +14596,38 @@
  }
  
  #endif /* _WIN32 */
 +
++#if !defined(_WIN32)
++/* No live engine off Windows (the Android build draws through the Vulkan backend). */
++void rsx_live_draw_frame_counters(unsigned long long* draws, unsigned long long* full_waits, unsigned long long* wait_us)
++{ *draws = 0; *full_waits = 0; *wait_us = 0; }
++int rsx_live_draw_present_needed(void) { return 1; }
++#else
 +/* Draws and surface copies so far, and how many flushes waited for the GPU, for a frame trace. */
 +void rsx_live_draw_frame_counters(unsigned long long* draws, unsigned long long* full_waits, unsigned long long* wait_us)
 +{
@@ -14841,6 +14962,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 +    last_clears = clears;
 +    return 1;
 +}
++#endif /* _WIN32 */
 diff --git a/libs/video/rsx_live_draw.h b/libs/video/rsx_live_draw.h
 --- a/libs/video/rsx_live_draw.h
 +++ b/libs/video/rsx_live_draw.h
@@ -15940,6 +16062,7 @@ index 9cb50400..e38aea53 100644
      ps3_hle_register_ctx(ps3_compute_nid("sys_mmapper_unmap_memory"),   "sys_mmapper_unmap_memory",   crt_ok);
      ps3_hle_register_ctx(ps3_compute_nid("sys_mmapper_free_memory"),    "sys_mmapper_free_memory",    crt_ok);
 diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
+index a55afb05..13dd876e 100644
 --- a/runtime/ppu/tests/boot_main.cpp
 +++ b/runtime/ppu/tests/boot_main.cpp
 @@ -43,6 +43,19 @@
@@ -15962,7 +16085,54 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
  extern "C" {
  uint32_t ppu_load_elf(const char* path);
  void     ppu_recomp_register(void);
-@@ -73,7 +86,7 @@
+@@ -70,10 +83,54 @@ void     ps3_load_prx_modules(void) {}
+ #include <string.h>
+ #include <stdlib.h>
+ #include <signal.h>
++#if defined(__linux__)   /* Android and desktop Linux */
++#include <sys/mman.h>   /* the guest's 4 GB, see main() */
++#endif
++
++#if defined(__linux__)
++/* The Windows build's vm_commit_veh, for Android: an access to a no-access page inside the guest's
++ * 4 GB -- the guard page vm_stack_allocate() leaves below every guest thread's stack -- makes that
++ * 64 KB block read-write and lets the access run again. On Windows the same handler commits the
++ * block, so a title that runs a little past a small stack (GT5's 24 KB "MtiFn" thread, right after
++ * the first dialog) never noticed; here it was a SIGSEGV that closed the app. Anything else goes
++ * to the handler that was there before (Android's crash reporter). */
++extern "C" uint8_t* vm_base;
++static struct sigaction s_vm_prev_segv, s_vm_prev_bus;
++static void vm_commit_sig(int sig, siginfo_t* si, void* uc)
++{
++    static uintptr_t last_page;
++    const uintptr_t fault = (uintptr_t)si->si_addr, base = (uintptr_t)vm_base;
++    if (vm_base && fault >= base && fault - base < 0x100000000ull) {
++        const uintptr_t page = fault & ~(uintptr_t)0xFFFF;
++        /* The same block again right after opening it: not a protection fault, so not ours. */
++        if (page != __atomic_load_n(&last_page, __ATOMIC_RELAXED) &&
++            mprotect((void*)page, 0x10000, PROT_READ | PROT_WRITE) == 0) {
++            __atomic_store_n(&last_page, page, __ATOMIC_RELAXED);
++            return;
++        }
++    }
++    const struct sigaction* prev = sig == SIGBUS ? &s_vm_prev_bus : &s_vm_prev_segv;
++    if ((prev->sa_flags & SA_SIGINFO) && prev->sa_sigaction) { prev->sa_sigaction(sig, si, uc); return; }
++    if (!(prev->sa_flags & SA_SIGINFO) && prev->sa_handler != SIG_DFL && prev->sa_handler != SIG_IGN &&
++        prev->sa_handler) { prev->sa_handler(sig); return; }
++    signal(sig, SIG_DFL);
++    raise(sig);
++}
++static void vm_commit_sig_install(void)
++{
++    struct sigaction sa;
++    memset(&sa, 0, sizeof sa);
++    sa.sa_sigaction = vm_commit_sig;
++    sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
++    sigemptyset(&sa.sa_mask);
++    sigaction(SIGSEGV, &sa, &s_vm_prev_segv);
++    sigaction(SIGBUS, &sa, &s_vm_prev_bus);
++}
++#endif
  
  #ifdef _WIN32
  #include <windows.h>
@@ -15971,7 +16141,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
  /* timeBeginPeriod: windows.h is included with WIN32_LEAN_AND_MEAN, which
   * excludes the multimedia timer API, so it must be asked for by name -- and
   * AFTER windows.h, since timeapi.h uses UINT and friends. */
-@@ -118,28 +131,28 @@
+@@ -118,28 +175,28 @@ char* __cdecl cached_getenv(const char* name)
          const char* k = s_env[i].key;
          MemoryBarrier();
          if (!k) break;
@@ -16022,7 +16192,25 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
      }
      AcquireSRWLockExclusive(&s_env_lock);
      const char* val = NULL; int found = 0;
-@@ -307,6 +320,7 @@
+@@ -282,7 +339,16 @@ static void harness_guest_caller(uint32_t opd, uint64_t a0, uint64_t a1,
+  * backend's headless software path anywhere else -- the same selection
+  * runtime/host/host_posix.c makes, so the ticker below is backend-agnostic
+  * and a POSIX host gets a frame clock instead of no clock at all. */
+-#if defined(_WIN32)
++#if defined(PS3RECOMP_RSX_VULKAN)
++/* The Vulkan backend, when built in: GT5's Android port, and its PC test copy
++ * (GT5/android/pc_vulkan.ps1). A normal Windows build does not define it. */
++extern "C" int  rsx_vulkan_backend_init(uint32_t w, uint32_t h, const char* title);
++extern "C" void rsx_vulkan_backend_present(void);
++extern "C" int  rsx_vulkan_backend_pump_messages(void);
++#  define rsx_backend_init    rsx_vulkan_backend_init
++#  define rsx_backend_present rsx_vulkan_backend_present
++#  define rsx_backend_pump    rsx_vulkan_backend_pump_messages
++#elif defined(_WIN32)
+ extern "C" int  rsx_d3d12_backend_init(uint32_t w, uint32_t h, const char* title);
+ extern "C" void rsx_d3d12_backend_present(void);
+ extern "C" int  rsx_d3d12_backend_pump_messages(void);
+@@ -307,6 +373,7 @@ extern "C" int  rsx_null_backend_pump_messages(void);
  extern "C" void cellGcm_rsx_process_fifo(void);   /* cellGcmSys.c: drain get->put */
  extern "C" void cellGcm_fifo_kick_wait(unsigned ms); /* idle wait, woken by a kick */
  extern "C" unsigned cellGcm_flip_request_count(void);
@@ -16030,7 +16218,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
  extern "C" unsigned cellGcmGetCurrentDisplayBufferId(void);
  extern "C" int sys_event_queue_inject(unsigned int, unsigned long long, unsigned long long, unsigned long long, unsigned long long);
  
-@@ -321,6 +335,7 @@
+@@ -321,6 +388,7 @@ extern "C" int   rsx_live_draw_init(void* hwnd, uint32_t w, uint32_t h,
                                                                  uint32_t, uint32_t),
                                      void* user);
  extern "C" void  rsx_live_draw_present(uint32_t buffer_id);
@@ -16038,7 +16226,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
  extern "C" uint32_t rsx_live_draw_get_frames(void);
  extern "C" uint32_t rsx_live_draw_get_last_draws(void);
  extern "C" int   rsx_null_backend_init(uint32_t w, uint32_t h, const char* title);
-@@ -350,7 +365,16 @@
+@@ -350,7 +418,16 @@ static const uint8_t* rsx_live_guest_ptr(void* user, uint32_t location,
          ea = cellGcmResolveLocated(1, offset);          /* RSX local VRAM */
      } else {
          ea = cellGcmResolveIO(offset);                  /* main, via the IO table */
@@ -16056,7 +16244,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
      }
      if (!ea || ea == 0xFFFFFFFFu ||
          (uint64_t)ea + min_bytes > 0x100000000ull) return nullptr;
-@@ -446,8 +470,68 @@
+@@ -446,8 +523,68 @@ static DWORD WINAPI guest_prof_thread(LPVOID)
  
  extern "C" const char* cellGame_get_title(void);   /* PARAM.SFO TITLE, for the caption */
  
@@ -16125,7 +16313,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
      /* Window caption: $PS3_TITLE wins, else the TITLE field PARAM.SFO already
       * gave cellGame, else a neutral name. It used to fall back to a specific
       * other title, so every port announced itself as that game. */
-@@ -461,12 +545,19 @@
+@@ -461,12 +598,19 @@ static DWORD WINAPI vblank_ticker(LPVOID)
       * backbuffer when its clip EQUALS the backend size, so a title that renders
       * into something other than 1280x720 must say so: RSX_W / RSX_H. */
      uint32_t rsx_w = 1280, rsx_h = 720;
@@ -16148,7 +16336,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
                                           rsx_live_guest_ptr, nullptr) == 0) {
              s_rsx_live = 1;
              rsx_null_backend_suppress_present(1);
-@@ -485,7 +576,16 @@
+@@ -485,7 +629,16 @@ static DWORD WINAPI vblank_ticker(LPVOID)
       * window DXGI Present throttles hard, which previously stalled these ticks and
       * paced the game's main loop to ~0.5fps. Drive the ticks off REAL elapsed time
       * and catch up in a bounded burst so present latency never slows the game. */
@@ -16166,7 +16354,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
      for (;;) {
          /* Was Sleep(4). The FIFO kick event existed, was signalled on a dry
           * fence queue, and had no waiter -- so a guest starved for `get` or a
-@@ -494,8 +594,9 @@
+@@ -494,8 +647,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
           * does. */
          cellGcm_fifo_kick_wait(4);
          ULONGLONG now = GetTickCount64();
@@ -16177,7 +16365,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
              cellGcmTickVBlank();
              cellGcmTickFlip();
              /* Present a pending flip BEFORE draining further: the flip fires
-@@ -505,8 +606,8 @@
+@@ -505,8 +659,8 @@ static DWORD WINAPI vblank_ticker(LPVOID)
               * writes and showed empty or mixed batches. */
              {
                  if (rsx_ok && cellGcm_take_flip_pending()) {
@@ -16188,7 +16376,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
                  }
              }
              /* Drain the game's GCM FIFO every tick -- this writes the RSX sync-fence
-@@ -514,20 +615,21 @@
+@@ -514,20 +668,21 @@ static DWORD WINAPI vblank_ticker(LPVOID)
               * Doing it here (not after present) keeps those fences advancing at 60Hz
               * even when present() throttles on a hidden/occluded window. */
              if (rsx_ok) cellGcm_rsx_process_fifo();
@@ -16214,7 +16402,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
          }
          /* YDKJ_INJECT_Q3: the main thread polls q3 (load/state-complete) each frame but
           * it's never posted (producer signals a condvar, never enqueues). Inject a q3
-@@ -538,7 +640,13 @@
+@@ -538,7 +693,17 @@ static DWORD WINAPI vblank_ticker(LPVOID)
              if(++s_q3 % 8 == 0){ int r=sys_event_queue_inject(qid, 0x1234, 0, 0, 0);
                static int _n=0; if(_n++<12) fprintf(stderr,"[INJQ3] injected q%u event rc=%d\n",qid,r); } }
          if (rsx_ok) {
@@ -16224,12 +16412,16 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
 +            if (rsx_pump_messages() != 0) {
 +                fprintf(stderr, "[rsx] window closed, exiting\n");
 +                fflush(stderr); fflush(stdout);
++#ifdef _WIN32
 +                TerminateProcess(GetCurrentProcess(), 0);
++#else
++                _exit(0);
++#endif
 +            }
              if (getenv("YDKJ_PACETRACE")) {
                  static ULONGLONG s_win=0; static int s_pf=0, s_pres=0; static ULONGLONG s_presms=0;
                  s_pf += fired; s_pres++;
-@@ -557,9 +665,9 @@
+@@ -557,9 +722,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
                   * flash a partial frame (clear + a few draws). Before the
                   * first flip present freely so the window isn't stuck white
                   * during boot. */
@@ -16241,7 +16433,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
                      last_flip = fc;
                  } else if (fc == 0) {
                      rsx_backend_present();
-@@ -934,45 +1042,45 @@
+@@ -934,45 +1099,45 @@ static DWORD WINAPI debug_console(LPVOID param)
              dump_threads("console", self);
          } else if (!strcmp(verb, "find32") && sscanf(cmd, "%*s %x", &a) == 1) {
              /* find32 <hex>: every aligned big-endian u32 equal to <hex> in committed
@@ -16316,7 +16508,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
          } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
              dbg_prof((DWORD)a, b ? b : 5);
          } else if (!strcmp(verb, "hle")) {
-@@ -1109,6 +1217,18 @@
+@@ -1109,6 +1274,18 @@ int main(int argc, char** argv)
      timeBeginPeriod(1);   /* 1ms timer resolution: the default ~15.6ms granularity
                             * inflates every sub-15ms wait (the game's event polls,
                             * usleeps) and throttled the whole title. */
@@ -16335,7 +16527,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
      SetUnhandledExceptionFilter(ydkj_crash_filter);
      AddVectoredExceptionHandler(0 /*last*/, [](EXCEPTION_POINTERS* ep)->LONG{
          if (ep->ExceptionRecord->ExceptionCode == 0xC00000FDu /*STACK_OVERFLOW*/) {
-@@ -1136,7 +1256,12 @@
+@@ -1136,8 +1313,24 @@ int main(int argc, char** argv)
      /* Reserve the full 4 GB guest space; pages commit on first touch via the VEH. */
      AddVectoredExceptionHandler(1, guard_report_veh);  /* diagnose 0x80000001 silent deaths */
      AddVectoredExceptionHandler(1, vm_commit_veh);
@@ -16347,13 +16539,24 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
 +                                     MEM_RESERVE | (getenv("PS3_NO_WRITE_WATCH") ? 0 : MEM_WRITE_WATCH),
 +                                     PAGE_READWRITE);
      ppu_vm_size = 0;   /* full 32-bit space backed -> OOB guard unnecessary */
++#elif defined(__linux__)   /* Android and desktop Linux */
++    /* The whole 4 GB as on Windows, zero-filled on first touch. MAP_NORESERVE so a phone's
++     * overcommit check does not count 4 GB it will never use against its RAM (a 3.5 GB calloc
++     * is refused outright on a 4-6 GB phone). */
++    {
++        void* p = mmap(NULL, 0x100000000ull, PROT_READ | PROT_WRITE,
++                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
++        vm_base = (p == MAP_FAILED) ? NULL : (uint8_t*)p;
++        if (vm_base) vm_commit_sig_install();
++    }
++    ppu_vm_size = 0;
  #else
      vm_base = (uint8_t*)calloc(1, 0xE0000000u);
-@@ -1146,6 +1271,25 @@
- 
+     ppu_vm_size = 0xE0000000u;
+@@ -1147,6 +1340,25 @@ int main(int argc, char** argv)
      uint32_t entry = ppu_load_elf(elf);
      if (!entry) { printf("load failed\n"); return 1; }
-+
+ 
 +    /* A title's own code (GT5's src/gt5_widescreen.cpp) runs here, image loaded, nothing run yet. */
 +    for (int i = 0; i < s_on_loaded_n; i++) s_on_loaded[i]();
 +
@@ -16372,9 +16575,10 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
 +            p = (*e2 == ',') ? e2 + 1 : e2;
 +        }
 +    }
- 
++
      derive_vfs_root(elf);
      printf("[boot] VFS root: %s\n", ppu_vfs_root);
+ 
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
 index 5fc50208..440fb21d 100644
 --- a/runtime/spu/spu_channels.c
@@ -16514,7 +16718,7 @@ index 5fc50208..440fb21d 100644
          if (!ctx->resident_code[slot].image_id) continue;
          uint32_t base = ctx->resident_code[slot].lsa;
 diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
-index ed2bcf58..96b2884e 100644
+index ed2bcf58..e4e01bb2 100644
 --- a/runtime/spu/spu_coherency.c
 +++ b/runtime/spu/spu_coherency.c
 @@ -12,6 +12,7 @@
@@ -16525,7 +16729,7 @@ index ed2bcf58..96b2884e 100644
  #include "spu_coherency.h"
  #include "spu_coh_bitmap.h"
  
-@@ -139,8 +140,102 @@ typedef struct spu_coh_entry {
+@@ -139,8 +140,112 @@ typedef struct spu_coh_entry {
  static spu_coh_entry* s_coh_ctxs;
  static spu_coh_watch* s_coh_watches;
  
@@ -16587,6 +16791,16 @@ index ed2bcf58..96b2884e 100644
 +
  unsigned long g_spu_lr_raise = 0;
  
++#if !defined(_WIN32)
++/* GetTickCount64 off Windows (the Android build): milliseconds on the monotonic clock. */
++static unsigned long long GetTickCount64(void)
++{
++    struct timespec ts;
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    return (unsigned long long)ts.tv_sec * 1000ull + (unsigned long long)ts.tv_nsec / 1000000ull;
++}
++#endif
++
 +/* SPU_COH_STAT=1: every 5 s, how many writes took the coherent path, how many of them ended a
 + * reservation, how many lines are marked, and the busiest lines. Counted under the lock-line lock. */
 +static int s_coh_stat = -1;
@@ -16628,7 +16842,7 @@ index ed2bcf58..96b2884e 100644
  void spu_coh_reserve(spu_context* ctx, uint32_t ea)
  {
      /* Read before writing. The kernel reserves the same few lines over and
-@@ -149,12 +244,15 @@ void spu_coh_reserve(spu_context* ctx, uint32_t ea)
+@@ -149,12 +254,15 @@ void spu_coh_reserve(spu_context* ctx, uint32_t ea)
       * the bitmap byte. */
      uint32_t line = ea >> SPU_COH_LINE_SHIFT;
      const unsigned char bit = (unsigned char)(1u << (line & 7));
@@ -16645,7 +16859,7 @@ index ed2bcf58..96b2884e 100644
      for (spu_coh_entry* entry = s_coh_ctxs; entry; entry = entry->next)
          if (entry->ctx == ctx) { __atomic_store_n(&ctx->coh_listed, 1, __ATOMIC_RELAXED); return; }
      spu_coh_entry* entry = (spu_coh_entry*)malloc(sizeof(*entry));
-@@ -175,6 +273,7 @@ void spu_coh_watch_add(spu_coh_watch* watch, uint32_t ea,
+@@ -175,6 +283,7 @@ void spu_coh_watch_add(spu_coh_watch* watch, uint32_t ea,
      /* Arming the existing bitmap makes PPU stores/CAS and MFC writes use
       * the same serialized commit/notify path as SPU reservations. */
      spu_coh_reserve(NULL, ea);
@@ -16653,7 +16867,7 @@ index ed2bcf58..96b2884e 100644
      watch->line = ea & ~127u;
      watch->wake = wake;
      watch->opaque = opaque;
-@@ -188,6 +287,7 @@ void spu_coh_watch_remove(spu_coh_watch* watch)
+@@ -188,6 +297,7 @@ void spu_coh_watch_remove(spu_coh_watch* watch)
          if (*link != watch) continue;
          *link = watch->next;
          watch->next = NULL;
@@ -16661,7 +16875,7 @@ index ed2bcf58..96b2884e 100644
          return;
      }
  }
-@@ -225,6 +325,7 @@ void spu_coh_unregister(spu_context* ctx)
+@@ -225,6 +335,7 @@ void spu_coh_unregister(spu_context* ctx)
          break;
      }
      __atomic_store_n(&ctx->coh_listed, 0, __ATOMIC_RELAXED);
@@ -16669,7 +16883,7 @@ index ed2bcf58..96b2884e 100644
      spu_lockline_unlock();
  }
  
-@@ -245,6 +346,7 @@ void spu_coh_forget_range(uintptr_t lo, uintptr_t hi)
+@@ -245,6 +356,7 @@ void spu_coh_forget_range(uintptr_t lo, uintptr_t hi)
              if (PS3_LOG_FIRST(_n, 16))
                  fprintf(stderr, "[spu-coh] leaked ctx %p (img=%d) dropped at thread exit\n",
                          (void*)c, entry->ctx->image_id);
@@ -16677,7 +16891,7 @@ index ed2bcf58..96b2884e 100644
              *link = entry->next;
              free(entry);
          } else {
-@@ -343,15 +445,61 @@ int spu_coh_reserve_fast(spu_context* ctx, uint32_t ea)
+@@ -343,15 +455,61 @@ int spu_coh_reserve_fast(spu_context* ctx, uint32_t ea)
      __atomic_store_n(&ctx->resv_valid, 0, __ATOMIC_RELAXED);
      __atomic_store_n(&ctx->resv_ea, ea, __ATOMIC_RELAXED);
      __atomic_store_n(&ctx->resv_valid, 1, __ATOMIC_RELAXED);
@@ -16739,13 +16953,13 @@ index ed2bcf58..96b2884e 100644
      spu_coh_wake_watches(line);
      for (spu_coh_entry* entry = s_coh_ctxs; entry; entry = entry->next) {
          spu_context* c = entry->ctx;
-@@ -363,18 +511,85 @@ void spu_coh_notify_write_except(uint32_t ea, const void* self)
+@@ -363,18 +521,85 @@ void spu_coh_notify_write_except(uint32_t ea, const void* self)
              spu_ch_wake(c);
          }
      }
 +    spu_coh_maybe_unmark(line, self);
-+}
-+
+ }
+ 
 +/* Lines whose PPU stores must reach a host-side scheduler at once: the request
 + * line of each live SPURS instance (wklReadyCount1 and wklSignal1 live there).
 + * The scheduler wakes immediately on an SPU commit to that line (the PUTLLC
@@ -16784,8 +16998,8 @@ index ed2bcf58..96b2884e 100644
 +    const uint32_t line = ea & ~127u;
 +    for (long i = 0; i < n; i++)
 +        if (s_kick_lines[i] == line) { s_ppu_kick_hook(line); return; }
- }
- 
++}
++
 +static void spu_coh_notify_tail(uint32_t ea);
  void spu_coh_notify_write(uint32_t ea)
  {
@@ -16826,7 +17040,7 @@ index ed2bcf58..96b2884e 100644
              SPU_EVENT_SET(c, SPU_EVENT_LR);
              __atomic_store_n(&c->resv_valid, 0, __ATOMIC_RELAXED);   /* reservation lost, PUTLLC must fail */
              /* SPU_PUTLLC_WHY=1: name the agent that killed it. A PUTLLC that
-@@ -393,8 +608,11 @@ void spu_coh_notify_write(uint32_t ea)
+@@ -393,8 +618,11 @@ void spu_coh_notify_write(uint32_t ea)
              spu_ch_wake(c);
          }
      }
@@ -17254,24 +17468,25 @@ index 96266731..ffcdae06 100644
                  spu->spu_id, ((uint64_t)port << 32) | (value & 0xFFFFFFu), data);
              result = rc == 0 ? CELL_OK : CELL_EBUSY;
 diff --git a/runtime/syscalls/sys_cond.c b/runtime/syscalls/sys_cond.c
-index 8bdacb48..90e4ae1f 100644
+index 8bdacb48..4a28be90 100644
 --- a/runtime/syscalls/sys_cond.c
 +++ b/runtime/syscalls/sys_cond.c
-@@ -119,6 +119,34 @@ int64_t sys_cond_destroy(ppu_context* ctx)
+@@ -119,6 +119,38 @@ int64_t sys_cond_destroy(ppu_context* ctx)
      return result;
  }
  
 +/* Set by cellGcmSys once a FIFO exists: nonzero while the RSX has not reached put. */
 +int (*g_sys_cond_rsx_behind)(void);
 +
-+#ifdef _WIN32
 +/* A real RSX never stops, so a title can guard a frame fence with a long timeout and
 + * treat its expiry as a lost GPU. Ours does stop: it compiles shaders and pipelines
 + * inline, for many seconds on a new scene. GT5 waits 5 s for the RSX to reach the
 + * previous frame, then starts the next frame regardless and rebuilds command blocks
 + * the RSX has yet to run, which deadlocks the RSX and the SPU jobs for good. So a wait
 + * of one to five seconds outlasts its timeout while the RSX is still catching up, within
-+ * a bound that a really stuck RSX cannot exceed. SYS_COND_RSX_HOLD=0 turns this off. */
++ * a bound that a really stuck RSX cannot exceed. SYS_COND_RSX_HOLD=0 turns this off.
++ * Every host: on Linux with a software Vulkan driver (and on phones) a race load ran
++ * past the 5 s and froze with the RSX parked and GT5 spinning on its GPUSyncArray. */
 +static int cond_hold_for_rsx(uint32_t id, uint64_t duration, uint64_t elapsed)
 +{
 +    static int on = -1;
@@ -17281,18 +17496,21 @@ index 8bdacb48..90e4ae1f 100644
 +        return 0;
 +    if (elapsed < duration + 20) {
 +        static volatile long logged;
++#ifdef _WIN32
 +        if (InterlockedIncrement(&logged) <= 16)
++#else
++        if (__atomic_add_fetch(&logged, 1, __ATOMIC_SEQ_CST) <= 16)
++#endif
 +            fprintf(stderr, "[sys_cond] cond %u: held past its %llu ms timeout for the RSX\n",
 +                    id, (unsigned long long)duration);
 +    }
 +    return 1;
 +}
-+#endif
 +
  int64_t sys_cond_wait(ppu_context* ctx)
  {
      ppu_thread_note_block(ctx->thread_id);   /* PS3_PRIO_START */
-@@ -165,9 +193,15 @@ int64_t sys_cond_wait(ppu_context* ctx)
+@@ -165,9 +197,15 @@ int64_t sys_cond_wait(ppu_context* ctx)
          DWORD ms = INFINITE;
          if (timeout) {
              uint64_t elapsed = GetTickCount64() - start;
@@ -17311,6 +17529,37 @@ index 8bdacb48..90e4ae1f 100644
          }
          BOOL ok = SleepConditionVariableCS(&c->cv, &c->signal_lock, ms);
          if (!ok && GetLastError() != ERROR_TIMEOUT && !waiter.signalled) {
+@@ -184,10 +222,30 @@ int64_t sys_cond_wait(ppu_context* ctx)
+             deadline.tv_sec++; deadline.tv_nsec -= 1000000000L;
+         }
+     }
++    /* The elapsed time for cond_hold_for_rsx, on a clock that wall-clock changes don't move. */
++    struct timespec t0;
++    clock_gettime(CLOCK_MONOTONIC, &t0);
++    const uint64_t duration = (timeout + 999) / 1000;
+     while (!waiter.signalled) {
+         int rc = timeout ? pthread_cond_timedwait(&c->cv, &c->signal_lock, &deadline)
+                          : pthread_cond_wait(&c->cv, &c->signal_lock);
+         if (rc && !waiter.signalled) {
++            if (rc == ETIMEDOUT) {
++                struct timespec t1;
++                clock_gettime(CLOCK_MONOTONIC, &t1);
++                const int64_t ems = (int64_t)(t1.tv_sec - t0.tv_sec) * 1000 +
++                                    (int64_t)(t1.tv_nsec - t0.tv_nsec) / 1000000;
++                const uint64_t elapsed = ems > 0 ? (uint64_t)ems : 0;
++                if (cond_hold_for_rsx(LV2_ARG_U32(ctx, 0), duration, elapsed)) {
++                    /* Look again in 20 ms, as the Windows path does. */
++                    clock_gettime(CLOCK_REALTIME, &deadline);
++                    deadline.tv_nsec += 20 * 1000000L;
++                    if (deadline.tv_nsec >= 1000000000L) {
++                        deadline.tv_sec++; deadline.tv_nsec -= 1000000000L;
++                    }
++                    continue;
++                }
++            }
+             result = (int32_t)(rc == ETIMEDOUT ? CELL_ETIMEDOUT : CELL_EFAULT);
+             break;
+         }
 diff --git a/runtime/syscalls/sys_memory.c b/runtime/syscalls/sys_memory.c
 index 66eef25c..b7c2e52d 100644
 --- a/runtime/syscalls/sys_memory.c
@@ -17395,7 +17644,7 @@ index 633446e0..54321b00 100644
  /* Thread states */
  #define PPU_THREAD_STATE_FREE       0
 diff --git a/runtime/syscalls/sys_timer.c b/runtime/syscalls/sys_timer.c
-index 3a022815..f520b3b9 100644
+index 3a022815..f83d883a 100644
 --- a/runtime/syscalls/sys_timer.c
 +++ b/runtime/syscalls/sys_timer.c
 @@ -359,14 +359,16 @@ int64_t sys_time_get_current_time(ppu_context* ctx)
@@ -17467,7 +17716,32 @@ index 3a022815..f520b3b9 100644
          }
      }
      pthread_mutex_unlock(&t->mtx);
-@@ -651,6 +668,24 @@ int64_t sys_timer_disconnect_event_queue(ppu_context* ctx)
+@@ -561,6 +578,8 @@ int64_t sys_timer_create(ppu_context* ctx)
+  *
+  * r3 = timer_id
+  * -----------------------------------------------------------------------*/
++static void timer_reap(sys_timer_info* t);
++
+ int64_t sys_timer_destroy(ppu_context* ctx)
+ {
+     uint32_t timer_id = LV2_ARG_U32(ctx, 0);
+@@ -587,11 +606,14 @@ int64_t sys_timer_destroy(ppu_context* ctx)
+         t->stop_flag = 1;
+         pthread_cond_signal(&t->cv);
+         pthread_mutex_unlock(&t->mtx);
+-        pthread_join(t->thread, NULL);
++        timer_reap(t);
+         pthread_mutex_destroy(&t->mtx);
+         pthread_cond_destroy(&t->cv);
+ #endif
+     }
++#ifndef _WIN32
++    timer_reap(t);   /* a one-shot that already fired */
++#endif
+ 
+     t->active = 0;
+     return CELL_OK;
+@@ -651,6 +673,33 @@ int64_t sys_timer_disconnect_event_queue(ppu_context* ctx)
      return CELL_OK;
  }
  
@@ -17485,14 +17759,23 @@ index 3a022815..f520b3b9 100644
 +        t->stop_event = NULL;
 +    }
 +#else
-+    (void)t;
++    /* A one-shot timer's thread ends by itself once it has fired, and nothing joined it: every
++     * start then left a dead thread's 1 MB stack mapped. GT5 starts one-shot timers about 26 times
++     * a second, so on Android -- 65530 mappings a process -- a 20-minute B-Spec race ran out of
++     * them at the finish (mmap failed, bad_alloc). Join it before the next start, as the Windows
++     * branch closes its handle. */
++    if (t->thread_live) {
++        if (pthread_equal(t->thread, pthread_self())) pthread_detach(t->thread);
++        else pthread_join(t->thread, NULL);
++        t->thread_live = 0;
++    }
 +#endif
 +}
 +
  /* ---------------------------------------------------------------------------
   * sys_timer_start
   *
-@@ -661,7 +696,7 @@ int64_t sys_timer_disconnect_event_queue(ppu_context* ctx)
+@@ -661,7 +710,7 @@ int64_t sys_timer_disconnect_event_queue(ppu_context* ctx)
  int64_t sys_timer_start(ppu_context* ctx)
  {
      uint32_t timer_id    = LV2_ARG_U32(ctx, 0);
@@ -17501,7 +17784,7 @@ index 3a022815..f520b3b9 100644
      uint64_t period      = LV2_ARG_U64(ctx, 2);
  
      if (timer_id == 0 || timer_id > SYS_TIMER_MAX)
-@@ -674,12 +709,25 @@ int64_t sys_timer_start(ppu_context* ctx)
+@@ -674,19 +723,32 @@ int64_t sys_timer_start(ppu_context* ctx)
      if (t->running)
          return (int64_t)(int32_t)CELL_EBUSY;
  
@@ -17530,7 +17813,15 @@ index 3a022815..f520b3b9 100644
  
  #ifdef _WIN32
      t->stop_event    = CreateEventA(NULL, TRUE, FALSE, NULL);
-@@ -708,22 +756,16 @@ int64_t sys_timer_stop(ppu_context* ctx)
+     t->thread_handle = CreateThread(NULL, 0, timer_thread_proc, t, 0, NULL);
+ #else
+     t->stop_flag = 0;
+-    pthread_create(&t->thread, NULL, timer_thread_proc, t);
++    t->thread_live = pthread_create(&t->thread, NULL, timer_thread_proc, t) == 0;
+ #endif
+ 
+     return CELL_OK;
+@@ -708,28 +770,22 @@ int64_t sys_timer_stop(ppu_context* ctx)
      if (!t->active)
          return (int64_t)(int32_t)CELL_ESRCH;
  
@@ -17557,8 +17848,15 @@ index 3a022815..f520b3b9 100644
  #else
      pthread_mutex_lock(&t->mtx);
      t->stop_flag = 1;
+     pthread_cond_signal(&t->cv);
+     pthread_mutex_unlock(&t->mtx);
+-    pthread_join(t->thread, NULL);
++    timer_reap(t);
+ #endif
+ 
+     return CELL_OK;
 diff --git a/runtime/syscalls/sys_timer.h b/runtime/syscalls/sys_timer.h
-index f3d4163a..a1e49618 100644
+index f3d4163a..2b956307 100644
 --- a/runtime/syscalls/sys_timer.h
 +++ b/runtime/syscalls/sys_timer.h
 @@ -63,6 +63,7 @@ typedef struct sys_timer_info {
@@ -17569,6 +17867,14 @@ index f3d4163a..a1e49618 100644
  
  #ifdef _WIN32
      HANDLE   timer_handle;
+@@ -73,6 +74,7 @@ typedef struct sys_timer_info {
+     pthread_mutex_t mtx;
+     pthread_cond_t  cv;
+     int             stop_flag;
++    int             thread_live;   /* t->thread made and not joined yet (timer_reap) */
+ #endif
+ 
+ } sys_timer_info;
 diff --git a/tests/syscalls/test_lock_line.c b/tests/syscalls/test_lock_line.c
 index 1ffc9467..00f13b9f 100644
 --- a/tests/syscalls/test_lock_line.c
@@ -17769,3 +18075,2317 @@ diff --git a/runtime/syscalls/sys_fs.c b/runtime/syscalls/sys_fs.c
      if (!path || !*path || stat(path, &st) == 0)
          return;
      /* An HDD game (a PSN title, CATEGORY "HG") boots from /dev_hdd0/game/<id>/,
+diff --git a/libs/codec/ffmpeg_runtime.c b/libs/codec/ffmpeg_runtime.c
+index 4a848e76..876cfb11 100644
+--- a/libs/codec/ffmpeg_runtime.c
++++ b/libs/codec/ffmpeg_runtime.c
+@@ -35,6 +35,11 @@ static void   ff_close(ff_lib l) { dlclose(l); }
+ #elif defined(__APPLE__)
+ #define FF_AVCODEC_NAME "libavcodec." FF_MAJ_C ".dylib"
+ #define FF_AVUTIL_NAME  "libavutil." FF_MAJ_U ".dylib"
++#elif defined(__ANDROID__)
++/* An APK carries its libraries as lib<name>.so, and FFmpeg's android target names them so
++ * (GT5/android/build_ffmpeg.sh); the headers this was built with say which major they are. */
++#define FF_AVCODEC_NAME "libavcodec.so"
++#define FF_AVUTIL_NAME  "libavutil.so"
+ #else
+ #define FF_AVCODEC_NAME "libavcodec.so." FF_MAJ_C
+ #define FF_AVUTIL_NAME  "libavutil.so." FF_MAJ_U
+diff --git a/libs/spurs/cellFiber.c b/libs/spurs/cellFiber.c
+index 3673985c..6ed3e34b 100644
+--- a/libs/spurs/cellFiber.c
++++ b/libs/spurs/cellFiber.c
+@@ -207,6 +207,20 @@ static void fiber_entry(unsigned hi, unsigned lo)
+     fiber_body((Fiber*)(((uintptr_t)hi << 32) | lo));
+ }
+ 
++#if defined(__ANDROID__)
++/* Android's C library has ucontext_t but none of the functions that switch it. No fiber can be
++ * created there yet: CreateFiber fails with NOMEM, and says so once in the log. */
++static int host_create(Fiber* f)
++{
++    (void)f;
++    static int said;
++    if (!said) { said = 1; fprintf(stderr, "[cellFiber] fibers are not supported on Android yet\n"); }
++    return 0;
++}
++static void host_destroy(Fiber* f) { (void)f; }
++static void host_resume(Sched* s, Fiber* f) { (void)s; (void)f; abort(); }
++static void host_yield(Fiber* f) { (void)f; abort(); }
++#else
+ static int host_create(Fiber* f)
+ {
+     f->host_stack = malloc(FIBER_HOST_STACK);
+@@ -236,6 +250,7 @@ static void host_yield(Fiber* f)
+ {
+     swapcontext(&f->uc, &f->sched->back);
+ }
++#endif /* __ANDROID__ */
+ #endif
+ 
+ /* The fiber has ended with `status`: record it and make the fibers that joined it runnable. The lock is held. */
+@@ -252,7 +267,7 @@ static void fiber_leave(Fiber* f)
+ {
+ #ifdef _WIN32
+     SwitchToFiber(f->sched->back);
+-#else
++#elif !defined(__ANDROID__)
+     setcontext(&f->sched->back);
+ #endif
+     abort();                     /* an ended fiber is never resumed */
+diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
+index 8dff6011..8a2ef53e 100644
+--- a/libs/video/rsx_draw_engine.c
++++ b/libs/video/rsx_draw_engine.c
+@@ -106,11 +106,23 @@ typedef struct {
+     rsx_be_format fmt;
+     u32 handle;
+     u32 feedback;          /* last immutable own-target copy, engine-owned */
++    u32 region, region_w, region_h;   /* color_region copy, engine-owned */
++    u64 region_serial;      /* color_serial the region copy was made at */
+     u64 color_serial;       /* g.write_serial of the last colour write, or 0 */
+     int guest_dirty;        /* rendered since guest memory last got a copy   */
+     u32 last_use;           /* g.frames when last bound, sampled or presented */
+ } eng_surface;
+ 
++/* A cube texture sampled from colour targets (color_cube), refreshed when a
++ * face is drawn again. */
++#define ENG_MAX_CUBES 8
++typedef struct {
++    u32 location, offset, size, mips, remap, format;
++    u32 handle;
++    u64 face_serial[6];     /* color_serial of each face when last copied, 0 = none */
++    u32 last_use;
++} eng_cube;
++
+ typedef struct {
+     u32 location, offset;
+     u32 w, h;
+@@ -192,6 +204,9 @@ static struct {
+     eng_vp_memo vp_memo[ENG_VP_MEMO];
+     u32 vp_memo_next;
+     eng_display_buffer display_buffers[8];
++    eng_cube cubes[ENG_MAX_CUBES];
++    eng_cube bcubes[ENG_MAX_CUBES];   /* bordered swizzled cubes from guest memory;
++                                        * face_serial[0] holds their content hash */
+ 
+     u32 frames;
+     u64 texture_use_serial;
+@@ -699,6 +714,7 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+ 
+     eng_surface* s = &g.surfaces[slot];
+     if (s->feedback) { g.be->texture_release(g.be->user, s->feedback); s->feedback = 0; }
++    if (s->region) { g.be->texture_release(g.be->user, s->region); s->region = 0; }
+     if (s->handle) g.be->color_target_release(g.be->user, s->handle);
+     s->location = location; s->offset = offset;
+     s->w = want_w; s->h = want_h; s->fmt = want_fmt; s->aa_grid = aa_grid;
+@@ -2465,6 +2481,206 @@ static u32 eng_color_feedback_failure(u32 unit, const eng_surface* s,
+     return ENG_INVALID;
+ }
+ 
++/* The cube texture a cube unit samples when its faces are colour targets:
++ * face f starts at offset + f * stride (stride = the face with its mip chain
++ * in the rows below it, at the texture pitch, for a linear texture), in a
++ * target at that address or one whose rows contain it at the same pitch (GT5
++ * draws a 32x32 half-float cube as one 32x192 target), with room for the face. Built and refreshed with color_cube; 0 when no
++ * face is a target, a face is a current attachment, or the backend lacks it. */
++static u32 eng_cube_from_targets(const rsx_dsp_texture* t, const u32* target_slots, u32 n_targets)
++{
++    if (!g.be->color_cube || !t->width || t->width != t->height) return 0;
++    u32 mips = 1, rows = t->height;
++    for (u32 mh = t->height; mips < (t->mipmaps ? t->mipmaps : 1u) && mips < 14u && mh > 1u; mips++) {
++        mh >>= 1;
++        rows += mh;
++    }
++    const u32 stride = ((t->format & RSX_TEX_FMT_LINEAR) && t->pitch)
++        ? rows * t->pitch
++        : rsx_texture_cube_face_stride(t->format, t->width, t->height, mips, t->pitch);
++    if (!stride) return 0;
++    int face[6];
++    u32 face_y[6] = {0};
++    int any = 0;
++    const int linear = (t->format & RSX_TEX_FMT_LINEAR) && t->pitch;
++    for (u32 f = 0; f < 6; f++) {
++        face[f] = -1;
++        const u32 a = t->offset + f * stride;
++        for (u32 i = 0; i < g.n_surfaces; i++) {
++            const eng_surface* s = &g.surfaces[i];
++            if (!s->handle || s->location != t->location || s->offset > a || !s->color_serial ||
++                s->w < t->width)
++                continue;
++            u32 y = 0;
++            if (s->offset != a) {   /* a face further down a taller target */
++                if (!linear || !s->pitch || s->pitch != t->pitch || (a - s->offset) % s->pitch) continue;
++                y = (a - s->offset) / s->pitch;
++            }
++            if (y + t->height > s->h) continue;
++            for (u32 k = 0; k < n_targets; k++) if (target_slots[k] == i) return 0;
++            if (face[f] < 0 || s->color_serial > g.surfaces[face[f]].color_serial) {
++                face[f] = (int)i;
++                face_y[f] = y;
++            }
++        }
++        any |= face[f] >= 0;
++    }
++    if (!any) return 0;
++    eng_cube* c = NULL;
++    for (u32 i = 0; i < ENG_MAX_CUBES && !c; i++) {
++        eng_cube* e = &g.cubes[i];
++        if (e->handle && e->location == t->location && e->offset == t->offset &&
++            e->size == t->width && e->mips == mips && e->remap == (t->remap & 0xFFFFu) &&
++            e->format == t->format)
++            c = e;
++    }
++    if (!c) {   /* a free slot, else the least recently used */
++        for (u32 i = 0; i < ENG_MAX_CUBES; i++)
++            if (!c || !g.cubes[i].handle ||
++                (c->handle && g.cubes[i].last_use < c->last_use)) c = &g.cubes[i];
++        if (c->handle) g.be->texture_release(g.be->user, c->handle);
++        memset(c, 0, sizeof *c);
++        c->location = t->location; c->offset = t->offset; c->size = t->width; c->mips = mips;
++        c->remap = t->remap & 0xFFFFu; c->format = t->format;
++    }
++    c->last_use = g.frames;
++    u32 copy[6] = {0};
++    int stale = !c->handle;
++    for (u32 f = 0; f < 6; f++) {
++        if (face[f] < 0) continue;
++        g.surfaces[face[f]].last_use = g.frames;
++        if (g.surfaces[face[f]].color_serial != c->face_serial[f]) { copy[f] = g.surfaces[face[f]].handle; stale = 1; }
++    }
++    if (!stale) return c->handle;
++    {   /* PS3RECOMP_CUBE_DUMP=<dir>: the faces of the 40th refresh of a cube of
++         * 16+ texels, raw RGBA8, plus one line on what the texture asked for. */
++        static int n_refresh;
++        const char* dir = getenv("PS3RECOMP_CUBE_DUMP");
++        if (dir && t->width >= 16u && ++n_refresh == 40 && g.be->readback) {
++            g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_GUEST_REFERENCE);
++            for (u32 f = 0; f < 6; f++) {
++                if (face[f] < 0) continue;
++                const eng_surface* s = &g.surfaces[face[f]];
++                if (s->fmt != RSX_BE_FMT_R8G8B8A8) continue;
++                u8* raw = (u8*)malloc((size_t)s->w * s->h * 4u);
++                if (!raw) continue;
++                g.be->readback(g.be->user, s->handle, 0, 0, s->w, s->h, raw, s->w * 4u);
++                char path[1024];
++                snprintf(path, sizeof path, "%s/face%u_%ux%u.rgba", dir, f, s->w, s->h);
++                FILE* fp = fopen(path, "wb");
++                if (fp) { fwrite(raw, 1, (size_t)s->w * s->h * 4u, fp); fclose(fp); }
++                free(raw);
++            }
++            fprintf(stderr, "[cube-dump] 0x%08X fmt 0x%02X remap 0x%04X %ux%u mips %u pitch %u faces",
++                    t->offset, t->format, t->remap & 0xFFFFu, t->width, t->height, t->mipmaps, t->pitch);
++            for (u32 f = 0; f < 6; f++)
++                if (face[f] >= 0) fprintf(stderr, " [%u %ux%u p%u fmt %d]", f, g.surfaces[face[f]].w,
++                                          g.surfaces[face[f]].h, g.surfaces[face[f]].pitch,
++                                          (int)g.surfaces[face[f]].fmt);
++            fprintf(stderr, "\n");
++        }
++    }
++    u32 h = g.be->color_cube(g.be->user, c->handle, copy, face_y, c->size, mips, c->remap, t->format);
++    if (!h && c->handle) {   /* the faces changed format: start over */
++        g.be->texture_release(g.be->user, c->handle);
++        c->handle = 0;
++        memset(c->face_serial, 0, sizeof c->face_serial);
++        for (u32 f = 0; f < 6; f++) if (face[f] >= 0) copy[f] = g.surfaces[face[f]].handle;
++        h = g.be->color_cube(g.be->user, 0, copy, face_y, c->size, mips, c->remap, t->format);
++    }
++    if (!h) { memset(c, 0, sizeof *c); return 0; }
++    if (!c->handle) {
++        u32 n = 0;
++        for (u32 f = 0; f < 6; f++) n += face[f] >= 0;
++        fprintf(stderr, "[rsx-engine] cube from targets: %u:0x%08X %ux%u mips %u stride 0x%X faces %u\n",
++                t->location, t->offset, t->width, t->height, mips, stride, n);
++    }
++    c->handle = h;
++    for (u32 f = 0; f < 6; f++)
++        if (copy[f]) c->face_serial[f] = g.surfaces[face[f]].color_serial;
++    return h;
++}
++
++/* A swizzled cube with a border (format bit 3 clear) is stored with each level
++ * at the next power of two above its size plus two, the image centred in it,
++ * and each face padded to 128 bytes -- rsx_live_draw.c texture_source_span and
++ * its cube upload. GT5's 8x8 half-float car ambient cubes are these, 0x800
++ * bytes a face; read as plain 8x8 they landed on unwritten memory (NaNs, huge
++ * and negative values), the car paint's flat red, green and blue bands.
++ * Cached per address and re-uploaded when the bytes change. 0 when not one. */
++static u32 eng_border_pad(u32 v)
++{
++    u32 p = 1;
++    while (p < v + 2u) p <<= 1;
++    return p;
++}
++
++static u32 eng_bordered_cube(const rsx_dsp_texture* t)
++{
++    const u32 w = t->width;
++    if (!w || w != t->height || w > 2048u) return 0;
++    rsx_tex_level lv[RSX_MAX_TEXTURE_LEVELS];
++    const u32 nlv = rsx_texture_mip_chain(t->format, w, w, t->mipmaps, 0, lv);
++    if (!nlv || lv[0].tl.compressed || !lv[0].tl.bytes_per_texel) return 0;
++    const u32 bpp = lv[0].tl.bytes_per_texel;
++    u32 level_off[RSX_MAX_TEXTURE_LEVELS], face = 0;
++    for (u32 m = 0; m < nlv; m++) {
++        level_off[m] = face;
++        face += eng_border_pad(lv[m].w) * eng_border_pad(lv[m].h) * bpp;
++    }
++    face = (face + 127u) & ~127u;
++    const u8* src = eng_guest_ptr(NULL, t->location, t->offset, face * 6u);
++    if (!src) return 0;
++    u64 hash = 1469598103934665603ull;
++    for (u32 i = 0; i < face * 6u; i++) { hash ^= src[i]; hash *= 1099511628211ull; }
++    const u32 remap = t->remap & 0xFFFFu;
++    eng_cube* c = NULL;
++    for (u32 i = 0; i < ENG_MAX_CUBES && !c; i++) {
++        eng_cube* e = &g.bcubes[i];
++        if (e->handle && e->location == t->location && e->offset == t->offset && e->size == w &&
++            e->mips == nlv && e->remap == remap && e->format == t->format)
++            c = e;
++    }
++    if (c && c->face_serial[0] == hash) { c->last_use = g.frames; return c->handle; }
++    if (!c) {   /* a free slot, else the least recently used */
++        for (u32 i = 0; i < ENG_MAX_CUBES; i++)
++            if (!c || !g.bcubes[i].handle ||
++                (c->handle && g.bcubes[i].last_use < c->last_use)) c = &g.bcubes[i];
++        if (c->handle) g.be->texture_release(g.be->user, c->handle);
++        memset(c, 0, sizeof *c);
++        c->location = t->location; c->offset = t->offset; c->size = w; c->mips = nlv;
++        c->remap = remap; c->format = t->format;
++        c->handle = g.be->texture_create(g.be->user, eng_texfmt(lv[0].tl.fmt), w, w, nlv, 6u,
++                                         remap, t->format);
++        if (!c->handle) { memset(c, 0, sizeof *c); return 0; }
++    }
++    for (u32 f = 0; f < 6; f++)
++        for (u32 m = 0; m < nlv; m++) {
++            const u32 lw = lv[m].w, lh = lv[m].h;
++            const u32 pw = eng_border_pad(lw), ph = eng_border_pad(lh);
++            const u32 ox = (pw - lw) / 2u, oy = (ph - lh) / 2u;
++            const u32 l2w = rsx_log2_ceil(pw), l2h = rsx_log2_ceil(ph);
++            rsx_tex_layout ltl = lv[m].tl;
++            ltl.swizzled = 0;
++            ltl.row_bytes = lw * bpp;
++            const u32 out = ltl.dst_row_bytes * ltl.rows;
++            if (!eng_staging_reserve(out + lw * lh * bpp)) return c->handle;
++            u8* lin = g.tex_staging + out;
++            const u8* level_src = src + (size_t)f * face + level_off[m];
++            for (u32 y = 0; y < lh; y++)
++                for (u32 x = 0; x < lw; x++)
++                    memcpy(lin + ((size_t)y * lw + x) * bpp,
++                           level_src + (size_t)rsx_swizzle_offset(x + ox, y + oy, l2w, l2h) * bpp, bpp);
++            rsx_texture_decode(g.tex_staging, ltl.dst_row_bytes, lin, lw, lh, &ltl,
++                               rsx_texture_argb_is_rgba());
++            g.be->texture_upload(g.be->user, c->handle, f, m, lw, lh, g.tex_staging,
++                                 ltl.dst_row_bytes, ltl.rows);
++        }
++    c->face_serial[0] = hash;
++    c->last_use = g.frames;
++    return c->handle;
++}
++
+ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+                               u32 current_zslot, u32 tex_used,
+                               u32 textures[RSX_BE_MAX_TEXTURES],
+@@ -2492,6 +2708,57 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+          * target in Resistance: Fall of Man). Neither colour nor depth
+          * surfaces are looked up for it. */
+         const u32 base_fmt = t.format & RSX_TEX_FMT_BASE_MASK & ~(u32)RSX_TEX_FMT_UNNORM;
++        /* A cube unit never samples a colour target as a 2D image: the backend
++         * would bind its cube dummy (magenta GT5 car paint). Faces drawn as
++         * targets become a cube (color_cube); otherwise guest memory. */
++        if (t.cubemap) {
++            u32 cube = eng_cube_from_targets(&t, target_slots, n_targets);
++            if (!cube && t.border && !(t.format & RSX_TEX_FMT_LINEAR)) cube = eng_bordered_cube(&t);
++            {   /* PS3RECOMP_TEXLOG=1: each cube a unit samples, and where it comes from */
++                static int on = -1, n;
++                static u64 seen[64];
++                if (on < 0) on = getenv("PS3RECOMP_TEXLOG") != NULL;
++                const u64 key = ((u64)t.offset << 24) ^ ((u64)t.width << 8) ^ t.format ^ ((u64)u << 60);
++                int dup = 0;
++                for (int i = 0; i < n; i++) if (seen[i] == key) dup = 1;
++                if (on && !dup && n < 64) {
++                    seen[n++] = key;
++                    int surf = -1;
++                    for (u32 i = 0; i < g.n_surfaces; i++)
++                        if (g.surfaces[i].handle && g.surfaces[i].location == t.location &&
++                            g.surfaces[i].offset == t.offset) surf = (int)i;
++                    fprintf(stderr, "[texlog] cube unit %u %u:0x%08X fmt 0x%02X %ux%u mips %u pitch %u "
++                            "remap 0x%04X -> %s (target at offset: %d %ux%u)\n", u, t.location, t.offset,
++                            t.format, t.width, t.height, t.mipmaps, t.pitch, t.remap & 0xFFFFu,
++                            cube ? "targets" : "guest memory", surf,
++                            surf >= 0 ? g.surfaces[surf].w : 0, surf >= 0 ? g.surfaces[surf].h : 0);
++                    /* A half-float cube: each half's range over the guest bytes. */
++                    if ((t.format & 0x9Fu) == 0x9Au && !cube && t.width <= 64u) {
++                        const u32 bytes = t.width * t.height * 8u * 6u;
++                        const u8* p = eng_guest_ptr(NULL, t.location, t.offset, bytes);
++                        for (u32 c = 0; p && c < 4; c++) {
++                            float lo = 1e30f, hi = -1e30f;
++                            u32 inf = 0, nan = 0;
++                            for (u32 i = 0; i < bytes / 8u; i++) {
++                                const u16 h = (u16)((p[i * 8 + c * 2] << 8) | p[i * 8 + c * 2 + 1]);
++                                const u32 e = (h >> 10) & 0x1Fu, m = h & 0x3FFu;
++                                if (e == 31) { if (m) nan++; else inf++; continue; }
++                                float f = (float)((double)(e ? (u64)(1024u + m) << e : (u64)m << 1) /
++                                                  (1024.0 * 32768.0));
++                                if (h & 0x8000u) f = -f;
++                                if (f < lo) lo = f;
++                                if (f > hi) hi = f;
++                            }
++                            fprintf(stderr, "[texlog]   half %u: %g..%g, %u inf, %u nan\n", c, lo, hi, inf, nan);
++                        }
++                    }
++                }
++            }
++            textures[u] = cube ? cube
++                : eng_texture_slot(t.location, t.offset, t.format, t.width, t.height,
++                                   t.mipmaps, t.pitch, 1, t.remap & 0xFFFFu, 1u);
++            continue;
++        }
+         const int compressed = base_fmt == RSX_TEX_FMT_DXT1 ||
+                                base_fmt == RSX_TEX_FMT_DXT23 ||
+                                base_fmt == RSX_TEX_FMT_DXT45;
+@@ -2575,9 +2842,42 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+             continue;
+         }
+         if (sampled >= 0) {
++            eng_surface* ss = &g.surfaces[sampled];
++            u32 src = ss->handle;
++            /* Sampled as a texture smaller than the target: its UVs span the
++             * texture, so it gets a copy of that corner (color_region). */
++            /* As rsx_live_draw.c's surface_window: a pitch-linear texture with
++             * the target's own pitch, so its rows are the target's rows. GT5's
++             * title and race scenes are 1216x684 in a 2048x1080 target; sampled
++             * whole they came out shrunk into the top-left corner.
++             * PS3RECOMP_ENG_NO_REGION=1 samples the whole target as before. */
++            static int no_region = -1;
++            if (no_region < 0) no_region = getenv("PS3RECOMP_ENG_NO_REGION") != NULL;
++            if (g.be->color_region && !no_region &&
++                t.width && t.height && !t.cubemap && t.dimension != 3 &&
++                !(t.format & RSX_TEX_FMT_UNNORM) &&   /* texel coordinates already address it */
++                (t.format & RSX_TEX_FMT_LINEAR) && t.pitch == ss->pitch &&
++                (t.width < ss->w || t.height < ss->h)) {
++                if (!ss->region || ss->region_w != t.width || ss->region_h != t.height ||
++                    ss->region_serial != ss->color_serial) {
++                    const u32 copy = g.be->color_region(g.be->user, ss->handle, t.width, t.height);
++                    if (copy) {
++                        if (!ss->region || ss->region_w != t.width || ss->region_h != t.height) {
++                            static int n_log;
++                            if (n_log++ < 16)
++                                fprintf(stderr, "[rsx-engine] region: %ux%u of target 0x%08X %ux%u p%u\n",
++                                        t.width, t.height, ss->offset, ss->w, ss->h, ss->pitch);
++                        }
++                        if (ss->region) g.be->texture_release(g.be->user, ss->region);
++                        ss->region = copy; ss->region_w = t.width; ss->region_h = t.height;
++                        ss->region_serial = ss->color_serial;
++                    }
++                }
++                if (ss->region && ss->region_w == t.width && ss->region_h == t.height)
++                    src = ss->region;
++            }
+             const u32 view = g.be->surface_view
+-                ? g.be->surface_view(g.be->user, g.surfaces[sampled].handle,
+-                                     t.remap & 0xFFFFu, t.format)
++                ? g.be->surface_view(g.be->user, src, t.remap & 0xFFFFu, t.format)
+                 : 0;
+             textures[u] = view ? view : g.surfaces[sampled].handle;
+             continue;
+@@ -2598,6 +2898,42 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+                                        (int)t.cubemap, t.remap & 0xFFFFu,
+                                        (t.dimension == 3 && !t.cubemap) ? t.depth : 1u);
+     }
++    {   /* PS3RECOMP_TEX_DROP=<hex unit mask>: bind nothing on those units (the
++         * backend's dummy; PS3RECOMP_VK_GREY_DUMMY=1 makes it grey) -- which
++         * unit makes a wrong colour. */
++        static u32 drop = 0xFFFFFFFFu;
++        if (drop == 0xFFFFFFFFu) { const char* e = getenv("PS3RECOMP_TEX_DROP");
++                                   drop = e ? (u32)strtoul(e, NULL, 16) : 0u; }
++        for (u32 u = 0; drop && u < RSX_BE_MAX_TEXTURES; u++)
++            if ((drop >> u) & 1u) {   /* cube units only */
++                rsx_dsp_texture t;
++                rsx_dsp_get_texture(&g.rsx, u, &t);
++                if (t.cubemap) textures[u] = 0;
++            }
++    }
++    {   /* PS3RECOMP_TEXLOG=1: units left with nothing bound, once per kind. */
++        static int on = -1, n;
++        static u64 seen[64];
++        if (on < 0) on = getenv("PS3RECOMP_TEXLOG") != NULL;
++        for (u32 u = 0; on && u < RSX_BE_MAX_TEXTURES; u++) {
++            if (!((mask >> u) & 1u) || textures[u]) continue;
++            rsx_dsp_texture t;
++            rsx_dsp_get_texture(&g.rsx, u, &t);
++            const u64 key = ((u64)t.format << 40) ^ ((u64)t.width << 20) ^ t.height ^
++                            ((u64)t.cubemap << 60) ^ ((u64)t.dimension << 56);
++            int dup = 0;
++            for (int i = 0; i < n; i++) if (seen[i] == key) dup = 1;
++            if (dup || n >= 64) continue;
++            seen[n++] = key;
++            int surf = -1;
++            for (u32 i = 0; i < g.n_surfaces; i++)
++                if (g.surfaces[i].handle && g.surfaces[i].location == t.location &&
++                    g.surfaces[i].offset == t.offset) surf = (int)i;
++            fprintf(stderr, "[texlog] engine: unit %u unbound: fmt 0x%02X %ux%u dim %u cube %u mips %u "
++                    "pitch %u loc %u off 0x%08X surface %d\n", u, t.format, t.width, t.height,
++                    t.dimension, t.cubemap, t.mipmaps, t.pitch, t.location, t.offset, surf);
++        }
++    }
+     return mask;
+ }
+ 
+@@ -3022,10 +3358,120 @@ static void eng_log_rect_clear(const char* what, const u32 rc[4], u32 w, u32 h)
+                 what, rc[0], rc[1], rc[2], rc[3], w, h);
+ }
+ 
++/* ---- Watch mode: draw fewer frames while nobody is driving -------------------
++ * The same idea as the live D3D12 engine's watch mode (rsx_live_draw.c, ld_watch_skip), for the
++ * hosts that draw through this engine -- GT5's Android port first of all, where it is what lets a
++ * B-Spec race run to the finish on a phone with the screen dimmed or off. The game is untouched:
++ * every frame's commands still run, flips, fences, labels and readbacks as before; only the drawing
++ * of some frames is left out, and a frame that was left out is not presented, so the screen holds
++ * the last drawn one.
++ *   - hidden (the host says nothing is on screen: an Android app in the background, screen off):
++ *     nothing is drawn;
++ *   - watching: one game frame in LD_WATCH_DRAW (default 2) is drawn, the drawn phase moving on by
++ *     one every 64 frames, so passes the game spreads over alternate frames still all get drawn.
++ *     A pass (colour target + zeta) the game does not draw every frame -- a label texture, a cube
++ *     face in turn -- always runs, since later frames sample it.
++ * LD_WATCH=0 off, 1 on by itself after LD_WATCH_IDLE_S (default 10) seconds with no pad input (any
++ * input ends it), 2 always. rsx_draw_engine_watch_toggle() switches it on and off by hand. */
++extern unsigned long long cellPad_last_activity_ms(void);
++extern unsigned long long cellPad_now_ms(void);
++extern u32 cellGcm_flip_serial(void);
++static struct {
++    int mode, draw_n, manual, hidden, state, skip, track;
++    unsigned long long idle_ms, start, k, frames, left_out, kept, rep;
++    u32 frame;
++    void (*listener)(int state);
++} w = { .mode = -1, .draw_n = 2, .idle_ms = 10000, .frame = 1 };
++#define W_PASS_SLOTS 1024u
++static struct { u64 key; u32 frame, hot; } w_pass[W_PASS_SLOTS];
++
++/* 1 when the current draw or clear's pass was also drawn in the frame before this one. */
++static int w_pass_hot(void)
++{
++    rsx_dsp_surface sf;
++    rsx_dsp_get_surface(&g.rsx, &sf);
++    const u64 key = ((u64)((sf.color_location[0] << 31) | (sf.color_offset[0] & 0x7FFFFFFFu)) << 32) |
++                    (u64)((sf.zeta_location << 31) | (sf.zeta_offset & 0x7FFFFFFFu));
++    u32 h = (u32)((key * 0x9E3779B97F4A7C15ull) >> 54) & (W_PASS_SLOTS - 1u);
++    int spare = -1;
++    for (u32 probe = 0; probe < 16; probe++, h = (h + 1u) & (W_PASS_SLOTS - 1u)) {
++        if (w_pass[h].frame && w_pass[h].key == key) {
++            if (w_pass[h].frame != w.frame) {
++                w_pass[h].hot = w_pass[h].frame + 1u == w.frame;
++                w_pass[h].frame = w.frame;
++            }
++            return (int)w_pass[h].hot;
++        }
++        if (spare < 0 && (!w_pass[h].frame || w_pass[h].frame + 1u < w.frame)) spare = (int)h;
++    }
++    if (spare >= 0) { w_pass[spare].key = key; w_pass[spare].frame = w.frame; w_pass[spare].hot = 0; }
++    return 0;
++}
++
++static void w_frame_boundary(void)
++{
++    if (w.mode < 0) {
++        const char* e = getenv("LD_WATCH"); w.mode = e ? atoi(e) : 0;
++        e = getenv("LD_WATCH_DRAW"); if (e && atoi(e) >= 1) w.draw_n = atoi(e);
++        e = getenv("LD_WATCH_IDLE_S"); if (e && atoi(e) >= 0) w.idle_ms = (unsigned long long)atoi(e) * 1000ull;
++    }
++    const unsigned long long now = cellPad_now_ms(), last = cellPad_last_activity_ms();
++    if (!w.start) w.start = now;
++    const unsigned long long quiet_since = last ? last : w.start;
++    const int watching = w.manual || w.mode == 2 || (w.mode == 1 && now - quiet_since >= w.idle_ms);
++    const int state = w.hidden ? 2 : watching;
++    w.track = state != 0;
++    if (state != w.state) {
++        fprintf(stderr, "[watch] %s\n", state == 2 ? "hidden: nothing drawn" :
++                state ? "on: drawing fewer frames" : "off: drawing every frame");
++        w.state = state;
++        if (w.listener) w.listener(state);
++    }
++    w.frame++;
++    if (state == 2)     w.skip = 1;
++    else if (!watching) w.skip = 0;
++    else { w.k++; w.skip = ((w.k + w.k / 64u) % (unsigned long long)w.draw_n) != 0; }
++    w.frames++;
++    if (w.skip) w.left_out++;
++    if (!w.rep) w.rep = now;
++    if (now - w.rep >= 5000) {
++        if (w.left_out)
++            fprintf(stderr, "[watch] %llu of %llu game frames drawn; %llu draws and clears of passes "
++                            "not redrawn every frame run in the others\n",
++                    w.frames - w.left_out, w.frames, w.kept);
++        w.frames = w.left_out = w.kept = 0;
++        w.rep = now;
++    }
++}
++
++/* 1: leave the current draw or clear out (the first one after a flip decides for the frame). */
++static int w_leave_out(void)
++{
++    static u32 last;
++    const u32 s = cellGcm_flip_serial();
++    if (s != last) { last = s; w_frame_boundary(); }
++    if (!w.skip && !w.track) return 0;
++    const int hot = w_pass_hot();
++    if (!w.skip || w.state == 2) return w.skip;
++    if (hot) return 1;
++    w.kept++;
++    return 0;
++}
++
++void rsx_draw_engine_set_hidden(int hidden) { w.hidden = hidden != 0; }
++void rsx_draw_engine_watch_toggle(void)
++{
++    w.manual = !w.manual;
++    fprintf(stderr, "[watch] switched %s by hand\n", w.manual ? "on" : "off");
++}
++int  rsx_draw_engine_watch_state(void) { return w.state; }
++void rsx_draw_engine_set_watch_listener(void (*fn)(int state)) { w.listener = fn; }
++
+ static void sink_end(void* user, const rsx_dispatch* r)
+ {
+     (void)user; (void)r;
+     if (!g.ready || !dc.n_packets || !dc.fetch_ok) return;
++    if (w_leave_out()) return;
+     /* Mixed geometry sources have no defined concatenation here. Reject the
+      * whole group instead of drawing partial/misordered geometry. */
+     if (dc.n_immediate && (dc.n_arr || dc.n_idx || dc.inl_bytes ||
+@@ -3236,6 +3682,12 @@ static void sink_end(void* user, const rsx_dispatch* r)
+     if (zslot != ENG_INVALID && rs.depth_test && rs.depth_write) {
+         g.zdepths[zslot].had_write = 1;
+         eng_zdepth_wrote(zslot, &sf);
++    } else if (zslot != ENG_INVALID && rs.stencil_enable && (rs.s_write_mask & 0xFFu)) {
++        /* Stencil only: the zeta's bytes changed all the same, and a title
++         * may read them back as colour -- GT5 draws its text by inverting a
++         * stencil bit per glyph and samples the coverage from the stencil
++         * byte (depth_as_color, B). */
++        eng_zdepth_wrote(zslot, &sf);
+     }
+ }
+ 
+@@ -3243,6 +3695,7 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+ {
+     (void)user; (void)r;
+     if (!g.ready) return;
++    if (w_leave_out()) return;
+     u32 targets[RSX_BE_MAX_COLOR_TARGETS];
+     const u32 n_targets = eng_current_target_set(targets);
+     if (!n_targets) return;
+@@ -3340,6 +3793,8 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+             if (!partial) g.zdepths[zslot].had_write = 0;
+             g.zdepths[zslot].snapshot_valid = 0;
+             eng_zdepth_wrote(zslot, &sf);
++        } else if (mask & RSX_CLEAR_STENCIL) {
++            eng_zdepth_wrote(zslot, &sf);       /* the stencil byte changed */
+         }
+     }
+ }
+@@ -3360,9 +3815,12 @@ static u32 eng_present_surface(u32 buffer_id)
+     return eng_current_surface();
+ }
+ 
++void cellVideoOut_scanout_size(u32* w, u32* h);   /* cellVideoOut.c */
++
+ static void eng_present(u32 buffer_id)
+ {
+     if (!g.ready) return;
++    if (w.skip) return;   /* watch mode left this frame out: the screen keeps the last one */
+     const u32 target = eng_present_surface(buffer_id);
+     if (target == ENG_INVALID) return;
+     g.surfaces[target].last_use = g.frames;
+@@ -3377,7 +3835,14 @@ static void eng_present(u32 buffer_id)
+     }
+     pd_present(target);
+     g.last_present_surface = target;
+-    g.be->present(g.be->user, g.surfaces[target].handle);
++    /* The display shows the video mode's size from the top-left of the buffer,
++     * however large the buffer is. */
++    u32 sw = 0, sh = 0;
++    if (g.be->present_region) cellVideoOut_scanout_size(&sw, &sh);
++    if (sw && sh && (sw < g.surfaces[target].w || sh < g.surfaces[target].h))
++        g.be->present_region(g.be->user, g.surfaces[target].handle, sw, sh);
++    else
++        g.be->present(g.be->user, g.surfaces[target].handle);
+     g.frames++;
+     g.last_guest_draws = g.guest_draws;
+     g.guest_draws = 0;
+@@ -3466,12 +3931,17 @@ void rsx_draw_engine_shutdown(void)
+         if (g.pipelines[i].handle) g.be->pipeline_release(g.be->user, g.pipelines[i].handle);
+     for (u32 i = 0; i < g.n_surfaces; i++) {
+         if (g.surfaces[i].feedback) g.be->texture_release(g.be->user, g.surfaces[i].feedback);
++        if (g.surfaces[i].region) g.be->texture_release(g.be->user, g.surfaces[i].region);
+         if (g.surfaces[i].handle) g.be->color_target_release(g.be->user, g.surfaces[i].handle);
+     }
+     for (u32 i = 0; i < g.n_zdepths; i++) {
+         if (g.zdepths[i].conv) g.be->texture_release(g.be->user, g.zdepths[i].conv);
+         if (g.zdepths[i].handle) g.be->depth_target_release(g.be->user, g.zdepths[i].handle);
+     }
++    for (u32 i = 0; i < ENG_MAX_CUBES; i++) {
++        if (g.cubes[i].handle) g.be->texture_release(g.be->user, g.cubes[i].handle);
++        if (g.bcubes[i].handle) g.be->texture_release(g.be->user, g.bcubes[i].handle);
++    }
+     if (g.ready && g.be->shutdown) g.be->shutdown(g.be->user);
+ 
+     rsx_draw_engine_set_guest_memory(NULL, NULL);
+diff --git a/libs/video/rsx_draw_engine.h b/libs/video/rsx_draw_engine.h
+index a25ecc29..b2fd6ed1 100644
+--- a/libs/video/rsx_draw_engine.h
++++ b/libs/video/rsx_draw_engine.h
+@@ -252,6 +252,25 @@ typedef struct rsx_draw_backend {
+      * engine owns the returned handle and releases it with texture_release.
+      * 0 rejects the consuming draw; NULL retains the legacy guest-upload route. */
+     u32 (*color_snapshot)(void* user, u32 surface);
++    /* Optional. A copy of the top-left w x h of a colour target, as a COLOR
++     * object of that size, made in command order: a title that renders into
++     * a big target and samples it as a smaller texture (GT5 draws its 3D
++     * scene into the corner of a 2048x1080 surface) reads it with UVs over
++     * the texture's own size, which a view of the whole surface would shrink
++     * into the corner. The engine owns the handle. 0 when it cannot. */
++    u32 (*color_region)(void* user, u32 surface, u32 w, u32 h);
++    /* Optional. A cube texture whose six faces are colour targets: GT5 draws
++     * its reflection cube one face at a time, each face a size x size target
++     * with its mip chain in the rows below it (size/2 at row size, and so on).
++     * Level m of face f is copied from faces[f] (0 = leave that face as it
++     * is), starting at row face_y[f] (faces stacked in one taller target),
++     * in command order. `into` 0 makes a new cube (sampled through the
++     * crossbar remap/rsx_format, like surface_view); otherwise the copies
++     * refresh `into`, which must be a cube this hook made with the same size,
++     * levels and face format, or it returns 0. The engine owns the handle and
++     * releases it with texture_release. 0 when it cannot. */
++    u32 (*color_cube)(void* user, u32 into, const u32 faces[6], const u32 face_y[6], u32 size,
++                      u32 mips, u32 remap, u32 rsx_format);
+ 
+     /* Optional. 3D textures (SET_TEXTURE_FORMAT dimension 3, CONTROL3 depth):
+      * a volume of `depth` slices per level, each slice one upload of decoded
+@@ -282,6 +301,12 @@ typedef struct rsx_draw_backend {
+      * through guest memory. */
+     u32  (*depth_as_color)(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt);
+ 
++    /* Optional. present, limited to the top-left w x h of the surface: the
++     * display buffer the guest flipped, where the surface at its address is
++     * larger (GT5 renders into a 2048x1080 target and scans out 1280x720 of
++     * it). NULL presents the whole surface. */
++    void (*present_region)(void* user, u32 surface, u32 w, u32 h);
++
+     /* Optional, both or neither: clear_color and clear_depth_stencil limited
+      * to the rectangle (x, y, w, h) of the target, in the engine's pixels
+      * (the sample grid of an antialiased surface), w and h never 0. RSX
+@@ -319,6 +344,14 @@ void rsx_draw_engine_set_guest_memory(rsx_vertex_guest_ptr_fn reader, void* user
+ int  rsx_draw_engine_init(u32 width, u32 height);
+ void rsx_draw_engine_shutdown(void);
+ 
++/* Watch mode (see rsx_draw_engine.c): fewer frames drawn while nobody is driving, none while the
++ * host has nothing on screen. set_hidden: the host's window is not visible (an Android app in the
++ * background). The listener hears every change of state: 0 off, 1 watching, 2 hidden. */
++void rsx_draw_engine_set_hidden(int hidden);
++void rsx_draw_engine_watch_toggle(void);
++int  rsx_draw_engine_watch_state(void);
++void rsx_draw_engine_set_watch_listener(void (*fn)(int state));
++
+ /* One FIFO method, with its subchannel bits still on: the engine masks them
+  * out itself, as rsx_live_draw_method (6902-6976) does, because a title whose
+  * SPU-built command lists bind NV4097 to another subchannel would otherwise
+diff --git a/libs/video/rsx_shader_msl.h b/libs/video/rsx_shader_msl.h
+index 1c64c5a4..c3484e84 100644
+--- a/libs/video/rsx_shader_msl.h
++++ b/libs/video/rsx_shader_msl.h
+@@ -35,6 +35,8 @@ extern "C" {
+ 
+ #define RSX_SHADER_STAGE_VERTEX   0
+ #define RSX_SHADER_STAGE_FRAGMENT 1
++/* Backend helper passes only (rsx_hlsl_to_spirv; the MSL path has none). */
++#define RSX_SHADER_STAGE_COMPUTE  2
+ 
+ /* 1 when the translator was built with glslang and spirv-cross, 0 when the
+  * stub is in. A backend asks this once and picks its shader path. */
+diff --git a/libs/video/rsx_shader_spirv.cpp b/libs/video/rsx_shader_spirv.cpp
+index 4aa4a176..5aa8f658 100644
+--- a/libs/video/rsx_shader_spirv.cpp
++++ b/libs/video/rsx_shader_spirv.cpp
+@@ -70,8 +70,9 @@ int translate(const char* hlsl, int stage, std::vector<unsigned int>& spirv,
+         return -1;
+     }
+ 
+-    const EShLanguage lang = (stage == RSX_SHADER_STAGE_VERTEX) ? EShLangVertex
+-                                                                : EShLangFragment;
++    const EShLanguage lang = (stage == RSX_SHADER_STAGE_VERTEX)  ? EShLangVertex
++                           : (stage == RSX_SHADER_STAGE_COMPUTE) ? EShLangCompute
++                                                                 : EShLangFragment;
+     const EShMessages msgs =
+         (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules | EShMsgReadHlsl);
+ 
+@@ -237,7 +238,8 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
+         put_log(log, log_size, "bad arguments", nullptr);
+         return -1;
+     }
+-    if (stage != RSX_SHADER_STAGE_VERTEX && stage != RSX_SHADER_STAGE_FRAGMENT) {
++    if (stage != RSX_SHADER_STAGE_VERTEX && stage != RSX_SHADER_STAGE_FRAGMENT &&
++        stage != RSX_SHADER_STAGE_COMPUTE) {
+         put_log(log, log_size, "unknown shader stage", nullptr);
+         return -1;
+     }
+diff --git a/libs/video/rsx_texture_layout.c b/libs/video/rsx_texture_layout.c
+index 51a30a23..51b84f23 100644
+--- a/libs/video/rsx_texture_layout.c
++++ b/libs/video/rsx_texture_layout.c
+@@ -259,7 +259,19 @@ static void decode_texel(const rsx_tex_layout* tl, const u8* s, u8* d,
+     case RSX_TEXFMT_R16:             swap_components(d, s, 1, 2); return;
+     case RSX_TEXFMT_R16G16:
+     case RSX_TEXFMT_R16G16F:         swap_components(d, s, 2, 2); return;
+-    case RSX_TEXFMT_R16G16B16A16F:   swap_components(d, s, 4, 2); return;
++    case RSX_TEXFMT_R16G16B16A16F:
++        /* Halves X,Y,Z,W = R,G,B,A. Infinities and NaNs are made finite, as
++         * rsx_live_draw.c's fp16_texel_to_host does: GT5 writes +inf alpha
++         * into its 8x8 ambient cube, and filtering spread it over whole car
++         * panels as flat red, green and blue. Alpha becomes 1.0, colour the
++         * largest finite half of its sign. */
++        for (u32 c = 0; c < 4; c++) {
++            u16 h = (u16)((s[c * 2] << 8) | s[c * 2 + 1]);
++            if ((h & 0x7C00u) == 0x7C00u) h = c == 3 ? 0x3C00u : (u16)((h & 0x8000u) | 0x7BFFu);
++            d[c * 2] = (u8)h;
++            d[c * 2 + 1] = (u8)(h >> 8);
++        }
++        return;
+     case RSX_TEXFMT_R32F:            swap_components(d, s, 1, 4); return;
+     case RSX_TEXFMT_R32G32B32A32F:   swap_components(d, s, 4, 4); return;
+     default:
+diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
+index db64302e..8d7fd7aa 100644
+--- a/libs/video/rsx_vulkan_backend.c
++++ b/libs/video/rsx_vulkan_backend.c
+@@ -38,7 +38,9 @@
+  * with spaces.
+  */
+ 
+-#ifndef _WIN32
++/* Windows builds it only on request (PS3RECOMP_RSX_VULKAN): GT5's PC test copy
++ * of its Android renderer, GT5/android/pc_vulkan.ps1. */
++#if !defined(_WIN32) || defined(PS3RECOMP_RSX_VULKAN)
+ 
+ #define VK_NO_PROTOTYPES
+ #include <vulkan/vulkan.h>
+@@ -58,8 +60,21 @@
+ #include <SDL2/SDL.h>
+ #include <SDL2/SDL_vulkan.h>
+ 
++#ifdef _WIN32
++/* No pthreads or dlopen on Windows: SDL's mutex and library loader stand in. */
++#define pthread_mutex_t             SDL_mutex*
++#define pthread_mutex_init(m, a)    (*(m) = SDL_CreateMutex(), 0)
++#define pthread_mutex_destroy(m)    SDL_DestroyMutex(*(m))
++#define pthread_mutex_lock(m)       SDL_LockMutex(*(m))
++#define pthread_mutex_unlock(m)     SDL_UnlockMutex(*(m))
++#define dlopen(name, flags)         SDL_LoadObject(name)
++#define dlsym(lib, name)            SDL_LoadFunction((lib), (name))
++#define dlclose(lib)                SDL_UnloadObject(lib)
++#define dlerror()                   SDL_GetError()
++#else
+ #include <dlfcn.h>
+ #include <pthread.h>
++#endif
+ #include <stddef.h>
+ #include <stdint.h>
+ #include <stdio.h>
+@@ -101,7 +116,8 @@
+     X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdDraw) \
+     X(vkCmdSetStencilReference) X(vkCmdSetDepthBounds) \
+     X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) \
+-    X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCmdBlitImage)
++    X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCmdBlitImage) \
++    X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkCmdClearAttachments)
+ /* Window-system entry points, loaded only when a window was requested, so a
+  * headless run never depends on a driver that can present. */
+ #define VK_WSI_INSTANCE_FNS(X) \
+@@ -214,6 +230,7 @@ typedef struct vk_state {
+     int              eng_active;      /* the register-file engine drives us */
+     int              bc_ok;           /* textureCompressionBC enabled       */
+     int              depth_bounds_ok; /* depthBounds enabled                */
++    int              depth_clamp_ok;  /* depthClamp enabled: no near/far clipping */
+     int              indep_blend_ok;  /* independentBlend: per-target MRT state */
+     u32              max_dim;         /* maxImageDimension2D of the device  */
+     int              windowed;
+@@ -235,6 +252,7 @@ typedef struct vk_state {
+     u32              presented;
+     const char*      dump_path;
+     u32              dump_every;       /* write every nth presented frame */
++    int              no_readback;      /* PS3RECOMP_VK_NO_READBACK: window only, no host copy */
+ } vk_state;
+ 
+ static vk_state s_vk;
+@@ -251,7 +269,11 @@ static vk_state s_vk;
+  * -------------------------------------------------------------------------*/
+ static int vk_load_library(void)
+ {
++#ifdef _WIN32
++    static const char* names[] = { "vulkan-1.dll" };
++#else
+     static const char* names[] = { "libvulkan.so.1", "libvulkan.so" };
++#endif
+     for (size_t i = 0; i < sizeof names / sizeof names[0] && !s_vk.lib; i++)
+         s_vk.lib = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
+     if (!s_vk.lib) {
+@@ -445,6 +467,30 @@ static int vk_create_image(vk_image* im, VkFormat fmt, u32 w, u32 h,
+     return vk_create_image_levels(im, fmt, w, h, 1, usage, aspect);
+ }
+ 
++/* VK_SYNC_STATS=1: every 5 s, which submit-and-wait call sites (by source
++ * line) ran how often and how long they waited for the GPU. */
++#define VK_SYNC_LINES 8192
++static struct { int on; u64 t0; u32 n[VK_SYNC_LINES]; u64 ticks[VK_SYNC_LINES]; } s_sync = { -1 };
++enum { VS_QUEUE_SUBMIT, VS_PRESENT_FENCE_WAIT, VS_ENG_PRESENT, VS_PRESENT_FINISH, VS_PUMP, VS_DRAW, VS_BIND_TEXTURES, VS_BIND_TARGETS, VS_TEXTURE_CREATE, VS_TEXTURE_UPLOAD, VS_COLOR_SNAPSHOT, VS_DEPTH_SNAPSHOT, VS_READBACK, VS_DEPTH_READBACK, VS_DEPTH_AS_COLOR, VS_DESTROY_IMAGE, VS_COUNT };
++static const char* const s_vs_name[VS_COUNT] = { "queue_submit", "present_fence_wait", "eng_present", "present_finish", "pump", "draw", "bind_textures", "bind_targets", "texture_create", "texture_upload", "color_snapshot", "depth_snapshot", "readback", "depth_readback", "depth_as_color", "destroy_image" };
++static u64 s_vs_ticks[VS_COUNT];
++static u32 s_vs_n[VS_COUNT];
++static int vk_sync_on(void)
++{
++    if (s_sync.on < 0) s_sync.on = getenv("VK_SYNC_STATS") ? 1 : 0;
++    return s_sync.on;
++}
++/* VK_TIME(VS_x) at the top of a function adds its whole run to slot x. */
++typedef struct { int id; u64 t; } vk_scope;
++static void vk_scope_end(vk_scope* sc)
++{
++    if (!sc->t) return;
++    __atomic_add_fetch(&s_vs_ticks[sc->id], SDL_GetPerformanceCounter() - sc->t, __ATOMIC_RELAXED);
++    __atomic_add_fetch(&s_vs_n[sc->id], 1, __ATOMIC_RELAXED);
++}
++#define VK_TIME(id) vk_scope _vk_scope __attribute__((cleanup(vk_scope_end))) = \
++    { (id), vk_sync_on() ? SDL_GetPerformanceCounter() : 0 }
++
+ static void vk_present_wait_gpu(void);
+ 
+ /* VK_DRAW_BATCH (vk_eng_draw): draws recorded into s_vk.cmd and not yet
+@@ -452,7 +498,8 @@ static void vk_present_wait_gpu(void);
+  * results flushes them first, so everything else keeps the invariant that
+  * all earlier work has completed. */
+ static u32 s_eb_pending;
+-static void vk_eng_flush(void);
++static void vk_eng_flush_at(int line);   /* line: who forced it (VK_SYNC_STATS) */
++#define vk_eng_flush() vk_eng_flush_at(__LINE__)
+ static int vk_eb_active(void);       /* batching decided on and on */
+ static u32 vk_eb_max(void);
+ static void vk_eb_recorded(void);   /* one more command in the open batch */
+@@ -460,8 +507,40 @@ static void vk_eb_release(void);    /* engine shutdown: rings and pool */
+ static int vk_eb_upload(VkImage img, VkBufferImageCopy* region, const void* src, size_t tight,
+                         u32 rows, u32 row_bytes);   /* -2: not batched, do it the old way */
+ 
++/* Images and views released while a batch is still open: kept here until the
++ * next submission has been waited on (every submission is), instead of a
++ * flush and a wait for each. A feedback copy or a depth-as-colour texture is
++ * released at every refresh, several times a frame. */
++#define VK_GRAVE_MAX 256
++static vk_image s_grave[VK_GRAVE_MAX];
++static u32 s_grave_n;
++static VkFramebuffer s_grave_fb[VK_GRAVE_MAX];   /* rect clears' one-off framebuffers */
++static u32 s_grave_fb_n;
++static void vk_grave_drain(void)
++{
++    for (u32 i = 0; i < s_grave_fb_n; i++) pvkDestroyFramebuffer(s_vk.device, s_grave_fb[i], NULL);
++    s_grave_fb_n = 0;
++    if (!s_grave_n) return;
++    int img = 0;
++    for (u32 i = 0; i < s_grave_n; i++) img |= s_grave[i].img != VK_NULL_HANDLE;
++    if (img) vk_present_wait_gpu();      /* never under a present's copy */
++    for (u32 i = 0; i < s_grave_n; i++) {
++        vk_image* g = &s_grave[i];
++        if (g->view) pvkDestroyImageView(s_vk.device, g->view, NULL);
++        if (g->img)  pvkDestroyImage(s_vk.device, g->img, NULL);
++        if (g->mem)  pvkFreeMemory(s_vk.device, g->mem, NULL);
++    }
++    s_grave_n = 0;
++}
++
+ static void vk_destroy_image(vk_image* im)
+ {
++    VK_TIME(VS_DESTROY_IMAGE);
++    if (s_eb_pending && s_grave_n < VK_GRAVE_MAX) {
++        s_grave[s_grave_n++] = *im;
++        memset(im, 0, sizeof *im);
++        return;
++    }
+     if (s_eb_pending) vk_eng_flush();
+     /* Never under a present's copy that may still read it. */
+     if (im->img) vk_present_wait_gpu();
+@@ -551,6 +630,7 @@ static void vk_invalidate(vk_buffer* b)
+  * -------------------------------------------------------------------------*/
+ static VkResult vk_queue_submit(const VkSubmitInfo* si, VkFence fence)
+ {
++    VK_TIME(VS_QUEUE_SUBMIT);
+     pthread_mutex_lock(&s_vk.queue_mu);
+     const VkResult r = pvkQueueSubmit(s_vk.queue, 1, si, fence);
+     pthread_mutex_unlock(&s_vk.queue_mu);
+@@ -575,8 +655,25 @@ static void vk_device_idle(void)
+ 
+ /* A full execution and memory dependency on everything submitted before
+  * this command buffer, the present's copy included. */
++/* The render pass the open batch is still inside (vk_eng_draw). Consecutive
++ * batched draws into the same targets share one pass with no barrier between
++ * them: rasterization order already orders their blending and depth. A tiling
++ * GPU (every phone) loads and stores the whole target around each pass, so a
++ * pass per draw cost it the frame's bytes twice for every draw. Anything else
++ * recorded on s_vk.cmd -- a barrier, a copy, a clear, the submit -- ends it
++ * first (vk_cmd_after_everything, vk_barrier_image_on, vk_submit_and_wait_at).
++ * PS3RECOMP_VK_PASS_PER_DRAW=1 goes back to a pass per draw. */
++static struct { int open; VkRenderPass rp; VkFramebuffer fb; u32 w, h; } s_rp;
++static void vk_rp_close(void)
++{
++    if (!s_rp.open) return;
++    pvkCmdEndRenderPass(s_vk.cmd);
++    s_rp.open = 0;
++}
++
+ static void vk_cmd_after_everything(VkCommandBuffer cb)
+ {
++    if (cb == s_vk.cmd) vk_rp_close();
+     VkMemoryBarrier mb = { .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                            .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+                            .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT };
+@@ -584,9 +681,9 @@ static void vk_cmd_after_everything(VkCommandBuffer cb)
+                           VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
+ }
+ 
+-static int vk_begin(void)
++static int vk_begin_at(int line)
+ {
+-    if (s_eb_pending) vk_eng_flush();
++    if (s_eb_pending) vk_eng_flush_at(line);
+     VK_CHECK(pvkResetCommandBuffer(s_vk.cmd, 0), "vkResetCommandBuffer");
+     VkCommandBufferBeginInfo bi = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                                     .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
+@@ -597,23 +694,59 @@ static int vk_begin(void)
+     if (s_vk.present_order) { vk_cmd_after_everything(s_vk.cmd); s_vk.present_order = 0; }
+     return 0;
+ }
++#define vk_begin() vk_begin_at(__LINE__)
++
++static void vk_sync_report(void)
++{
++    const u64 now = SDL_GetPerformanceCounter(), hz = SDL_GetPerformanceFrequency();
++    if (!s_sync.t0) { s_sync.t0 = now; return; }
++    if (now - s_sync.t0 < 5 * hz) return;
++    u64 total = 0; u32 calls = 0;
++    for (int i = 0; i < VK_SYNC_LINES; i++) { total += s_sync.ticks[i]; calls += s_sync.n[i]; }
++    VK_LOG("sync: %u waits, %.0f ms waiting in %.1f s\n", calls, total * 1000.0 / hz,
++           (now - s_sync.t0) / (double)hz);
++    for (int k = 0; k < 6; k++) {
++        int best = -1;
++        for (int i = 0; i < VK_SYNC_LINES; i++)
++            if (s_sync.n[i] && (best < 0 || s_sync.ticks[i] > s_sync.ticks[best])) best = i;
++        if (best < 0) break;
++        VK_LOG("sync:   line %d: %u waits, %.1f ms\n", best, s_sync.n[best],
++               s_sync.ticks[best] * 1000.0 / hz);
++        s_sync.n[best] = 0; s_sync.ticks[best] = 0;
++    }
++    for (int i = 0; i < VS_COUNT; i++)
++        if (s_vs_n[i]) VK_LOG("sync:   %-18s %6u calls, %8.1f ms\n", s_vs_name[i], s_vs_n[i],
++                               s_vs_ticks[i] * 1000.0 / hz);
++    memset(s_vs_n, 0, sizeof s_vs_n); memset(s_vs_ticks, 0, sizeof s_vs_ticks);
++    memset(s_sync.n, 0, sizeof s_sync.n); memset(s_sync.ticks, 0, sizeof s_sync.ticks);
++    s_sync.t0 = now;
++}
+ 
+-static int vk_submit_and_wait(void)
++static int vk_submit_and_wait_at(int line)
+ {
++    vk_rp_close();
+     VK_CHECK(pvkEndCommandBuffer(s_vk.cmd), "vkEndCommandBuffer");
+     VkSubmitInfo si = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                         .commandBufferCount = 1, .pCommandBuffers = &s_vk.cmd };
+     VK_CHECK(pvkResetFences(s_vk.device, 1, &s_vk.fence), "vkResetFences");
++    const u64 t = vk_sync_on() ? SDL_GetPerformanceCounter() : 0;
+     VK_CHECK(vk_queue_submit(&si, s_vk.fence), "vkQueueSubmit");
+     VK_CHECK(pvkWaitForFences(s_vk.device, 1, &s_vk.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
++    vk_grave_drain();                    /* nothing earlier can still use them */
++    if (s_sync.on && line >= 0 && line < VK_SYNC_LINES) {
++        s_sync.n[line]++; s_sync.ticks[line] += SDL_GetPerformanceCounter() - t;
++        vk_sync_report();
++    }
+     return 0;
+ }
++#define vk_submit_and_wait() vk_submit_and_wait_at(__LINE__)
+ 
+ /* Order this command buffer's use of an image after everything submitted
+  * before it; from UNDEFINED it is also the one-time move to GENERAL. */
+ static void vk_barrier_image_on(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect,
+                                 VkImageLayout old_layout)
+ {
++    if (cb == s_vk.cmd) vk_rp_close();
+     VkImageMemoryBarrier b = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+         .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+@@ -963,7 +1096,9 @@ static int vk_create_pipeline_objects(void)
+     /* A 1x1 magenta dummy keeps the descriptor valid before any bind --
+      * the same "not bound" colour the null backend's sampler returns. */
+     static const u8 magenta[4] = { 0xFF, 0x00, 0xFF, 0xFF };
+-    if (vk_upload_texture(&s_vk.dummy, magenta, 1, 1)) return -1;
++    static const u8 grey[4] = { 0x80, 0x80, 0x80, 0xFF };   /* PS3RECOMP_VK_GREY_DUMMY=1 */
++    if (vk_upload_texture(&s_vk.dummy, getenv("PS3RECOMP_VK_GREY_DUMMY") ? grey : magenta, 1, 1))
++        return -1;
+     vk_write_texture_descriptor();
+     return 0;
+ }
+@@ -1821,6 +1956,19 @@ static int vk_create_swapchain(void)
+         if (ext.height > caps.maxImageExtent.height) ext.height = caps.maxImageExtent.height;
+     }
+     if (!ext.width || !ext.height) { VK_LOG("window has no drawable area\n"); return -1; }
++    VkSurfaceTransformFlagBitsKHR pre = caps.currentTransform;
++#if defined(__ANDROID__)
++    /* A phone held sideways reports its extent the way the panel is built (portrait) and a 90 or
++     * 270 degree transform. The frame is blitted unrotated, so ask for no pre-rotation (the
++     * compositor turns it) and size the images the way the screen is held. */
++    if (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) {
++        if (caps.currentTransform & (VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR |
++                                     VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR)) {
++            const u32 t = ext.width; ext.width = ext.height; ext.height = t;
++        }
++        pre = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
++    }
++#endif
+ 
+     u32 count = caps.minImageCount + 1;
+     if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
+@@ -1841,7 +1989,7 @@ static int vk_create_swapchain(void)
+         .imageExtent = ext, .imageArrayLayers = 1,
+         .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+-        .preTransform = caps.currentTransform, .compositeAlpha = alpha,
++        .preTransform = pre, .compositeAlpha = alpha,
+         .presentMode = VK_PRESENT_MODE_FIFO_KHR,   /* the one mode every driver has */
+         .clipped = VK_TRUE, .oldSwapchain = old,
+     };
+@@ -1868,25 +2016,101 @@ static int vk_create_swapchain(void)
+ 
+     s_vk.sc_extent = ext;
+     s_vk.sc_count = n;
+-    VK_LOG("window swapchain %ux%u, %u images, format %d\n", ext.width, ext.height, n, (int)fmt.format);
++    VK_LOG("window swapchain %ux%u, %u images, format %d (surface %ux%u, transform 0x%X)\n",
++           ext.width, ext.height, n, (int)fmt.format, caps.currentExtent.width,
++           caps.currentExtent.height, (unsigned)caps.currentTransform);
+     return 0;
+ }
+ 
++#if defined(__ANDROID__)
++/* ---------------------------------------------------------------------------
++ * Android: the app's window surface goes away whenever the app leaves the screen (home button,
++ * screen off) and a new one comes when it is back. The game keeps running in between -- a B-Spec
++ * race finishes with the screen off -- so the swapchain and surface are let go and made again on
++ * the new window instead of the window being dropped for good. SDL tells us from the UI thread
++ * (an event watch); the thread that presents acts on it, between presents.
++ * -------------------------------------------------------------------------*/
++static int s_vk_bg_req;      /* written by the event watch: 1 = in the background */
++static int s_vk_bg;          /* what the presenting thread last acted on */
++static unsigned s_vk_fg_tries;
++
++static int SDLCALL vk_app_events(void* user, SDL_Event* e)
++{
++    (void)user;
++    if (e->type == SDL_APP_WILLENTERBACKGROUND || e->type == SDL_APP_DIDENTERBACKGROUND)
++        __atomic_store_n(&s_vk_bg_req, 1, __ATOMIC_RELEASE);
++    else if (e->type == SDL_APP_DIDENTERFOREGROUND)
++        __atomic_store_n(&s_vk_bg_req, 0, __ATOMIC_RELEASE);
++    return 1;
++}
++
++static void vk_surface_release(void)
++{
++    vk_device_idle();
++    if (s_vk.swapchain) pvkDestroySwapchainKHR(s_vk.device, s_vk.swapchain, NULL);
++    if (s_vk.surface) pvkDestroySurfaceKHR(s_vk.instance, s_vk.surface, NULL);
++    s_vk.swapchain = VK_NULL_HANDLE;
++    s_vk.surface = VK_NULL_HANDLE;
++    s_vk.sc_count = 0;
++}
++
++/* Bring the swapchain in line with the app's state. Returns 1 while there is nothing to present to. */
++static int vk_android_surface_sync(void)
++{
++    if (!s_vk.windowed || !s_vk.window) return 1;
++    const int req = __atomic_load_n(&s_vk_bg_req, __ATOMIC_ACQUIRE);
++    if (req && !s_vk_bg) {
++        vk_surface_release();
++        s_vk_bg = 1;
++        s_vk_fg_tries = 0;
++        rsx_draw_engine_set_hidden(1);
++        VK_LOG("app in the background: not drawing, the game keeps running\n");
++    }
++    if (!req && s_vk_bg) {
++        /* The new window may not be there yet when the app comes back: try again every frame. */
++        if (!s_vk.surface && !SDL_Vulkan_CreateSurface(s_vk.window, s_vk.instance, &s_vk.surface)) {
++            if (s_vk_fg_tries++ == 0) VK_LOG("no window surface yet (%s); retrying\n", SDL_GetError());
++            s_vk.surface = VK_NULL_HANDLE;
++            return 1;
++        }
++        VkBool32 can = VK_FALSE;
++        pvkGetPhysicalDeviceSurfaceSupportKHR(s_vk.phys, s_vk.queue_family, s_vk.surface, &can);
++        if (!can || vk_create_swapchain()) {
++            if (s_vk_fg_tries++ == 0) VK_LOG("the window cannot be presented to yet; retrying\n");
++            vk_surface_release();
++            return 1;
++        }
++        s_vk_bg = 0;
++        rsx_draw_engine_set_hidden(0);
++        VK_LOG("app back on screen: drawing again\n");
++    }
++    return s_vk_bg;
++}
++#endif
++
+ static void vk_swapchain_lost(void)
+ {
+     vk_device_idle();
++#if defined(__ANDROID__)
++    /* Usually the app leaving the screen; the next sync makes a new surface and swapchain. */
++    if (vk_create_swapchain()) { vk_surface_release(); s_vk_bg = 1; s_vk_fg_tries = 0; }
++#else
+     if (vk_create_swapchain()) vk_window_drop("the swapchain could not be recreated");
++#endif
+ }
+ 
+ /* Blit the offscreen target into the next swapchain image and present it. */
+ static void vk_present_window(void)
+ {
++#if defined(__ANDROID__)
++    if (vk_android_surface_sync()) return;
++#endif
+     if (!s_vk.windowed || !s_vk.swapchain) return;
+ 
+     u32 idx = 0;
+     VkResult r = pvkAcquireNextImageKHR(s_vk.device, s_vk.swapchain, UINT64_MAX,
+                                         s_vk.sem_acquire, VK_NULL_HANDLE, &idx);
+-    if (r == VK_ERROR_OUT_OF_DATE_KHR) { vk_swapchain_lost(); return; }
++    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) { vk_swapchain_lost(); return; }
+     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
+         VK_LOG("vkAcquireNextImageKHR failed (VkResult %d)\n", (int)r); return;
+     }
+@@ -1946,14 +2170,47 @@ static void vk_present_window(void)
+         .swapchainCount = 1, .pSwapchains = &s_vk.swapchain, .pImageIndices = &idx,
+     };
+     r = vk_queue_present(&pi);
++#if defined(__ANDROID__)
++    /* SUBOPTIMAL is Android saying either that the frame was not pre-rotated -- the choice made in
++     * vk_create_swapchain, nothing to do -- or that the window changed shape since the swapchain was
++     * made (the app turned to landscape after it started). Only the second needs a new swapchain:
++     * compare the size one made now would get. */
++    if (r == VK_SUBOPTIMAL_KHR) {
++        VkSurfaceCapabilitiesKHR caps;
++        if (pvkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_vk.phys, s_vk.surface, &caps) == VK_SUCCESS &&
++            caps.currentExtent.width != 0xFFFFFFFFu) {
++            VkExtent2D e = caps.currentExtent;
++            if (caps.currentTransform & (VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR |
++                                         VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR)) {
++                const u32 t = e.width; e.width = e.height; e.height = t;
++            }
++            if (e.width != s_vk.sc_extent.width || e.height != s_vk.sc_extent.height) {
++                VK_LOG("window is %ux%u now, swapchain %ux%u: making a new one\n", e.width, e.height,
++                       s_vk.sc_extent.width, s_vk.sc_extent.height);
++                vk_swapchain_lost();
++            }
++        }
++        r = VK_SUCCESS;
++    }
++    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) vk_swapchain_lost();
++#else
+     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) vk_swapchain_lost();
++#endif
+     else if (r != VK_SUCCESS) VK_LOG("vkQueuePresentKHR failed (VkResult %d)\n", (int)r);
+ }
+ 
+ static void vk_dump_ppm(const unsigned char* rgba)
+ {
+-    FILE* f = fopen(s_vk.dump_path, "wb");
+-    if (!f) { VK_LOG("cannot open %s for the frame dump\n", s_vk.dump_path); return; }
++    /* A path with %u in it (dir/frame_%06u.ppm) numbers the dumps by present, as
++     * LD_FRAME_DUMP does: GT5's screendrive.py follows the newest one. */
++    char numbered[1024];
++    const char* path = s_vk.dump_path;
++    if (strstr(path, "%u") || strstr(path, "%06u")) {
++        snprintf(numbered, sizeof numbered, path, (unsigned)s_vk.presented);
++        path = numbered;
++    }
++    FILE* f = fopen(path, "wb");
++    if (!f) { VK_LOG("cannot open %s for the frame dump\n", path); return; }
+     fprintf(f, "P6\n%u %u\n255\n", s_vk.width, s_vk.height);
+     for (size_t i = 0; i < (size_t)s_vk.width * s_vk.height; i++)
+         fwrite(rgba + i * 4, 1, 3, f);
+@@ -1983,6 +2240,7 @@ static void vk_dump_ppm(const unsigned char* rgba)
+  * alongside the walker. */
+ static void vk_present_wait_gpu(void)
+ {
++    VK_TIME(VS_PRESENT_FENCE_WAIT);
+     if (__atomic_load_n(&s_vk.present_inflight, __ATOMIC_ACQUIRE) && s_vk.present_fence)
+         pvkWaitForFences(s_vk.device, 1, &s_vk.present_fence, VK_TRUE, UINT64_MAX);
+ }
+@@ -1994,12 +2252,14 @@ static void vk_present_complete_locked(void)
+     pvkWaitForFences(s_vk.device, 1, &s_vk.present_fence, VK_TRUE, UINT64_MAX);
+     __atomic_store_n(&s_vk.present_inflight, 0, __ATOMIC_RELEASE);
+ 
+-    vk_invalidate(&s_vk.readback);
+-    const unsigned char* px = (const unsigned char*)s_vk.readback.ptr;
+-    size_t c = ((size_t)(s_vk.height / 2) * s_vk.width + s_vk.width / 2) * 4;
+-    s_vk.last_center = ((u32)px[c] << 16) | ((u32)px[c + 1] << 8) | (u32)px[c + 2];
++    if (!s_vk.no_readback) {
++        vk_invalidate(&s_vk.readback);
++        const unsigned char* px = (const unsigned char*)s_vk.readback.ptr;
++        size_t c = ((size_t)(s_vk.height / 2) * s_vk.width + s_vk.width / 2) * 4;
++        s_vk.last_center = ((u32)px[c] << 16) | ((u32)px[c + 1] << 8) | (u32)px[c + 2];
++        if (s_vk.dump_path && ((s_vk.presented + 1) % s_vk.dump_every) == 0) vk_dump_ppm(px);
++    }
+     s_vk.presented++;
+-    if (s_vk.dump_path && (s_vk.presented % s_vk.dump_every) == 0) vk_dump_ppm(px);
+     vk_present_window();
+ }
+ 
+@@ -2022,20 +2282,22 @@ static VkCommandBuffer vk_present_record_begin(void)
+ static void vk_present_record_end(VkCommandBuffer cb)
+ {
+     vk_barrier_image_on(cb, s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+-    VkBufferImageCopy region = {
+-        .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+-        .imageExtent = { s_vk.width, s_vk.height, 1 },
+-    };
+-    pvkCmdCopyImageToBuffer(cb, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,
+-                            s_vk.readback.buf, 1, &region);
+-    VkBufferMemoryBarrier host = {
+-        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+-        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+-        .buffer = s_vk.readback.buf, .offset = 0, .size = VK_WHOLE_SIZE,
+-    };
+-    pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+-                          0, 0, NULL, 1, &host, 0, NULL);
++    if (!s_vk.no_readback) {
++        VkBufferImageCopy region = {
++            .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
++            .imageExtent = { s_vk.width, s_vk.height, 1 },
++        };
++        pvkCmdCopyImageToBuffer(cb, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,
++                                s_vk.readback.buf, 1, &region);
++        VkBufferMemoryBarrier host = {
++            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
++            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
++            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++            .buffer = s_vk.readback.buf, .offset = 0, .size = VK_WHOLE_SIZE,
++        };
++        pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
++                              0, 0, NULL, 1, &host, 0, NULL);
++    }
+     if (pvkEndCommandBuffer(cb) != VK_SUCCESS) { VK_LOG("vkEndCommandBuffer (present) failed\n"); return; }
+     VkSubmitInfo si = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                         .commandBufferCount = 1, .pCommandBuffers = &cb };
+@@ -2092,6 +2354,7 @@ typedef struct vk_eng_obj {
+     u8       cube;                   /* TEXTURE: six layers, a CUBE view    */
+     u8       snapshot;               /* COLOR: a feedback copy, never a target */
+     u32      mips;                   /* TEXTURE: levels the image was created with */
++    u8       unpack_bc;              /* TEXTURE: 1/2/3 = BCn the device lacks, kept as RGBA8 */
+ } vk_eng_obj;
+ 
+ static vk_eng_obj s_eobj[VK_ENG_MAX_OBJ];
+@@ -2294,12 +2557,14 @@ static void vk_eng_release(void* user, u32 handle)
+ }
+ 
+ static void vk_eng_snapshot_pool_drain(void);
++static void vk_depth_pack_shutdown(void);
+ 
+ static void vk_eng_shutdown(void* user)
+ {
+     vk_eng2_shutdown(user);
+     for (u32 i = 1; i < VK_ENG_MAX_OBJ; i++) vk_eng_release(user, i);
+     vk_eng_snapshot_pool_drain();
++    vk_depth_pack_shutdown();
+     vk_eb_release();
+     vk_destroy_buffer(&s_rb_stage);
+     vk_destroy_buffer(&s_up_stage);
+@@ -2371,6 +2636,7 @@ static u32 vk_eng_depth_target_create(void* user, u32 w, u32 h)
+ 
+ static void vk_eng_bind_targets(void* user, const u32* surfaces, u32 count, u32 depth)
+ {
++    VK_TIME(VS_BIND_TARGETS);
+     (void)user;
+     if (count > RSX_BE_MAX_COLOR_TARGETS) count = RSX_BE_MAX_COLOR_TARGETS;
+     for (u32 i = 0; i < RSX_BE_MAX_COLOR_TARGETS; i++)
+@@ -2419,11 +2685,121 @@ static void vk_eng_clear_depth_stencil(void* user, u32 depth, u32 flags,
+     else vk_submit_and_wait();
+ }
+ 
++/* ---- rectangle clears (rsx_draw_backend.clear_color_rect / _depth_stencil_rect)
++ * RSX clears only what the scissor lets through. Without these the engine
++ * clears the whole target, and GT5 lost its text with it: it draws each
++ * glyph into a corner of the zeta's stencil, clears a rectangle elsewhere and
++ * then reads the glyph back -- a whole clear wiped the glyphs first, and the
++ * letters came out as solid boxes. vkCmdClearAttachments takes rectangles but
++ * only inside a render pass, so each clear begins a one-attachment pass on
++ * the target (passes cached per format); the framebuffer goes to the grave,
++ * destroyed after the next wait. */
++static struct { VkFormat fmt; int depth; VkRenderPass rp; } s_crp[8];
++static u32 s_crp_n;
++
++static VkRenderPass vk_clear_pass(VkFormat fmt, int depth)
++{
++    for (u32 i = 0; i < s_crp_n; i++)
++        if (s_crp[i].fmt == fmt && s_crp[i].depth == depth) return s_crp[i].rp;
++    if (s_crp_n >= 8) return VK_NULL_HANDLE;
++    VkAttachmentDescription att = {
++        .format = fmt, .samples = VK_SAMPLE_COUNT_1_BIT,
++        .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD, .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
++        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD, .stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE,
++        .initialLayout = VK_IMAGE_LAYOUT_GENERAL, .finalLayout = VK_IMAGE_LAYOUT_GENERAL };
++    VkAttachmentReference ref = { 0, VK_IMAGE_LAYOUT_GENERAL };
++    VkSubpassDescription sub = { .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
++                                 .colorAttachmentCount = depth ? 0u : 1u,
++                                 .pColorAttachments = depth ? NULL : &ref,
++                                 .pDepthStencilAttachment = depth ? &ref : NULL };
++    VkRenderPassCreateInfo rci = { .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
++                                   .attachmentCount = 1, .pAttachments = &att,
++                                   .subpassCount = 1, .pSubpasses = &sub };
++    VkRenderPass rp = VK_NULL_HANDLE;
++    if (pvkCreateRenderPass(s_vk.device, &rci, NULL, &rp) != VK_SUCCESS) return VK_NULL_HANDLE;
++    s_crp[s_crp_n].fmt = fmt; s_crp[s_crp_n].depth = depth; s_crp[s_crp_n].rp = rp;
++    s_crp_n++;
++    return rp;
++}
++
++static void vk_clear_rect(const vk_eng_obj* o, int depth, const VkClearAttachment* ca,
++                          u32 x, u32 y, u32 w, u32 h)
++{
++    if (!o || !o->im.view || x >= o->w || y >= o->h) return;
++    if (w > o->w - x) w = o->w - x;
++    if (h > o->h - y) h = o->h - y;
++    if (!w || !h) return;
++    VkRenderPass rp = vk_clear_pass(o->fmt, depth);
++    if (!rp) return;
++    if (s_grave_fb_n >= VK_GRAVE_MAX) {          /* rare: make room */
++        if (s_eb_pending) vk_eng_flush(); else vk_grave_drain();
++    }
++    VkFramebufferCreateInfo fci = { .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
++                                    .renderPass = rp, .attachmentCount = 1,
++                                    .pAttachments = &o->im.view,
++                                    .width = o->w, .height = o->h, .layers = 1 };
++    VkFramebuffer fb = VK_NULL_HANDLE;
++    if (pvkCreateFramebuffer(s_vk.device, &fci, NULL, &fb) != VK_SUCCESS) return;
++    const int batched = vk_eb_active();
++    if (batched ? (!s_eb_pending && vk_begin()) : vk_begin()) {
++        pvkDestroyFramebuffer(s_vk.device, fb, NULL); return;
++    }
++    vk_cmd_after_everything(s_vk.cmd);           /* ends an open draw pass too */
++    VkRenderPassBeginInfo rbi = { .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
++                                  .renderPass = rp, .framebuffer = fb,
++                                  .renderArea = { { 0, 0 }, { o->w, o->h } } };
++    pvkCmdBeginRenderPass(s_vk.cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
++    VkClearRect cr = { { { (int32_t)x, (int32_t)y }, { w, h } }, 0, 1 };
++    pvkCmdClearAttachments(s_vk.cmd, 1, ca, 1, &cr);
++    pvkCmdEndRenderPass(s_vk.cmd);
++    s_grave_fb[s_grave_fb_n++] = fb;
++    if (batched) vk_eb_recorded();
++    else vk_submit_and_wait();
++}
++
++static void vk_eng_clear_color_rect(void* user, u32 surface, const float rgba[4],
++                                    u32 x, u32 y, u32 w, u32 h)
++{
++    (void)user;
++    const vk_eng_obj* o = vk_eng_get(surface, VK_ENG_COLOR);
++    if (!o) return;
++    VkClearAttachment ca = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .colorAttachment = 0 };
++    for (int i = 0; i < 4; i++) ca.clearValue.color.float32[i] = rgba[i];
++    vk_clear_rect(o, 0, &ca, x, y, w, h);
++}
++
++static void vk_eng_clear_depth_stencil_rect(void* user, u32 depth, u32 flags, float depth_value,
++                                            u8 stencil, u32 x, u32 y, u32 w, u32 h)
++{
++    (void)user;
++    const vk_eng_obj* o = vk_eng_get(depth, VK_ENG_DEPTH);
++    VkImageAspectFlags aspect = 0;
++    if (flags & RSX_BE_CLEAR_DEPTH) aspect |= VK_IMAGE_ASPECT_DEPTH_BIT;
++    if (flags & RSX_BE_CLEAR_STENCIL) aspect |= s_vk.depth_aspect & VK_IMAGE_ASPECT_STENCIL_BIT;
++    if (!o || !aspect) return;
++    VkClearAttachment ca = { .aspectMask = aspect };
++    ca.clearValue.depthStencil.depth = depth_value;
++    ca.clearValue.depthStencil.stencil = stencil;
++    vk_clear_rect(o, 1, &ca, x, y, w, h);
++}
++
+ /* The named surface becomes the frame: blit it onto the display image, then
+  * the existing present does the readback, the PPM dump and the window. */
++static void vk_eng_present_rect(u32 surface, u32 sw, u32 sh);
+ static void vk_eng_present(void* user, u32 surface)
+ {
+     (void)user;
++    vk_eng_present_rect(surface, 0, 0);
++}
++/* The display buffer's part of a larger surface (rsx_draw_backend.present_region). */
++static void vk_eng_present_region(void* user, u32 surface, u32 w, u32 h)
++{
++    (void)user;
++    vk_eng_present_rect(surface, w, h);
++}
++static void vk_eng_present_rect(u32 surface, u32 sw, u32 sh)
++{
++    VK_TIME(VS_ENG_PRESENT);
+     if (!s_vk.device) return;
+     if (s_eb_pending) vk_eng_flush();   /* the present records on its own buffer */
+     vk_eng_obj* o = vk_eng_get(surface, VK_ENG_COLOR);
+@@ -2431,17 +2807,19 @@ static void vk_eng_present(void* user, u32 surface)
+     VkCommandBuffer cb = vk_present_record_begin();
+     if (cb) {
+         if (o) {
++            if (!sw || sw > o->w) sw = o->w;
++            if (!sh || sh > o->h) sh = o->h;
+             vk_barrier_image_on(cb, o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+             vk_barrier_image_on(cb, s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+             VkImageBlit blit = {
+                 .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+-                .srcOffsets = { { 0, 0, 0 }, { (int32_t)o->w, (int32_t)o->h, 1 } },
++                .srcOffsets = { { 0, 0, 0 }, { (int32_t)sw, (int32_t)sh, 1 } },
+                 .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+                 .dstOffsets = { { 0, 0, 0 }, { (int32_t)s_vk.width, (int32_t)s_vk.height, 1 } },
+             };
+             pvkCmdBlitImage(cb, o->im.img, VK_IMAGE_LAYOUT_GENERAL,
+                             s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL, 1, &blit,
+-                            (o->w == s_vk.width && o->h == s_vk.height) ? VK_FILTER_NEAREST
++                            (sw == s_vk.width && sh == s_vk.height) ? VK_FILTER_NEAREST
+                                                                         : VK_FILTER_LINEAR);
+         }
+         vk_present_record_end(cb);
+@@ -2466,6 +2844,7 @@ static void vk_eng_color_target_write(void* user, u32 surface, u32 x, u32 y,
+ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+                             void* out, u32 out_pitch)
+ {
++    VK_TIME(VS_READBACK);
+     (void)user;
+     vk_eng_obj* o = vk_eng_get(surface, VK_ENG_COLOR);
+     if (!o || !out || !out_pitch || !w || !h || x + w > o->w || y + h > o->h) return;
+@@ -2501,16 +2880,96 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+  * becomes the image view's component mapping. A cube map (faces == 6) is a
+  * six-layer cube-compatible image, each face uploaded into its layer, sampled
+  * through a CUBE view; the pipelines that sample one use the split set layout
+- * (vk_eng_split_layout). */
++ * (vk_eng_split_layout).
++ *
++ * Most phone GPUs (Adreno, Mali, PowerVR) have no BC (DXT) textures, which is how PS3 titles ship
++ * most of theirs. There a BC texture is kept as RGBA8 and each level is unpacked on the CPU as it
++ * is uploaded (vk_unpack_bc). */
++static void vk_bc_colors(const u8* b, u8 pal[4][4], int dxt1)
++{
++    const u32 c0 = (u32)b[0] | ((u32)b[1] << 8), c1 = (u32)b[2] | ((u32)b[3] << 8);
++    for (int i = 0; i < 2; i++) {
++        const u32 c = i ? c1 : c0;
++        pal[i][0] = (u8)(((c >> 11) & 31) * 255 / 31);
++        pal[i][1] = (u8)(((c >> 5) & 63) * 255 / 63);
++        pal[i][2] = (u8)((c & 31) * 255 / 31);
++        pal[i][3] = 255;
++    }
++    for (int k = 0; k < 3; k++) {
++        if (!dxt1 || c0 > c1) {
++            pal[2][k] = (u8)((2 * pal[0][k] + pal[1][k]) / 3);
++            pal[3][k] = (u8)((pal[0][k] + 2 * pal[1][k]) / 3);
++        } else {
++            pal[2][k] = (u8)((pal[0][k] + pal[1][k]) / 2);
++            pal[3][k] = 0;
++        }
++    }
++    pal[2][3] = 255;
++    pal[3][3] = (!dxt1 || c0 > c1) ? 255 : 0;
++}
++
++/* `rows` rows of 4x4 blocks (`row_bytes` apart) -> w x h RGBA8, `dst` tightly packed. */
++static void vk_unpack_bc(u8* dst, u32 w, u32 h, const u8* src, u32 row_bytes, u32 rows, int kind)
++{
++    const u32 bw = (w + 3u) / 4u, bsz = kind == 1 ? 8u : 16u;
++    for (u32 by = 0; by < rows && by * 4u < h; by++) {
++        const u8* row = src + (size_t)by * row_bytes;
++        for (u32 bx = 0; bx < bw; bx++) {
++            const u8* blk = row + (size_t)bx * bsz;
++            const u8* col = kind == 1 ? blk : blk + 8;
++            u8 pal[4][4];
++            vk_bc_colors(col, pal, kind == 1);
++            const u32 idx = (u32)col[4] | ((u32)col[5] << 8) | ((u32)col[6] << 16) | ((u32)col[7] << 24);
++            u8 alpha[16];
++            if (kind == 2) {                 /* DXT2/3: 4 explicit bits per texel */
++                for (int i = 0; i < 16; i++) {
++                    const u32 a = (blk[i / 2] >> ((i & 1) * 4)) & 15u;
++                    alpha[i] = (u8)(a * 17u);
++                }
++            } else if (kind == 3) {          /* DXT4/5: two endpoints, 3-bit indices */
++                const u32 a0 = blk[0], a1 = blk[1];
++                u8 ap[8];
++                ap[0] = (u8)a0; ap[1] = (u8)a1;
++                if (a0 > a1) for (int i = 1; i < 7; i++) ap[i + 1] = (u8)(((7 - i) * a0 + i * a1) / 7);
++                else {
++                    for (int i = 1; i < 5; i++) ap[i + 1] = (u8)(((5 - i) * a0 + i * a1) / 5);
++                    ap[6] = 0; ap[7] = 255;
++                }
++                u64 bits = 0;
++                for (int i = 0; i < 6; i++) bits |= (u64)blk[2 + i] << (8 * i);
++                for (int i = 0; i < 16; i++) alpha[i] = ap[(bits >> (3 * i)) & 7u];
++            }
++            for (u32 py = 0; py < 4; py++) {
++                const u32 y = by * 4u + py;
++                if (y >= h) break;
++                for (u32 px = 0; px < 4; px++) {
++                    const u32 x = bx * 4u + px;
++                    if (x >= w) break;
++                    const u32 t = py * 4u + px;
++                    const u8* c = pal[(idx >> (2 * t)) & 3u];
++                    u8* d = dst + ((size_t)y * w + x) * 4u;
++                    d[0] = c[0]; d[1] = c[1]; d[2] = c[2];
++                    d[3] = kind == 1 ? c[3] : alpha[t];
++                }
++            }
++        }
++    }
++}
++
+ static u32 vk_eng_texture_create(void* user, rsx_be_format fmt, u32 w, u32 h,
+                                  u32 mips, u32 faces, u32 remap, u32 rsx_fmt)
+ {
++    VK_TIME(VS_TEXTURE_CREATE);
+     (void)user;
+     u32 bpp;
+-    const VkFormat vf = vk_eng_format(fmt, &bpp);
+-    const int bc = (fmt == RSX_BE_FMT_BC1 || fmt == RSX_BE_FMT_BC2 || fmt == RSX_BE_FMT_BC3);
+-    if (vf == VK_FORMAT_UNDEFINED || !w || !h || w > vk_max_dim() || h > vk_max_dim() ||
+-        (bc && !s_vk.bc_ok))
++    VkFormat vf = vk_eng_format(fmt, &bpp);
++    int bc = (fmt == RSX_BE_FMT_BC1 || fmt == RSX_BE_FMT_BC2 || fmt == RSX_BE_FMT_BC3);
++    int unpack = 0;
++    if (bc && !s_vk.bc_ok) {   /* no BC on this GPU: RGBA8, unpacked at upload */
++        unpack = fmt == RSX_BE_FMT_BC1 ? 1 : fmt == RSX_BE_FMT_BC2 ? 2 : 3;
++        vf = VK_FORMAT_R8G8B8A8_UNORM; bpp = 4; bc = 0;
++    }
++    if (vf == VK_FORMAT_UNDEFINED || !w || !h || w > vk_max_dim() || h > vk_max_dim())
+         return 0;
+     const int cube = (faces == 6);
+     if ((faces != 1 && !cube) || (cube && w != h)) return 0;   /* cube faces are square */
+@@ -2538,7 +2997,7 @@ static u32 vk_eng_texture_create(void* user, rsx_be_format fmt, u32 w, u32 h,
+         vk_eng_make_view(o->im.img, vf, mips, vk_remap(remap, rsx_fmt), cube, &o->im.view))
+         goto fail;
+     o->kind = VK_ENG_TEXTURE; o->fmt = vf; o->w = w; o->h = h; o->cube = (u8)cube; o->mips = mips;
+-    o->bpp = bc ? 0 : bpp; o->block = bc ? bpp : 0;
++    o->bpp = bc ? 0 : bpp; o->block = bc ? bpp : 0; o->unpack_bc = (u8)unpack;
+     /* UNDEFINED -> GENERAL for every level and face before the uploads arrive. */
+     if (vk_begin()) goto fail;
+     vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
+@@ -2553,9 +3012,18 @@ fail:
+ static void vk_eng_texture_upload(void* user, u32 texture, u32 face, u32 mip, u32 w, u32 h,
+                                   const void* src, u32 row_bytes, u32 rows)
+ {
++    VK_TIME(VS_TEXTURE_UPLOAD);
+     (void)user;
+     vk_eng_obj* o = vk_eng_get(texture, VK_ENG_TEXTURE);
+     if (!o || !src || !row_bytes || !rows || face >= (o->cube ? 6u : 1u) || mip >= o->mips) return;
++    if (o->unpack_bc) {
++        static u8* buf; static size_t cap;
++        const size_t need = (size_t)w * h * 4u;
++        if (need > cap) { u8* nb = (u8*)realloc(buf, need); if (!nb) return; buf = nb; cap = need; }
++        vk_unpack_bc(buf, w, h, (const u8*)src, row_bytes, rows, o->unpack_bc);
++        vk_eng_upload_rows(o->im.img, face, mip, w, h, (size_t)w * 4u, h, buf, w * 4u);
++        return;
++    }
+     /* A BC row is a row of 4x4 blocks; the engine's `rows` already counts them. */
+     const size_t tight = o->block ? (size_t)((w + 3u) / 4u) * o->block : (size_t)w * o->bpp;
+     vk_eng_upload_rows(o->im.img, face, mip, w, h, tight, rows, src, row_bytes);
+@@ -2622,8 +3090,170 @@ static void vk_eng_snapshot_pool_drain(void)
+     vk_destroy_buffer(&s_snap_st);
+ }
+ 
++/* rsx_draw_backend.color_region: the top-left w x h of a colour target as a
++ * pooled COLOR object of that size, copied on the GPU in command order (in
++ * the open batch when batching). */
++static u32 vk_eng_color_region(void* user, u32 surface, u32 w, u32 h)
++{
++    const vk_eng_obj* t = vk_eng_get(surface, VK_ENG_COLOR);
++    if (!t || t->snapshot || !w || !h) return 0;
++    if (w > t->w) w = t->w;
++    if (h > t->h) h = t->h;
++    const u32 hd = vk_eng_alloc();
++    if (!hd) return 0;
++    vk_eng_obj* o = &s_eobj[hd];
++    int reused = 0;
++    for (u32 i = 0; i < s_snap_pool_n; i++)
++        if (s_snap_pool[i].fmt == t->fmt && s_snap_pool[i].w == w && s_snap_pool[i].h == h) {
++            o->im = s_snap_pool[i].im;
++            s_snap_pool[i] = s_snap_pool[--s_snap_pool_n];
++            reused = 1;
++            break;
++        }
++    if (!reused && vk_create_image(&o->im, t->fmt, w, h,
++                                   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
++                                   VK_IMAGE_ASPECT_COLOR_BIT)) {
++        vk_destroy_image(&o->im); memset(o, 0, sizeof *o); return 0;
++    }
++    o->kind = VK_ENG_COLOR; o->snapshot = 1;
++    o->fmt = t->fmt; o->bpp = t->bpp; o->w = w; o->h = h;
++    t = vk_eng_get(surface, VK_ENG_COLOR);
++    const int batch = vk_eb_active();
++    if (!(batch && s_eb_pending) && vk_begin()) { vk_eng_release(user, hd); return 0; }
++    if (batch) vk_cmd_after_everything(s_vk.cmd);
++    vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT,
++                     reused ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED);
++    vk_barrier_image(t->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
++    VkImageCopy c = { .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
++                      .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
++                      .extent = { w, h, 1 } };
++    pvkCmdCopyImage(s_vk.cmd, t->im.img, VK_IMAGE_LAYOUT_GENERAL, o->im.img,
++                    VK_IMAGE_LAYOUT_GENERAL, 1, &c);
++    vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
++    if (batch) {
++        if (++s_eb_pending >= vk_eb_max()) vk_eng_flush();
++    } else if (vk_submit_and_wait()) {
++        vk_eng_release(user, hd); return 0;
++    }
++    return hd;
++}
++
++/* rsx_draw_backend.color_cube: a cube texture from colour targets. Level 0 of
++ * each face is copied from its target; the smaller levels are made here by
++ * halving on the GPU. GT5 keeps its reflection cube's mip chain in the rows
++ * below each face but fills them with blits that never reach the host
++ * targets: copied as they are, those rows are black with alpha 0, and the car
++ * paint shader turns them into flat green, blue and red. PS3RECOMP_CUBE_ROW_MIPS=1
++ * copies the rows instead (a title that draws its levels there). New cubes
++ * start cleared, so anything never written reads black, not garbage. */
++static u32 vk_eng_color_cube(void* user, u32 into, const u32 faces[6], const u32 face_y[6],
++                             u32 size, u32 mips, u32 remap, u32 rsx_fmt)
++{
++    const vk_eng_obj* f0 = NULL;
++    for (u32 f = 0; f < 6 && !f0; f++) f0 = vk_eng_get(faces[f], VK_ENG_COLOR);
++    if (!f0 || !size || size > vk_max_dim()) return 0;
++    if (!mips) mips = 1;
++    const VkFormat fmt = f0->fmt;
++    u32 hd = into;
++    int fresh = 0;
++    if (hd) {
++        const vk_eng_obj* o = vk_eng_get(hd, VK_ENG_TEXTURE);
++        if (!o || !o->cube || o->w != size || o->mips != mips || o->fmt != fmt) return 0;
++    } else {
++        hd = vk_eng_alloc();
++        if (!hd) return 0;
++        vk_eng_obj* o = &s_eobj[hd];
++        VkImageCreateInfo ici = {
++            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT,
++            .imageType = VK_IMAGE_TYPE_2D, .format = fmt, .extent = { size, size, 1 },
++            .mipLevels = mips, .arrayLayers = 6u, .samples = VK_SAMPLE_COUNT_1_BIT,
++            .tiling = VK_IMAGE_TILING_OPTIMAL,
++            .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
++                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
++            .sharingMode = VK_SHARING_MODE_EXCLUSIVE, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
++        VkMemoryRequirements req;
++        u32 type;
++        if (pvkCreateImage(s_vk.device, &ici, NULL, &o->im.img) != VK_SUCCESS) goto fail;
++        pvkGetImageMemoryRequirements(s_vk.device, o->im.img, &req);
++        if (vk_find_memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &type) &&
++            vk_find_memory_type(req.memoryTypeBits, 0, &type)) goto fail;
++        VkMemoryAllocateInfo mai = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
++                                     .allocationSize = req.size, .memoryTypeIndex = type };
++        if (pvkAllocateMemory(s_vk.device, &mai, NULL, &o->im.mem) != VK_SUCCESS ||
++            pvkBindImageMemory(s_vk.device, o->im.img, o->im.mem, 0) != VK_SUCCESS ||
++            vk_eng_make_view(o->im.img, fmt, mips, vk_remap(remap, rsx_fmt), 1, &o->im.view))
++            goto fail;
++        o->kind = VK_ENG_TEXTURE; o->fmt = fmt; o->w = o->h = size; o->cube = 1; o->mips = mips;
++        o->bpp = f0->bpp;
++        fresh = 1;
++    }
++    {
++        vk_eng_obj* o = &s_eobj[hd];
++        const int batch = vk_eb_active();
++        if (!(batch && s_eb_pending) && vk_begin()) goto fail_hd;
++        if (batch) vk_cmd_after_everything(s_vk.cmd);
++        vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT,
++                         fresh ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL);
++        if (fresh) {
++            const VkClearColorValue zero = {{ 0, 0, 0, 0 }};
++            const VkImageSubresourceRange r = { VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 6u };
++            pvkCmdClearColorImage(s_vk.cmd, o->im.img, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &r);
++            vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
++        }
++        static int row_mips = -1;
++        if (row_mips < 0) row_mips = vk_env_on("PS3RECOMP_CUBE_ROW_MIPS");
++        const u32 copy_levels = row_mips ? mips : 1u;
++        for (u32 f = 0; f < 6; f++) {
++            const vk_eng_obj* s = vk_eng_get(faces[f], VK_ENG_COLOR);
++            if (!s || s->fmt != fmt) continue;
++            vk_barrier_image(s->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
++            VkImageCopy c[14];
++            u32 n = 0, mw = size, y = face_y ? face_y[f] : 0u;
++            for (u32 m = 0; m < copy_levels && m < 14u; m++) {
++                if (mw > s->w || y + mw > s->h) break;   /* this level was not drawn */
++                c[n++] = (VkImageCopy){ .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
++                                        .srcOffset = { 0, (int32_t)y, 0 },
++                                        .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, m, f, 1 },
++                                        .extent = { mw, mw, 1 } };
++                y += mw;
++                mw = mw > 1u ? mw >> 1 : 1u;
++            }
++            if (n) pvkCmdCopyImage(s_vk.cmd, s->im.img, VK_IMAGE_LAYOUT_GENERAL, o->im.img,
++                                   VK_IMAGE_LAYOUT_GENERAL, n, c);
++        }
++        /* The smaller levels, all six faces at once, each from the one above. */
++        for (u32 m = copy_levels; m < mips && m < 14u; m++) {
++            vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
++            const int32_t sw = (int32_t)(size >> (m - 1u) ? size >> (m - 1u) : 1u);
++            const int32_t dw = (int32_t)(size >> m ? size >> m : 1u);
++            const VkImageBlit b = {
++                .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, m - 1u, 0, 6u },
++                .srcOffsets = { { 0, 0, 0 }, { sw, sw, 1 } },
++                .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, m, 0, 6u },
++                .dstOffsets = { { 0, 0, 0 }, { dw, dw, 1 } } };
++            pvkCmdBlitImage(s_vk.cmd, o->im.img, VK_IMAGE_LAYOUT_GENERAL, o->im.img,
++                            VK_IMAGE_LAYOUT_GENERAL, 1, &b, VK_FILTER_LINEAR);
++        }
++        vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
++        if (batch) {
++            if (++s_eb_pending >= vk_eb_max()) vk_eng_flush();
++        } else if (vk_submit_and_wait()) {
++            goto fail_hd;
++        }
++    }
++    return hd;
++fail:
++    vk_destroy_image(&s_eobj[hd].im);
++    memset(&s_eobj[hd], 0, sizeof s_eobj[hd]);
++    return 0;
++fail_hd:
++    if (fresh) vk_eng_release(user, hd);
++    return 0;
++}
++
+ static u32 vk_eng_color_snapshot(void* user, u32 surface)
+ {
++    VK_TIME(VS_COLOR_SNAPSHOT);
+     (void)user;
+     const vk_eng_obj* t = vk_eng_get(surface, VK_ENG_COLOR);
+     if (!t || t->snapshot) return 0;
+@@ -2676,6 +3306,7 @@ static u32 vk_eng_color_snapshot(void* user, u32 surface)
+  * invalidates and asks again; it goes when the depth target goes. */
+ static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
+ {
++    VK_TIME(VS_DEPTH_SNAPSHOT);
+     vk_eng_obj* z = vk_eng_get(depth, VK_ENG_DEPTH);
+     if (!z) return 0;
+     if (s_vk.depth_format != VK_FORMAT_D32_SFLOAT &&
+@@ -2752,11 +3383,234 @@ static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
+     }
+     return rc ? 0 : snap;
+ }
++/* ---- depth read as colour (rsx_draw_backend.depth_as_color) ----------------
++ * A Z24S8 depth target read as a linear A8R8G8B8 texture: a deferred renderer
++ * (GT5) rebuilding depth from the bytes. Without this the engine stores the
++ * depth into guest memory for it -- a wait for the GPU, a full readback, a
++ * CPU conversion and the texture decoded and uploaded again, twice a frame
++ * for GT5's 2048x1080 depth. Here it stays on the GPU, in command order:
++ * depth -> a storage buffer (the copy gives a 32-bit word per texel: a float
++ * for D32, the 24-bit value in the low bits for D24), a compute pass packs
++ * each word in place into the texel the decode would give, buffer -> an
++ * RGBA8 image. R = depth bits 15..8, G = bits 7..0, B = the stencil byte
++ * (copied out beside the depth words) -- GT5 draws its text by inverting a
++ * stencil bit per glyph and reads the coverage back from B -- and A = bits
++ * 23..16,
++ * with round(d * 0xFFFFFF) taken exactly in 32-bit integers (no Int64 on most
++ * phones): d = m * 2^-s, so the value is (m * (2^24 - 1) + 2^(s-1)) >> s.
++ * DEPTH16 of a Z16 zeta, and D16 devices, keep the guest-memory store.
++ * PS3RECOMP_VK_NO_DEPTH_AS_COLOR=1 turns it off. */
++static const char k_vk_depth_pack_hlsl[] =
++    "[[vk::binding(0, 0)]] RWStructuredBuffer<uint> buf;\n"
++    "[[vk::push_constant]] cbuffer PC { uint pc_count; uint pc_unorm24; uint pc_row; uint pc_sbase; };\n"
++    "uint round24(float d) {\n"
++    "    if (d >= 1.0) return 0xFFFFFFu;\n"
++    "    if (!(d > 0.0)) return 0u;\n"
++    "    uint b = asuint(d);\n"
++    "    uint e = (b >> 23) & 0xFFu;\n"
++    "    uint m = (b & 0x7FFFFFu) | (e != 0u ? 0x800000u : 0u);\n"
++    "    uint s = 150u - max(e, 1u);\n"
++    "    if (s >= 64u) return 0u;\n"
++    "    uint lo0 = (m & 0xFFu) << 24;\n"
++    "    uint hi = m >> 8;\n"
++    "    uint lo = lo0 - m;\n"
++    "    if (lo0 < m) hi -= 1u;\n"
++    "    uint r = s - 1u;\n"
++    "    if (r < 32u) { uint l2 = lo + (1u << r); if (l2 < lo) hi += 1u; lo = l2; }\n"
++    "    else hi += 1u << (r - 32u);\n"
++    "    return s < 32u ? ((lo >> s) | (hi << (32u - s))) : (hi >> (s - 32u));\n"
++    "}\n"
++    "[numthreads(64, 1, 1)]\n"
++    "void main(uint3 id : SV_DispatchThreadID) {\n"
++    "    uint i = id.x + id.y * pc_row;\n"
++    "    if (i >= pc_count) return;\n"
++    "    uint w = buf[i];\n"
++    "    uint v = pc_unorm24 != 0u ? (w & 0xFFFFFFu) : round24(asfloat(w));\n"
++    "    uint st = pc_sbase != 0xFFFFFFFFu ?\n"
++    "        ((buf[pc_sbase + (i >> 2)] >> ((i & 3u) * 8u)) & 0xFFu) : 0u;\n"
++    "    buf[i] = ((v >> 8) & 0xFFu) | ((v & 0xFFu) << 8) | (st << 16) | ((v >> 16) << 24);\n"
++    "}\n";
++
++static struct {
++    int                   failed;
++    VkDescriptorSetLayout dsl;
++    VkPipelineLayout      layout;
++    VkPipeline            pipe;
++    VkDescriptorPool      pool;
++    VkDescriptorSet       set;
++    vk_buffer             buf;        /* the words, packed in place */
++} s_dpack;
++
++static int vk_depth_pack_init(void)
++{
++    if (s_dpack.pipe) return 0;
++    if (s_dpack.failed) return -1;
++    s_dpack.failed = 1;               /* until it is all made */
++    static u32 spv[4096];
++    u32 n = 0;
++    char log[512] = "";
++    if (!rsx_hlsl_to_spirv_available() ||
++        rsx_hlsl_to_spirv(k_vk_depth_pack_hlsl, RSX_SHADER_STAGE_COMPUTE, spv,
++                          (u32)(sizeof spv / sizeof spv[0]), &n, log, sizeof log) || !n) {
++        VK_LOG("engine: depth-as-colour pass not built: %s\n", log);
++        return -1;
++    }
++    VkShaderModuleCreateInfo smi = { .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
++                                     .codeSize = (size_t)n * 4u, .pCode = spv };
++    VkShaderModule sm = VK_NULL_HANDLE;
++    if (pvkCreateShaderModule(s_vk.device, &smi, NULL, &sm) != VK_SUCCESS) return -1;
++    VkDescriptorSetLayoutBinding b = { .binding = 0,
++                                       .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
++                                       .descriptorCount = 1,
++                                       .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT };
++    VkDescriptorSetLayoutCreateInfo dli = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
++                                            .bindingCount = 1, .pBindings = &b };
++    VkPushConstantRange pr = { VK_SHADER_STAGE_COMPUTE_BIT, 0, 4 * sizeof(u32) };
++    VkDescriptorPoolSize ps = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 };
++    VkDescriptorPoolCreateInfo dpi = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
++                                       .maxSets = 1, .poolSizeCount = 1, .pPoolSizes = &ps };
++    int ok = pvkCreateDescriptorSetLayout(s_vk.device, &dli, NULL, &s_dpack.dsl) == VK_SUCCESS;
++    VkPipelineLayoutCreateInfo pli = { .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
++                                       .setLayoutCount = 1, .pSetLayouts = &s_dpack.dsl,
++                                       .pushConstantRangeCount = 1, .pPushConstantRanges = &pr };
++    ok = ok && pvkCreatePipelineLayout(s_vk.device, &pli, NULL, &s_dpack.layout) == VK_SUCCESS;
++    VkComputePipelineCreateInfo ci = {
++        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
++        .stage = { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
++                   .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = sm, .pName = "main" },
++        .layout = s_dpack.layout };
++    ok = ok && pvkCreateComputePipelines(s_vk.device, VK_NULL_HANDLE, 1, &ci, NULL,
++                                         &s_dpack.pipe) == VK_SUCCESS;
++    ok = ok && pvkCreateDescriptorPool(s_vk.device, &dpi, NULL, &s_dpack.pool) == VK_SUCCESS;
++    VkDescriptorSetAllocateInfo ai = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
++                                       .descriptorPool = s_dpack.pool, .descriptorSetCount = 1,
++                                       .pSetLayouts = &s_dpack.dsl };
++    ok = ok && pvkAllocateDescriptorSets(s_vk.device, &ai, &s_dpack.set) == VK_SUCCESS;
++    pvkDestroyShaderModule(s_vk.device, sm, NULL);
++    if (!ok) { VK_LOG("engine: depth-as-colour pipeline failed\n"); return -1; }
++    s_dpack.failed = 0;
++    VK_LOG("engine: depth read as colour on the GPU (compute pack)\n");
++    return 0;
++}
++
++static void vk_depth_pack_shutdown(void)
++{
++    if (s_dpack.pipe)   pvkDestroyPipeline(s_vk.device, s_dpack.pipe, NULL);
++    if (s_dpack.pool)   pvkDestroyDescriptorPool(s_vk.device, s_dpack.pool, NULL);
++    if (s_dpack.layout) pvkDestroyPipelineLayout(s_vk.device, s_dpack.layout, NULL);
++    if (s_dpack.dsl)    pvkDestroyDescriptorSetLayout(s_vk.device, s_dpack.dsl, NULL);
++    vk_destroy_buffer(&s_dpack.buf);
++    memset(&s_dpack, 0, sizeof s_dpack);
++}
++
++static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
++                            void* out, u32 out_pitch);
++static u32 vk_eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
++{
++    VK_TIME(VS_DEPTH_AS_COLOR);
++    vk_eng_obj* z = vk_eng_get(depth, VK_ENG_DEPTH);
++    const VkFormat df = s_vk.depth_format;
++    const int f32 = df == VK_FORMAT_D32_SFLOAT || df == VK_FORMAT_D32_SFLOAT_S8_UINT;
++    const int d24 = df == VK_FORMAT_D24_UNORM_S8_UINT || df == VK_FORMAT_X8_D24_UNORM_PACK32;
++    const int st8 = df == VK_FORMAT_D32_SFLOAT_S8_UINT || df == VK_FORMAT_D24_UNORM_S8_UINT;
++    if (rsx_fmt != 0x85u || !z || !(f32 || d24) || !w || !h || w > z->w || h > z->h ||
++        vk_env_on("PS3RECOMP_VK_NO_DEPTH_AS_COLOR") || vk_depth_pack_init())
++        return 0;
++
++    const VkDeviceSize zbytes = (VkDeviceSize)w * h * 4u;
++    const VkDeviceSize need = zbytes + (st8 ? (((VkDeviceSize)w * h + 3u) & ~(VkDeviceSize)3u) : 0u);
++    if (s_dpack.buf.size < need) {
++        vk_destroy_buffer(&s_dpack.buf);              /* flushes a pending batch first */
++        if (vk_create_device_buffer(&s_dpack.buf, need, VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
++                                    VK_BUFFER_USAGE_TRANSFER_DST_BIT |
++                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)) {
++            vk_destroy_buffer(&s_dpack.buf); return 0;
++        }
++        VkDescriptorBufferInfo bi = { s_dpack.buf.buf, 0, VK_WHOLE_SIZE };
++        VkWriteDescriptorSet wr = { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
++                                    .dstSet = s_dpack.set, .dstBinding = 0, .descriptorCount = 1,
++                                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
++                                    .pBufferInfo = &bi };
++        pvkUpdateDescriptorSets(s_vk.device, 1, &wr, 0, NULL);
++    }
++
++    /* The result: a COLOR object marked snapshot, from the snapshot pool, so a
++     * release returns its image there instead of freeing it. */
++    const u32 hd = vk_eng_alloc();
++    if (!hd) return 0;
++    vk_eng_obj* o = &s_eobj[hd];
++    int reused = 0;
++    for (u32 i = 0; i < s_snap_pool_n; i++)
++        if (s_snap_pool[i].fmt == VK_FORMAT_R8G8B8A8_UNORM && s_snap_pool[i].w == w &&
++            s_snap_pool[i].h == h) {
++            o->im = s_snap_pool[i].im;
++            s_snap_pool[i] = s_snap_pool[--s_snap_pool_n];
++            reused = 1;
++            break;
++        }
++    if (!reused && vk_create_image(&o->im, VK_FORMAT_R8G8B8A8_UNORM, w, h,
++                                   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
++                                   VK_IMAGE_ASPECT_COLOR_BIT)) {
++        vk_destroy_image(&o->im); memset(o, 0, sizeof *o); return 0;
++    }
++    o->kind = VK_ENG_COLOR; o->snapshot = 1;
++    o->fmt = VK_FORMAT_R8G8B8A8_UNORM; o->bpp = 4; o->w = w; o->h = h;
++    z = vk_eng_get(depth, VK_ENG_DEPTH);
++
++    const int batch = vk_eb_active();
++    if (!(batch && s_eb_pending) && vk_begin()) { vk_eng_release(user, hd); return 0; }
++    if (batch) vk_cmd_after_everything(s_vk.cmd);
++    vk_barrier_image(z->im.img, s_vk.depth_aspect, VK_IMAGE_LAYOUT_GENERAL);
++    vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT,
++                     reused ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED);
++    VkBufferImageCopy out = { .imageSubresource = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1 },
++                              .imageExtent = { w, h, 1 } };
++    pvkCmdCopyImageToBuffer(s_vk.cmd, z->im.img, VK_IMAGE_LAYOUT_GENERAL, s_dpack.buf.buf, 1, &out);
++    if (st8) {                      /* one byte a texel, after the depth words */
++        VkBufferImageCopy so = { .bufferOffset = zbytes,
++                                 .imageSubresource = { VK_IMAGE_ASPECT_STENCIL_BIT, 0, 0, 1 },
++                                 .imageExtent = { w, h, 1 } };
++        pvkCmdCopyImageToBuffer(s_vk.cmd, z->im.img, VK_IMAGE_LAYOUT_GENERAL, s_dpack.buf.buf, 1, &so);
++    }
++    VkBufferMemoryBarrier bb = {
++        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
++        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
++        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
++        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++        .buffer = s_dpack.buf.buf, .offset = 0, .size = VK_WHOLE_SIZE };
++    pvkCmdPipelineBarrier(s_vk.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
++                          0, 0, NULL, 1, &bb, 0, NULL);
++    const u32 count = w * h, groups = (count + 63u) / 64u;
++    const u32 gx = groups < 1024u ? groups : 1024u, gy = (groups + gx - 1u) / gx;
++    const u32 pc[4] = { count, d24 ? 1u : 0u, gx * 64u, st8 ? count : 0xFFFFFFFFu };
++    pvkCmdBindPipeline(s_vk.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s_dpack.pipe);
++    pvkCmdBindDescriptorSets(s_vk.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s_dpack.layout, 0, 1,
++                             &s_dpack.set, 0, NULL);
++    pvkCmdPushConstants(s_vk.cmd, s_dpack.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, pc);
++    pvkCmdDispatch(s_vk.cmd, gx, gy, 1);
++    bb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
++    bb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
++    pvkCmdPipelineBarrier(s_vk.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
++                          0, 0, NULL, 1, &bb, 0, NULL);
++    VkBufferImageCopy in = { .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
++                             .imageExtent = { w, h, 1 } };
++    pvkCmdCopyBufferToImage(s_vk.cmd, s_dpack.buf.buf, o->im.img, VK_IMAGE_LAYOUT_GENERAL, 1, &in);
++    /* The texels, visible to whatever samples them next. */
++    vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
++    if (batch) {
++        if (++s_eb_pending >= vk_eb_max()) vk_eng_flush();
++    } else if (vk_submit_and_wait()) {
++        vk_eng_release(user, hd); return 0;
++    }
++    return hd;
++}
++
+ /* The depth aspect of a D32_SFLOAT target copies out as 32-bit floats, which
+  * is what the engine asks for; other depth formats report failure. */
+ static int vk_eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
+                                  float* out, u32 out_pitch)
+ {
++    VK_TIME(VS_DEPTH_READBACK);
+     (void)user;
+     vk_eng_obj* z = vk_eng_get(depth, VK_ENG_DEPTH);
+     if (!z || !out || !w || !h || x + w > z->w || y + h > z->h ||
+@@ -3125,6 +3979,7 @@ static VkPipeline vk_eng_variant(vk_eng_pipe* P, u32 topo_idx)
+                                                                            : VK_CULL_MODE_BACK_BIT,
+         .frontFace = (rs->front_face == 0x0901u) ? VK_FRONT_FACE_COUNTER_CLOCKWISE
+                                                  : VK_FRONT_FACE_CLOCKWISE,
++        .depthClampEnable = s_vk.depth_clamp_ok ? VK_TRUE : VK_FALSE,
+         .lineWidth = 1.0f };
+     VkPipelineMultisampleStateCreateInfo ms = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+@@ -3266,6 +4121,7 @@ static void vk_eng_bind_ps_constants(void* user, const void* data, u32 bytes)
+ static void vk_eng_bind_textures(void* user, const u32* textures,
+                                  const rsx_be_sampler_desc* samplers, u32 mask)
+ {
++    VK_TIME(VS_BIND_TEXTURES);
+     (void)user;
+     for (u32 u = 0; u < RSX_BE_MAX_TEXTURES; u++) {
+         const int on = (mask >> u) & 1u;
+@@ -3410,11 +4266,13 @@ static VkImageView vk_eng_dummy_cube_view(void)
+ {
+     if (!vk_eng_get(s_e2.dummy_cube, VK_ENG_TEXTURE)) {
+         static const u8 magenta[4] = { 0xFF, 0x00, 0xFF, 0xFF };
++        static const u8 grey[4] = { 0x80, 0x80, 0x80, 0xFF };
+         s_e2.dummy_cube = vk_eng_texture_create(NULL, RSX_BE_FMT_R8G8B8A8, 1, 1, 1, 6,
+                                                 0xAAE4u, 0x85u);
+         if (!s_e2.dummy_cube) return VK_NULL_HANDLE;
+         for (u32 f = 0; f < 6; f++)
+-            vk_eng_texture_upload(NULL, s_e2.dummy_cube, f, 0, 1, 1, magenta, 4, 1);
++            vk_eng_texture_upload(NULL, s_e2.dummy_cube, f, 0, 1, 1,
++                                  getenv("PS3RECOMP_VK_GREY_DUMMY") ? grey : magenta, 4, 1);
+     }
+     return s_eobj[s_e2.dummy_cube].im.view;
+ }
+@@ -3532,11 +4390,11 @@ static int vk_eb_upload(VkImage img, VkBufferImageCopy* region, const void* src,
+     return 0;
+ }
+ 
+-static void vk_eng_flush(void)
++static void vk_eng_flush_at(int line)
+ {
+     if (!s_eb_pending) return;
+     s_eb_pending = 0;               /* first: the submit below must not re-enter */
+-    vk_submit_and_wait();
++    vk_submit_and_wait_at(line);
+     s_eb.vb_head = s_eb.ib_head = s_eb.ub_head = s_eb.sb_head = 0;
+     if (s_eb.sets) { pvkResetDescriptorPool(s_vk.device, s_eb.pool, 0); s_eb.sets = 0; }
+     if ((++s_eb.flushes & 0x3FFFu) == 0)
+@@ -3579,6 +4437,23 @@ static VkDescriptorSet vk_eng_write_descriptors_to(const vk_eng_pipe* P, VkDescr
+         const int cube = (P->cube_mask >> u) & 1u;
+         VkImageView v = ((s_e2.tex_mask >> u) & 1u) ? vk_eng_sample_view(s_e2.tex[u], cube)
+                                                      : VK_NULL_HANDLE;
++        if (!v && ((s_e2.tex_mask >> u) & 1u)) {
++            /* PS3RECOMP_TEXLOG=1: what samples the magenta dummy, once per kind. */
++            static int on = -1, n;
++            if (on < 0) on = getenv("PS3RECOMP_TEXLOG") != NULL;
++            const u32 h = s_e2.tex[u];
++            const vk_eng_obj* o = (h && h < VK_ENG_MAX_OBJ) ? &s_eobj[h] : NULL;
++            static u32 seen[64];
++            const u32 key = (o ? (u32)o->kind * 7u + o->w * 131u + o->h * 8191u + o->cube : 1u) * 2u + (u32)cube;
++            int dup = 0;
++            for (int i = 0; i < n; i++) if (seen[i] == key) dup = 1;
++            if (on && !dup && n < 64) {
++                seen[n++] = key;
++                fprintf(stderr, "[texlog] unit %u wants %s, has handle %u kind %d cube %d %ux%u fmt %d\n",
++                        u, cube ? "cube" : "2D", h, o ? (int)o->kind : -1, o ? (int)o->cube : -1,
++                        o ? o->w : 0, o ? o->h : 0, o ? (int)o->fmt : -1);
++            }
++        }
+         VkSampler smp = v ? vk_eng_sampler(&s_e2.samp[u]) : s_vk.sampler;
+         ii[u] = (VkDescriptorImageInfo){ VK_NULL_HANDLE,
+                                          v ? v : (cube ? dummy_cube : s_vk.dummy.view),
+@@ -3610,14 +4485,24 @@ static VkDescriptorSet vk_eng_write_descriptors_to(const vk_eng_pipe* P, VkDescr
+     return set;
+ }
+ 
++/* VK_DRAW_DROP_LOG=1: the first draws vk_eng_draw leaves out, and why. */
++static void vk_drop(const char* why, u32 a, u32 b)
++{
++    static int on = -1; static u32 n;
++    if (on < 0) on = getenv("VK_DRAW_DROP_LOG") ? 1 : 0;
++    if (on && n++ < 40) VK_LOG("engine: draw dropped: %s (%u, %u)\n", why, a, b);
++}
+ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices, u32 vertex_count,
+                         u32 stride, const u32* indices, u32 index_count)
+ {
++    VK_TIME(VS_DRAW);
+     (void)user;
+-    if (!s_e2.pipeline || !vertices || !vertex_count || !stride) return;
+-    if (topology < RSX_TOPOLOGY_POINTS || topology > RSX_TOPOLOGY_TRIANGLE_STRIP) return;
++    if (!s_e2.pipeline || !vertices || !vertex_count || !stride) {
++        vk_drop("no pipeline or vertices", s_e2.pipeline, vertex_count); return; }
++    if (topology < RSX_TOPOLOGY_POINTS || topology > RSX_TOPOLOGY_TRIANGLE_STRIP) {
++        vk_drop("topology", (u32)topology, 0); return; }
+     vk_eng_pipe* P = &s_epipe[s_e2.pipeline - 1];
+-    if (!P->used || stride != P->stride) return;
++    if (!P->used || stride != P->stride) { vk_drop("stride", stride, P->stride); return; }
+ 
+     /* Targets: every member of a set is target A's size (engine contract). */
+     const u32 n = s_eng_bound.nrt;
+@@ -3636,13 +4521,14 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+     const u32 w = rt0->w, h = rt0->h;
+     vk_eng_obj* zo = vk_eng_get(s_eng_bound.depth, VK_ENG_DEPTH);
+     VkImageView dview = (zo && zo->w >= w && zo->h >= h) ? zo->im.view : vk_eng_scratch_depth(w, h);
++    if (zo && dview != zo->im.view) vk_drop("zeta smaller than the target: scratch depth", zo->w, w);
+     if (!dview) return;
+     const u32 dkey = (zo && dview == zo->im.view) ? s_eng_bound.depth : 0xFFFFFFFFu;
+ 
+     VkPipeline pipe = vk_eng_variant(P, (u32)topology - 1u);
+     VkRenderPass rp = vk_eng_render_pass(P->rt_fmt, n);
+     VkFramebuffer fb = vk_eng_framebuffer(rp, s_eng_bound.rt, n, dview, dkey, w, h);
+-    if (!pipe || !rp || !fb) return;
++    if (!pipe || !rp || !fb) { vk_drop("pipeline/pass/framebuffer", !pipe, !fb); return; }
+ 
+     const VkDeviceSize vbytes = (VkDeviceSize)vertex_count * stride;
+     const VkDeviceSize ibytes = (indices && index_count) ? (VkDeviceSize)index_count * 4u : 0;
+@@ -3651,6 +4537,7 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+     VkDescriptorSet set = VK_NULL_HANDLE;
+     const u32 vsb = s_e2.vs_bytes ? s_e2.vs_bytes : 16u, psb = s_e2.ps_bytes ? s_e2.ps_bytes : 16u;
+     int batched = vk_eb_on() && vbytes <= VK_EB_VB_BYTES && ibytes <= VK_EB_IB_BYTES;
++    int same_pass = 0;              /* batched, and the open pass is this draw's */
+     if (batched && P->cube_mask && !vk_eng_dummy_cube_view()) return;   /* may flush: before any slice */
+     if (batched) {
+         /* Slices of the rings and a set from the pool; a full one flushes the
+@@ -3687,9 +4574,13 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+         if (ibytes) memcpy((u8*)s_eb.ib.ptr + ioff, indices, (size_t)ibytes);
+         vbuf = s_eb.vb.buf; ibuf = s_eb.ib.buf;
+         if (!s_eb_pending && vk_begin()) return;
+-        /* Earlier draws of this batch may have rendered what this one samples
+-         * or blends over: order it after all of them. */
+-        vk_cmd_after_everything(s_vk.cmd);
++        static int per_draw = -1;
++        if (per_draw < 0) per_draw = vk_env_on("PS3RECOMP_VK_PASS_PER_DRAW");
++        same_pass = !per_draw && s_rp.open && s_rp.rp == rp && s_rp.fb == fb &&
++                    s_rp.w == w && s_rp.h == h;
++        /* Earlier draws of this batch in another pass may have rendered what
++         * this one samples or blends over: order it after all of them. */
++        if (!same_pass) vk_cmd_after_everything(s_vk.cmd);
+     } else {
+         if (s_eb_pending) vk_eng_flush();
+         if (vk_ensure_vertex_buffer(vbytes)) return;
+@@ -3706,14 +4597,17 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+         if (!set) return;
+         if (vk_begin()) return;
+     }
+-    /* Everything submitted before is complete (each submission is waited
+-     * on); this orders memory for the surfaces this draw touches. */
+-    for (u32 i = 0; i < n; i++)
+-        vk_barrier_image(s_eobj[s_eng_bound.rt[i]].im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+-    VkRenderPassBeginInfo rbi = { .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+-                                  .renderPass = rp, .framebuffer = fb,
+-                                  .renderArea = { { 0, 0 }, { w, h } } };
+-    pvkCmdBeginRenderPass(s_vk.cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
++    if (!same_pass) {
++        /* Everything submitted before is complete (each submission is waited
++         * on); this orders memory for the surfaces this draw touches. */
++        for (u32 i = 0; i < n; i++)
++            vk_barrier_image(s_eobj[s_eng_bound.rt[i]].im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
++        VkRenderPassBeginInfo rbi = { .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
++                                      .renderPass = rp, .framebuffer = fb,
++                                      .renderArea = { { 0, 0 }, { w, h } } };
++        pvkCmdBeginRenderPass(s_vk.cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
++        if (batched) { s_rp.open = 1; s_rp.rp = rp; s_rp.fb = fb; s_rp.w = w; s_rp.h = h; }
++    }
+     pvkCmdBindPipeline(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+     VkViewport vp = { 0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f };
+     if (s_e2.have_vp && s_e2.vp[2] > 0.0f && s_e2.vp[3] > 0.0f) {
+@@ -3743,9 +4637,8 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+     } else {
+         pvkCmdDraw(s_vk.cmd, vertex_count, 1, 0, 0);
+     }
+-    pvkCmdEndRenderPass(s_vk.cmd);
+-    if (!batched) { vk_submit_and_wait(); return; }
+-    s_eb.draws++;
++    if (!batched) { pvkCmdEndRenderPass(s_vk.cmd); vk_submit_and_wait(); return; }
++    s_eb.draws++;          /* the pass stays open for the next draw (s_rp) */
+     if (++s_eb_pending >= s_eb.max_draws) vk_eng_flush();
+ }
+ 
+@@ -3763,6 +4656,12 @@ static const rsx_draw_backend s_vk_engine_backend = {
+     .depth_target_create  = vk_eng_depth_target_create,
+     .depth_target_release = vk_eng_release,
+     .depth_snapshot       = vk_eng_depth_snapshot,
++    .depth_as_color       = vk_eng_depth_as_color,
++    .present_region       = vk_eng_present_region,
++    .color_region         = vk_eng_color_region,
++    .color_cube           = vk_eng_color_cube,
++    .clear_color_rect     = vk_eng_clear_color_rect,
++    .clear_depth_stencil_rect = vk_eng_clear_depth_stencil_rect,
+     .color_snapshot       = vk_eng_color_snapshot,
+     .pipeline_create      = vk_eng_pipeline_create,
+     .pipeline_release     = vk_eng_pipeline_release,
+@@ -3817,6 +4716,13 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+       s_vk.dump_every = (e && atoi(e) > 0) ? (u32)atoi(e) : 1; }
+ 
+     vk_window_open(title);           /* no-op unless PS3RECOMP_VK_WINDOW is set */
++    /* PS3RECOMP_VK_NO_READBACK=1 with a window: a present does not also copy the frame back to
++     * host memory (only the tests' pixel checks and dumps read it). A phone saves a full-frame
++     * copy and a wait per frame. */
++    s_vk.no_readback = s_vk.windowed && !s_vk.dump_path && vk_env_on("PS3RECOMP_VK_NO_READBACK");
++#if defined(__ANDROID__)
++    if (s_vk.windowed) SDL_AddEventWatch(vk_app_events, NULL);
++#endif
+     if (vk_load_library()) return -1;
+ 
+     VkApplicationInfo app = { .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+@@ -3862,15 +4768,34 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+     VkPhysicalDeviceFeatures have, want;
+     memset(&want, 0, sizeof want);
+     pvkGetPhysicalDeviceFeatures(s_vk.phys, &have);
++    /* PS3RECOMP_VK_NO_BC=1 acts as a GPU without BC (most phones): textures
++     * unpack on the CPU. For testing that path on a desktop GPU. */
++    if (vk_env_on("PS3RECOMP_VK_NO_BC")) have.textureCompressionBC = VK_FALSE;
+     want.textureCompressionBC = have.textureCompressionBC;
+-    /* User clip planes (rsx_vp_apply_user_clip) write ClipDistance. */
++    /* User clip planes (rsx_vp_apply_user_clip) write ClipDistance. A GPU
++     * without it would reject every program that writes one, so the draw
++     * engine leaves the planes out there (its PS3RECOMP_ENG_USER_CLIP=0). */
+     want.shaderClipDistance = have.shaderClipDistance;
++    if (!have.shaderClipDistance) {
++#ifdef _WIN32
++        if (!getenv("PS3RECOMP_ENG_USER_CLIP")) _putenv_s("PS3RECOMP_ENG_USER_CLIP", "0");
++#else
++        setenv("PS3RECOMP_ENG_USER_CLIP", "0", 0);
++#endif
++        VK_LOG("device has no shaderClipDistance: user clip planes off\n");
++    }
+     s_vk.bc_ok = have.textureCompressionBC ? 1 : 0;
+     /* The depth bounds test: a deferred renderer bounds its light pass to
+      * the geometry and its sky to the far plane with it. Optional in
+      * Vulkan; without it the test stays off, as before. */
+     want.depthBounds = have.depthBounds;
+     s_vk.depth_bounds_ok = have.depthBounds ? 1 : 0;
++    /* Depth clamp instead of near/far clipping, as the D3D12 engines draw (their
++     * DepthClipEnable is left FALSE): GT5 draws its text into the stencil with
++     * z outside the clip range, and a clipped glyph never reached the stencil
++     * (solid boxes for letters). PS3RECOMP_VK_DEPTH_CLIP=1 clips again. */
++    want.depthClamp = have.depthClamp && !vk_env_on("PS3RECOMP_VK_DEPTH_CLIP");
++    s_vk.depth_clamp_ok = want.depthClamp ? 1 : 0;
+     /* Per-target colour mask and blend enable (an MRT set's targets B..D
+      * have their own); without it every target takes target A's. */
+     want.independentBlend = have.independentBlend;
+@@ -4027,7 +4952,14 @@ void rsx_vulkan_backend_shutdown(void)
+ 
+ int rsx_vulkan_backend_pump_messages(void)
+ {
++    VK_TIME(VS_PUMP);
+     if (!s_vk.windowed) return 0;
++#if defined(__ANDROID__)
++    /* Nothing is presented while the app is away, so the way back is taken from here. */
++    pthread_mutex_lock(&s_vk.present_mu);
++    vk_android_surface_sync();
++    pthread_mutex_unlock(&s_vk.present_mu);
++#endif
+     int quit = 0;
+     SDL_Event e;
+     while (SDL_PollEvent(&e)) {
+@@ -4054,6 +4986,7 @@ void rsx_vulkan_backend_present_begin(void)
+ 
+ void rsx_vulkan_backend_present_finish(void)
+ {
++    VK_TIME(VS_PRESENT_FINISH);
+     if (!s_vk.device) return;
+     pthread_mutex_lock(&s_vk.present_mu);
+     vk_present_complete_locked();
+@@ -4083,4 +5016,4 @@ int rsx_vulkan_backend_depth_bounds(void)
+     return s_vk.eng_active && s_vk.depth_bounds_ok;
+ }
+ 
+-#endif /* !_WIN32 */
++#endif /* !_WIN32 || PS3RECOMP_RSX_VULKAN */
+diff --git a/runtime/platform/win32_compat.c b/runtime/platform/win32_compat.c
+index 11a74804..38447ab5 100644
+--- a/runtime/platform/win32_compat.c
++++ b/runtime/platform/win32_compat.c
+@@ -453,7 +453,13 @@ static void apply_priority(pthread_t pt, DWORD tid, int level, int is_self)
+ 
+ static void apply_affinity(pthread_t pt, DWORD_PTR mask)
+ {
+-#if defined(__linux__)
++#if defined(__ANDROID__)
++    /* Bionic has no pthread_setaffinity_np: the same through the thread's kernel id. */
++    cpu_set_t set; CPU_ZERO(&set);
++    for (unsigned i = 0; i < 8 * sizeof mask && i < CPU_SETSIZE; i++)
++        if (mask & ((DWORD_PTR)1 << i)) CPU_SET(i, &set);
++    sched_setaffinity(pthread_gettid_np(pt), sizeof set, &set);
++#elif defined(__linux__)
+     cpu_set_t set; CPU_ZERO(&set);
+     for (unsigned i = 0; i < 8 * sizeof mask && i < CPU_SETSIZE; i++)
+         if (mask & ((DWORD_PTR)1 << i)) CPU_SET(i, &set);

@@ -9,6 +9,30 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.24**
+
+🐧 **Linux: a native build** ([#20](https://github.com/MormonFTP-hub/gt5-recomp/issues/20))
+- `setup.sh` does on Linux what `setup.ps1` does on Windows: checks the tools (`--install-deps`
+  installs them with apt, dnf, pacman or zypper), fetches and patches ps3recomp, makes the Python
+  environment, checks your game files, generates the game code from your `EBOOT.elf` and builds
+  `GT5/build-linux/gt5`. `GT5/play.sh` starts it, like `play.bat`. Updating: `git pull`, then
+  `bash setup.sh`.
+- The game code generated on Linux is the same as on Windows (checked chunk by chunk). It's built
+  with Clang with the Windows build's settings, and draws with Vulkan, the Android build's renderer.
+  Window, keyboard, controllers and sound go through SDL2; movies and music through the system's
+  FFmpeg (6.1 or newer).
+- The keyboard works on Linux too (same keys as on Windows) while no controller is connected.
+- Tested on Ubuntu 24.04 with no graphics card (Mesa's software Vulkan, a virtual display): setup
+  from a fresh clone, the first-start screens (saved), the top menu with its 3D scene and menu music,
+  GT Mode, and Arcade up to the pre-race screen with the 3D track. The race itself stayed black there;
+  races on a real Linux PC with a graphics card are untested. Proton and Wine weren't tried.
+- Fixed on the way, for Linux and the Android build: GT5 gives the graphics chip 5 seconds to finish
+  a frame and otherwise rebuilds commands it hasn't run yet, which froze both the graphics and the SPU
+  jobs for good. Windows already held that wait while the graphics side was still busy (compiling
+  shaders on a new scene); Linux and Android now do too. Seen as a freeze after car select and on the
+  race loading screen with the software driver.
+- Windows: nothing changes in how `gt5.exe` runs (the new code is Linux-only or unused there).
+
 🏷️ Released as **v0.1.23**
 
 💬 **Discord server**: [MormonFTP's Workshop](https://discord.gg/9cVPS7r5Ha) for live help, test reports and new releases; linked from the top of the README, the issue forms and the New issue page.
