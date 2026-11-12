@@ -17,7 +17,7 @@ progress: see the known issues below, and please [report what you find](https://
 | Memory | 32 GB DDR5-6000 |
 | Storage | 1 TB NVMe SSD (the game and its shader cache live here) |
 | System | Windows 11 Home (build 26200) |
-| Monitor | 2560×1440 at 164 Hz; the game draws its 720p mode (races at 1152×648), scaled to the window |
+| Monitor | 2560×1440 at 164 Hz; the game draws its 1080p mode (races at 1728×972), scaled to the window |
 | Controller | DualSense over Bluetooth |
 | Game | Europe **BCES00569**, disc executable 01.00, no update |
 | Port settings | `play.bat` as shipped (live D3D12 renderer, 2 extra SPU threads, pad works in the background) |
@@ -78,7 +78,9 @@ performance matters more than the graphics card.
 
 - The first visit to a scene stutters while its shaders compile; later visits load them from the cache.
 - Online features don't work.
-- Some graphics glitches remain.
+- Some graphics glitches remain. Chamonix in the snow is the worst seen so far: the road shows the
+  sponsor-banner texture and the fences show noise ([#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14));
+  being looked into.
 - The mouse change (Steam's controller mouse is ignored, the real mouse stays free) hasn't been
   tried with a physical controller yet.
 
@@ -86,9 +88,9 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **11 Nov 2026:** v0.1.10 turned on the game's 1080p mode, but the window showed only part of the
-  picture, so v0.1.11 is back on 720p until that's fixed; the previous run's log is kept as
-  `play.prev.err`; the installer fits high-DPI (4K) screens, unpacks RPCS3 on Windows 10 too,
+- **11 Nov 2026:** 1080p: the game uses its own 1080p mode (races at 1728×972 instead of 1152×648, same
+  speed on the tested rig; `PS3_VIDEO_MODE=720` for slow graphics chips); v0.1.10's window showed only
+  part of that picture, fixed in v0.1.12; the previous run's log is kept as `play.prev.err`; the installer fits high-DPI (4K) screens, unpacks RPCS3 on Windows 10 too,
   and keeps a log; the US release confirmed working by players.
 - **10 Nov 2026:** one-click installer (`GT5-Installer.bat`); ultrawide monitors (21:9, 32:9): a wider view, HUD kept 16:9 in the middle;
   black screen on start fixed for everyone building from GitHub (the SPU code is

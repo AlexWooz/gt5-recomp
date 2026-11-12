@@ -47,10 +47,10 @@ REM at that shape; maximize it. On a 16:9 monitor nothing changes. Or a fixed sh
 REM 3440x1440. 16:9 = the PS3's own picture.
 set "PS3_ASPECT=auto"
 REM set "PS3_WINDOW_SIZE=2560x1080"   open the window at exactly this size
-REM Resolution: the TV mode the game is told it's on, as on a PS3. 720 = its 720p mode (races drawn at
-REM 1152x648). 1080 = its 1080p mode (races at 1728x972), but in v0.1.10 the window showed only part of
-REM that picture, so 720 is back as the default until the fix is out.
-set "PS3_VIDEO_MODE=720"
+REM Resolution: the TV mode the game is told it's on, as on a PS3. 1080 = its 1080p mode (races drawn
+REM at 1728x972, sharp HUD and menus at 1920x1080). 720 = its 720p mode (races at 1152x648), for a slow
+REM graphics chip. The window title shows the mode.
+set "PS3_VIDEO_MODE=1080"
 if not exist "%HERE%hdd0" mkdir "%HERE%hdd0"
 if not exist "%HERE%hdd1" mkdir "%HERE%hdd1"
 if not exist "%HERE%logs" mkdir "%HERE%logs"

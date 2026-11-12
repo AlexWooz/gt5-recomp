@@ -9,6 +9,18 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 11 Nov 2026
 
+🏷️ Released as **v0.1.12**
+
+🖥️ **1080p, fixed**
+- The window's buffer now follows the video mode: 1920×1080 in the 1080p mode (still stretched to fit
+  the window), so the whole picture is shown. `play.bat` is back to `PS3_VIDEO_MODE=1080`.
+- Checked in what the window gets this time: the test frame dumps (`LD_FRAME_DUMP`) now save the part a
+  present copies to the window, not the game's whole surface. A 1080p Arcade race and its menus and
+  intro movie showed in full at 1920×1080; a 720p race still works.
+- `logs\play.err` names textures and other reads from main memory that has no GPU mapping at that
+  moment (`[io-unmapped]`), for tracking down wrong textures (Chamonix in the snow shows track
+  textures on the wrong surfaces; being looked into).
+
 🏷️ Released as **v0.1.11**
 
 🩹 **Hotfix: 720p is the default again**

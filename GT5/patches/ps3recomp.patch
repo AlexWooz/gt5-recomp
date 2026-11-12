@@ -8123,7 +8123,7 @@ index 298ee7de..8ea23d2c 100644
  }
  
 diff --git a/libs/video/cellVideoOut.c b/libs/video/cellVideoOut.c
-index c67a6eaa..289d6e1e 100644
+index c67a6eaa..8309df26 100644
 --- a/libs/video/cellVideoOut.c
 +++ b/libs/video/cellVideoOut.c
 @@ -8,7 +8,9 @@
@@ -8153,12 +8153,13 @@ index c67a6eaa..289d6e1e 100644
      case CELL_VIDEO_OUT_RESOLUTION_480:
          *w = 720;  *h = 480;  break;
      case CELL_VIDEO_OUT_RESOLUTION_576:
-@@ -74,10 +82,26 @@ static void get_resolution_wh(u32 resId, u16* w, u16* h)
+@@ -74,10 +82,36 @@ static void get_resolution_wh(u32 resId, u16* w, u16* h)
   * API implementations
   * -----------------------------------------------------------------------*/
  
 +/* PS3_VIDEO_MODE=1080 offers the game the PS3's 1080p mode instead of 720p (the TV mode a game
 + * finds at start-up, before it configures one itself). */
++static int s_env_1080;
 +static void video_mode_from_env(void)
 +{
 +    static int done;
@@ -8168,8 +8169,17 @@ index c67a6eaa..289d6e1e 100644
 +    if (!e || !*e) return;
 +    if (!strcmp(e, "1080") || !strcmp(e, "1080p")) s_resolution_id = CELL_VIDEO_OUT_RESOLUTION_1080;
 +    else if (!strcmp(e, "720") || !strcmp(e, "720p")) s_resolution_id = CELL_VIDEO_OUT_RESOLUTION_720;
++    s_env_1080 = s_resolution_id == CELL_VIDEO_OUT_RESOLUTION_1080;
 +    fprintf(stderr, "[cellVideoOut] PS3_VIDEO_MODE=%s: the game is offered resolution id %u\n",
 +            e, s_resolution_id);
++}
++
++/* 1 when the game will be offered the 1080p mode: the host's frame buffer is then made 1920x1080, or
++ * the 1080p picture would be shown through a 1280x720 one (only its top-left corner). */
++int cellVideoOut_offers_1080(void)
++{
++    video_mode_from_env();
++    return s_env_1080;
 +}
 +
  s32 cellVideoOutGetState(u32 videoOut, u32 deviceIndex, CellVideoOutState* state)
@@ -8611,7 +8621,7 @@ index cfb9685b..8627b851 100644
           * (oracle: RPCS3 FragmentProgramDecompiler.cpp's _builtin_sqrt macro,
           * reused by _builtin_divsq) AND forces the result to exactly 0,
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 25791179..489ba98e 100644
+index 25791179..b6e4aa76 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
 @@ -22,7 +22,7 @@
@@ -13703,10 +13713,10 @@ index 25791179..489ba98e 100644
 -              if (sf_i->location != t.location || sf_i->offset != t.offset ||
 -                  i == target)
 +              if (sf_i->location != t.location || sf_i->offset != t.offset)
-                   continue;
++                  continue;
 +              any_at_address = 1;
 +              if (i == target)
-+                  continue;
+                   continue;
 +              /* Only ever the dummy target of a depth-only pass: nothing to read. */
 +              if (!sf_i->last_draw_generation && !sf_i->last_clear_generation && !sf_i->last_copy_generation)
 +                  continue;
@@ -14227,7 +14237,7 @@ index 25791179..489ba98e 100644
  void rsx_live_draw_set_movie_mode(int on)
  {
      static unsigned long long suppressed_at_start = 0;
-@@ -8929,6 +12740,72 @@ static void ld_dump_texel_rgb(const u8* p, int fp16, u8* out)
+@@ -8929,12 +12740,81 @@ static void ld_dump_texel_rgb(const u8* p, int fp16, u8* out)
   * through here while recording). */
  static FILE* g_ld_record_to;
  
@@ -14297,10 +14307,21 @@ index 25791179..489ba98e 100644
 +    return 1;
 +}
 +
++/* When set, a dump keeps only the top-left part of this size: the frame dump uses the swap chain's
++ * size, so it shows what the window gets (a present copies that corner), not the whole surface. */
++static u32 s_dump_clip_w, s_dump_clip_h;
  static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
  {
      ID3D12Resource* rt = surface ? surface->tex : NULL;
-@@ -8948,7 +12825,7 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
+     if (!rt) return UINT64_MAX;
+-    const u32 width = surface->w;
+-    const u32 height = surface->h;
++    const u32 width = s_dump_clip_w && surface->w > s_dump_clip_w ? s_dump_clip_w : surface->w;
++    const u32 height = s_dump_clip_h && surface->h > s_dump_clip_h ? s_dump_clip_h : surface->h;
+     if (!width || !height) return UINT64_MAX;
+     const int fp16 = surface->fmt == DXGI_FORMAT_R16G16B16A16_FLOAT;
+     const u32 texel = fp16 ? 8u : 4u;
+@@ -8948,7 +12828,7 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
      bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
      bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
      ID3D12Resource* rb = NULL;
@@ -14309,7 +14330,18 @@ index 25791179..489ba98e 100644
              D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&rb)))
          return UINT64_MAX;
  
-@@ -9202,6 +13079,7 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
+@@ -8968,7 +12848,9 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
+     dst.PlacedFootprint.Footprint.Height = height;
+     dst.PlacedFootprint.Footprint.Depth = 1;
+     dst.PlacedFootprint.Footprint.RowPitch = pitch;
+-    g.list->lpVtbl->CopyTextureRegion(g.list, &dst, 0, 0, 0, &src, NULL);
++    const D3D12_BOX clip_box = { 0, 0, 0, width, height, 1 };
++    g.list->lpVtbl->CopyTextureRegion(g.list, &dst, 0, 0, 0, &src,
++        (width != surface->w || height != surface->h) ? &clip_box : NULL);
+ 
+     b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+     b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+@@ -9202,6 +13084,7 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
  void rsx_live_draw_present(u32 buffer_id)
  {
      if (!g.ready) return;
@@ -14317,7 +14349,7 @@ index 25791179..489ba98e 100644
  
      /* LD_SURF_DUMP=<dir>: dump EVERY live surface once, with its non-black
       * count, at LD_SURF_DUMP_FRAME (default 1200).
-@@ -9262,20 +13140,38 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9262,20 +13145,38 @@ void rsx_live_draw_present(u32 buffer_id)
       * late scene, e.g. frames for a GIF, without thousands of early files). */
      static long dump_from = -1;
      if (dump_from < 0) { const char* e = getenv("LD_FRAME_DUMP_FROM"); dump_from = e ? atol(e) : 0; }
@@ -14361,7 +14393,7 @@ index 25791179..489ba98e 100644
          }
      }
      if (target == LD_INVALID_SURFACE && buffer_id < 8 &&
-@@ -9296,6 +13192,19 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9296,10 +13197,25 @@ void rsx_live_draw_present(u32 buffer_id)
          return;
      }
      g_ld_last_present_target = target;
@@ -14381,7 +14413,13 @@ index 25791179..489ba98e 100644
      if (dump_now) {
          char path[MAX_PATH * 2];
          snprintf(path, sizeof(path), "%s\\frame_%06u.ppm", dump_dir, dump_n - 1u);
-@@ -9416,7 +13325,23 @@ void rsx_live_draw_present(u32 buffer_id)
++        s_dump_clip_w = g.width; s_dump_clip_h = g.height;   /* what the present copies to the window */
+         const u64 nb = ld_dump_surface_ppm(path, &g.surfaces[target]);
++        s_dump_clip_w = s_dump_clip_h = 0;
+         fprintf(stderr, "[frame-dump] %s %ux%u nonblack=%llu\n", path,
+                 g.surfaces[target].w, g.surfaces[target].h,
+                 (unsigned long long)(nb == UINT64_MAX ? 0 : nb));
+@@ -9416,7 +13332,23 @@ void rsx_live_draw_present(u32 buffer_id)
      bar[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
      g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
  
@@ -14406,7 +14444,7 @@ index 25791179..489ba98e 100644
  
      bar[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
      bar[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-@@ -9424,9 +13349,13 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9424,9 +13356,13 @@ void rsx_live_draw_present(u32 buffer_id)
      bar[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
      g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
  
@@ -14421,7 +14459,7 @@ index 25791179..489ba98e 100644
          if (SUCCEEDED(present_hr))
              ld_present_measure_record(g_ld_frames + 1u);
          else {
-@@ -10153,6 +14082,30 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -10153,6 +14089,30 @@ void rsx_live_draw_present(u32 buffer_id)
                    } }
                  (void)hi; (void)rbase;
              } }
@@ -14452,7 +14490,7 @@ index 25791179..489ba98e 100644
            fprintf(stderr, "[fps] %.1f (frames %u..%u over %.1fs)\n",
                    (g_ld_frames - fps_f0) * 1000.0 / (double)(now - fps_t0),
                    fps_f0, g_ld_frames, (now - fps_t0) / 1000.0);
-@@ -10275,9 +14228,11 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -10275,9 +14235,11 @@ void rsx_live_draw_present(u32 buffer_id)
      }
  #endif
  
@@ -14467,7 +14505,7 @@ index 25791179..489ba98e 100644
  #if !defined(YZ_PERF_CLEAN)
      g_ld_frame_vertex_constant_ring_recycles = 0;
  #endif
-@@ -10520,6 +14475,10 @@ void rsx_live_draw_shutdown(void)
+@@ -10520,6 +14482,10 @@ void rsx_live_draw_shutdown(void)
      if (g.ps_cb) g.ps_cb->lpVtbl->Release(g.ps_cb);
      if (g.depth_snapshot_pso)
          g.depth_snapshot_pso->lpVtbl->Release(g.depth_snapshot_pso);
@@ -14478,7 +14516,7 @@ index 25791179..489ba98e 100644
      for (u32 i = 0; i < 4; i++)
          if (g.downsample_pso[i]) g.downsample_pso[i]->lpVtbl->Release(g.downsample_pso[i]);
      if (g.downsample_rootsig)
-@@ -10552,3 +14511,31 @@ void rsx_live_draw_shutdown(void)
+@@ -10552,3 +14518,31 @@ void rsx_live_draw_shutdown(void)
  }
  
  #endif /* _WIN32 */
@@ -15585,7 +15623,7 @@ index 9cb50400..e38aea53 100644
      ps3_hle_register_ctx(ps3_compute_nid("sys_mmapper_unmap_memory"),   "sys_mmapper_unmap_memory",   crt_ok);
      ps3_hle_register_ctx(ps3_compute_nid("sys_mmapper_free_memory"),    "sys_mmapper_free_memory",    crt_ok);
 diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
-index a55afb05..4ca88949 100644
+index a55afb05..d8f9df9e 100644
 --- a/runtime/ppu/tests/boot_main.cpp
 +++ b/runtime/ppu/tests/boot_main.cpp
 @@ -43,6 +43,19 @@
@@ -15676,7 +15714,33 @@ index a55afb05..4ca88949 100644
  extern "C" unsigned cellGcmGetCurrentDisplayBufferId(void);
  extern "C" int sys_event_queue_inject(unsigned int, unsigned long long, unsigned long long, unsigned long long, unsigned long long);
  
-@@ -446,8 +460,68 @@ static DWORD WINAPI guest_prof_thread(LPVOID)
+@@ -321,6 +335,7 @@ extern "C" int   rsx_live_draw_init(void* hwnd, uint32_t w, uint32_t h,
+                                                                 uint32_t, uint32_t),
+                                     void* user);
+ extern "C" void  rsx_live_draw_present(uint32_t buffer_id);
++extern "C" int   cellVideoOut_offers_1080(void);   /* libs/video/cellVideoOut.c */
+ extern "C" uint32_t rsx_live_draw_get_frames(void);
+ extern "C" uint32_t rsx_live_draw_get_last_draws(void);
+ extern "C" int   rsx_null_backend_init(uint32_t w, uint32_t h, const char* title);
+@@ -350,7 +365,16 @@ static const uint8_t* rsx_live_guest_ptr(void* user, uint32_t location,
+         ea = cellGcmResolveLocated(1, offset);          /* RSX local VRAM */
+     } else {
+         ea = cellGcmResolveIO(offset);                  /* main, via the IO table */
+-        if (!ea) ea = cellGcmResolveLocated(0, offset); /* unmapped: old behaviour */
++        if (!ea) {
++            ea = cellGcmResolveLocated(0, offset);      /* unmapped: old behaviour */
++            /* A main-memory offset with no IO mapping right now: whatever is read there is not
++             * what the title put at that offset. Counted, and the first ones named. */
++            static long s_unmapped;
++            const long n = __atomic_add_fetch(&s_unmapped, 1, __ATOMIC_RELAXED);
++            if (n <= 16 || (n & (n - 1)) == 0)
++                fprintf(stderr, "[io-unmapped] #%ld main offset 0x%08X (+%u bytes) has no IO mapping;"
++                                " read at 0x%08X instead\n", n, offset, min_bytes, ea);
++        }
+     }
+     if (!ea || ea == 0xFFFFFFFFu ||
+         (uint64_t)ea + min_bytes > 0x100000000ull) return nullptr;
+@@ -446,8 +470,68 @@ static DWORD WINAPI guest_prof_thread(LPVOID)
  
  extern "C" const char* cellGame_get_title(void);   /* PARAM.SFO TITLE, for the caption */
  
@@ -15745,16 +15809,30 @@ index a55afb05..4ca88949 100644
      /* Window caption: $PS3_TITLE wins, else the TITLE field PARAM.SFO already
       * gave cellGame, else a neutral name. It used to fall back to a specific
       * other title, so every port announced itself as that game. */
-@@ -461,6 +535,8 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -461,12 +545,19 @@ static DWORD WINAPI vblank_ticker(LPVOID)
       * backbuffer when its clip EQUALS the backend size, so a title that renders
       * into something other than 1280x720 must say so: RSX_W / RSX_H. */
      uint32_t rsx_w = 1280, rsx_h = 720;
+-    if (const char* e = getenv("RSX_W")) rsx_w = (uint32_t)strtoul(e, 0, 0);
+-    if (const char* e = getenv("RSX_H")) rsx_h = (uint32_t)strtoul(e, 0, 0);
 +    /* Wider on a screen wider than 16:9: the title's 720p mode is that wide too (cellVideoOut). */
 +    ps3_display_render_size(1280, 720, &rsx_w, &rsx_h);
-     if (const char* e = getenv("RSX_W")) rsx_w = (uint32_t)strtoul(e, 0, 0);
-     if (const char* e = getenv("RSX_H")) rsx_h = (uint32_t)strtoul(e, 0, 0);
++    /* The frame the engine presents is the video mode's size: 1920x1080 (or its wider shape) when the
++     * title is offered the 1080p mode (PS3_VIDEO_MODE=1080). The window keeps the 720p size, and the
++     * swap chain is stretched to it as before. */
++    uint32_t frame_w = rsx_w, frame_h = rsx_h;
++    if (cellVideoOut_offers_1080()) ps3_display_render_size(1920, 1080, &frame_w, &frame_h);
++    if (const char* e = getenv("RSX_W")) rsx_w = frame_w = (uint32_t)strtoul(e, 0, 0);
++    if (const char* e = getenv("RSX_H")) rsx_h = frame_h = (uint32_t)strtoul(e, 0, 0);
      int rsx_ok;
-@@ -485,7 +561,16 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+     if (rsx_live_draw_enabled()) {
+         rsx_ok = (rsx_null_backend_init(rsx_w, rsx_h, _title) == 0);
+-        if (rsx_ok && rsx_live_draw_init(rsx_null_backend_get_hwnd(), rsx_w, rsx_h,
++        if (rsx_ok && rsx_live_draw_init(rsx_null_backend_get_hwnd(), frame_w, frame_h,
+                                          rsx_live_guest_ptr, nullptr) == 0) {
+             s_rsx_live = 1;
+             rsx_null_backend_suppress_present(1);
+@@ -485,7 +576,16 @@ static DWORD WINAPI vblank_ticker(LPVOID)
       * window DXGI Present throttles hard, which previously stalled these ticks and
       * paced the game's main loop to ~0.5fps. Drive the ticks off REAL elapsed time
       * and catch up in a bounded burst so present latency never slows the game. */
@@ -15772,7 +15850,7 @@ index a55afb05..4ca88949 100644
      for (;;) {
          /* Was Sleep(4). The FIFO kick event existed, was signalled on a dry
           * fence queue, and had no waiter -- so a guest starved for `get` or a
-@@ -494,8 +579,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -494,8 +594,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
           * does. */
          cellGcm_fifo_kick_wait(4);
          ULONGLONG now = GetTickCount64();
@@ -15783,7 +15861,7 @@ index a55afb05..4ca88949 100644
              cellGcmTickVBlank();
              cellGcmTickFlip();
              /* Present a pending flip BEFORE draining further: the flip fires
-@@ -505,8 +591,8 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -505,8 +606,8 @@ static DWORD WINAPI vblank_ticker(LPVOID)
               * writes and showed empty or mixed batches. */
              {
                  if (rsx_ok && cellGcm_take_flip_pending()) {
@@ -15794,7 +15872,7 @@ index a55afb05..4ca88949 100644
                  }
              }
              /* Drain the game's GCM FIFO every tick -- this writes the RSX sync-fence
-@@ -514,20 +600,21 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -514,20 +615,21 @@ static DWORD WINAPI vblank_ticker(LPVOID)
               * Doing it here (not after present) keeps those fences advancing at 60Hz
               * even when present() throttles on a hidden/occluded window. */
              if (rsx_ok) cellGcm_rsx_process_fifo();
@@ -15820,7 +15898,7 @@ index a55afb05..4ca88949 100644
          }
          /* YDKJ_INJECT_Q3: the main thread polls q3 (load/state-complete) each frame but
           * it's never posted (producer signals a condvar, never enqueues). Inject a q3
-@@ -538,7 +625,13 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -538,7 +640,13 @@ static DWORD WINAPI vblank_ticker(LPVOID)
              if(++s_q3 % 8 == 0){ int r=sys_event_queue_inject(qid, 0x1234, 0, 0, 0);
                static int _n=0; if(_n++<12) fprintf(stderr,"[INJQ3] injected q%u event rc=%d\n",qid,r); } }
          if (rsx_ok) {
@@ -15835,7 +15913,7 @@ index a55afb05..4ca88949 100644
              if (getenv("YDKJ_PACETRACE")) {
                  static ULONGLONG s_win=0; static int s_pf=0, s_pres=0; static ULONGLONG s_presms=0;
                  s_pf += fired; s_pres++;
-@@ -557,9 +650,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -557,9 +665,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
                   * flash a partial frame (clear + a few draws). Before the
                   * first flip present freely so the window isn't stuck white
                   * during boot. */
@@ -15847,7 +15925,7 @@ index a55afb05..4ca88949 100644
                      last_flip = fc;
                  } else if (fc == 0) {
                      rsx_backend_present();
-@@ -934,45 +1027,45 @@ static DWORD WINAPI debug_console(LPVOID param)
+@@ -934,45 +1042,45 @@ static DWORD WINAPI debug_console(LPVOID param)
              dump_threads("console", self);
          } else if (!strcmp(verb, "find32") && sscanf(cmd, "%*s %x", &a) == 1) {
              /* find32 <hex>: every aligned big-endian u32 equal to <hex> in committed
@@ -15922,7 +16000,7 @@ index a55afb05..4ca88949 100644
          } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
              dbg_prof((DWORD)a, b ? b : 5);
          } else if (!strcmp(verb, "hle")) {
-@@ -1136,7 +1229,12 @@ int main(int argc, char** argv)
+@@ -1136,7 +1244,12 @@ int main(int argc, char** argv)
      /* Reserve the full 4 GB guest space; pages commit on first touch via the VEH. */
      AddVectoredExceptionHandler(1, guard_report_veh);  /* diagnose 0x80000001 silent deaths */
      AddVectoredExceptionHandler(1, vm_commit_veh);
@@ -15936,7 +16014,7 @@ index a55afb05..4ca88949 100644
      ppu_vm_size = 0;   /* full 32-bit space backed -> OOB guard unnecessary */
  #else
      vm_base = (uint8_t*)calloc(1, 0xE0000000u);
-@@ -1147,6 +1245,25 @@ int main(int argc, char** argv)
+@@ -1147,6 +1260,25 @@ int main(int argc, char** argv)
      uint32_t entry = ppu_load_elf(elf);
      if (!entry) { printf("load failed\n"); return 1; }
  

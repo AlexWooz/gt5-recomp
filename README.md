@@ -157,11 +157,20 @@ the picture stays 16:9 for now, and `logs\play.err` says so in a `[widescreen]` 
 
 **Q: What resolution does it render at?**
 
-**A: GT5's own 720p mode, as on a PS3 connected to a 720p TV, scaled to fit your window.** Races are
-drawn at 1152×648 (the game keeps a black border around them for TVs that cut off the edges), the HUD
-and menus at 1280×720. The game's 1080p mode (races at 1728×972) is coming: v0.1.10 turned it on, but
-the window showed only the top-left part of the picture, so it's off again until that's fixed. It's set
-in `play.bat` with `set "PS3_VIDEO_MODE=720"`. Rendering above the PS3's resolutions is on the list.
+**A: GT5's own 1080p mode, as on a PS3 connected to a 1080p TV, scaled to fit your window.** Races are
+drawn at 1728×972 (the game keeps a black border around them for TVs that cut off the edges), the HUD
+and menus at 1920×1080. It's set in `play.bat`:
+
+| In `play.bat` | |
+|---|---|
+| `set "PS3_VIDEO_MODE=1080"` | the 1080p mode (the default since v0.1.12) |
+| `set "PS3_VIDEO_MODE=720"` | the 720p mode, races at 1152×648: for a slow graphics chip |
+
+On the tested rig both run at the same speed, since the CPU is the limit; on a laptop's built-in
+graphics 720 may be faster. (v0.1.10 had the 1080p mode on too, but its window showed only the top-left
+part of the picture; v0.1.11 went back to 720 until v0.1.12 fixed it.) On an ultrawide monitor the 720p
+mode draws the wider view pixel for pixel (about 1700×720), and the 1080p mode draws it into 1920×1080
+and spreads it sideways. Rendering above the PS3's resolutions is on the list.
 
 **Q: Which controllers work?**
 
@@ -463,7 +472,7 @@ A steering wheel works too, with force feedback (new and untested on real wheels
 
 | Variable | Effect |
 |---|---|
-| `PS3_VIDEO_MODE=720` | The game's 720p mode (default). `1080` is its 1080p mode, not usable yet: the window shows only part of the picture. See the [FAQ](#-faq). |
+| `PS3_VIDEO_MODE=1080` | The game's 1080p mode (default); `720` for its 720p mode on a slow graphics chip. See the [FAQ](#-faq). |
 | `PAD_BACKGROUND=1` | The pad keeps working when another window has focus. |
 | `PS3_WHEEL=off` | Don't look for a steering wheel. The other `PS3_WHEEL_*` settings are in the [FAQ](#-faq). |
 | `LD_WATCH=1` (or **F9** in the game) | Watch mode for B-Spec races and replays: draws every other frame while the race keeps full speed, draws nothing while minimized, and lowers the game's priority. Off unless you turn it on; with `LD_WATCH=1` it comes on after 10 s without input and goes off when you touch the controls. |
