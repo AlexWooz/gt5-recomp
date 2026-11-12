@@ -7,6 +7,23 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 > or repeated frames (fixed on 4 Nov and 9 Nov), so treat them as rough before-and-after comparisons.
 > From 9 Nov on, numbers are the game's own frames.
 
+## 12 Nov 2026
+
+📝 **Reporting problems**
+- The problem form lists the installer and `update.ps1` as steps, asks for the port's version and, for
+  a picture problem, the mode, track and its time or weather, and has a field for attaching logs.
+  GitHub refuses `.err` files, so the form and the README FAQ say to rename `play.err` to
+  `play.err.txt` (or zip it) first.
+
+🔎 **Wrong textures on some tracks** ([#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14))
+- Reproduced at Chamonix in the snow: sponsor banners across the road, noise on the fences. Traced to
+  the game's texture streaming: the SPU job that unpacks each track texture into graphics memory works
+  correctly (its output matches unpacking the same data on the PC), but some slots are handed another
+  texture's compressed data. Which tracks it hits varies (Eiger for a player), so it looks
+  timing-related. Ruled out so far: the renderer and its texture cache, file reading (including offsets
+  past 4 GB in the 12 GB GT.VOL), the SPU job's compiled code (same result interpreted), extra SPU
+  threads, and overlapping graphics memory. Still being narrowed down.
+
 ## 11 Nov 2026
 
 🏷️ Released as **v0.1.13**
