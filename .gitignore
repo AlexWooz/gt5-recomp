@@ -44,6 +44,7 @@ GT5/scripts/refs/
 !docs/banner.png
 !docs/social.png
 !docs/status.png
+!docs/launcher.png
 *.ppm
 *.jpg
 *.f32
@@ -58,6 +59,9 @@ ps3recomp/
 ffmpeg/
 # GT5-Installer.bat's helpers (RPCS3, the shortcut icon)
 tools/
+# The launcher, built on your PC by launcher\build-launcher.ps1, and the settings it saves
+GT5Launcher.exe
+GT5/settings.bat
 venv/
 __pycache__/
 *.pyc

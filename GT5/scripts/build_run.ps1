@@ -29,14 +29,20 @@ function Remove-DamagedObjects {
 # A GT5\spu from an older version may have a closed permission list ("Access is denied" from ninja).
 & (Join-Path $PSScriptRoot "fix_spu_access.ps1")
 if ($LASTEXITCODE -ne 0) { exit 1 }
+# After a good build: the launcher (GT5Launcher.exe in the install folder), rebuilt with every update.
+function Exit-Built {
+    $lb = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) "launcher\build-launcher.ps1"
+    if ((-not $Targets -or $Targets -contains "gt5") -and (Test-Path $lb)) { & $lb }
+    exit 0
+}
 Write-Host "Building with $Jobs parallel jobs (set GT5_JOBS to change)."
-if ((Invoke-Build $Jobs) -eq 0) { exit 0 }
+if ((Invoke-Build $Jobs) -eq 0) { Exit-Built }
 # Up to four retries: the linker names only a few files per error, so damaged objects surface one at a time.
 foreach ($try in 1..4) {
     $Jobs = [math]::Max(1, [int][math]::Floor($Jobs / 2))
     Write-Host ""
     Write-Host "The build stopped. Trying again with $Jobs parallel jobs; it carries on where it stopped..." -ForegroundColor Yellow
     Remove-DamagedObjects
-    if ((Invoke-Build $Jobs) -eq 0) { exit 0 }
+    if ((Invoke-Build $Jobs) -eq 0) { Exit-Built }
 }
 exit 1

@@ -1,6 +1,6 @@
 # 📋 Current state
 
-*Last updated: 11 November 2026*
+*Last updated: 12 November 2026*
 
 ## 🟢 Playable
 
@@ -59,9 +59,10 @@ performance matters more than the graphics card.
   with `GT5\logs\play.err` attached (settings are in the README's FAQ).
 - **The picture can freeze on one screen at the first start** while the game carries on behind it
   (the menu sounds still react to the controller). Two players have seen it; restarting the game got
-  past it. Being looked into ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10)). The
-  likely cause is the graphics driver resetting or refusing a frame, after which the port stops
-  drawing. **If it happens to you:** attach that run's log to #10: `GT5\logs\play.err`, or
+  past it. Being looked into ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10)). One
+  sure way to cause it is **Alt+Enter** (found by a player): Windows switches the window to exclusive
+  full screen behind the port's back. Use the launcher's borderless full screen instead; Alt+Enter
+  will be turned off. Another possible cause is the graphics driver resetting or refusing a frame. **If it happens to you:** attach that run's log to #10: `GT5\logs\play.err`, or
   `GT5\logs\play.prev.err` once you've started the game again (since v0.1.10 each start keeps the
   previous log); a line starting with `[d3d-fail]` says what failed.
 - More speed in busy race scenes (the graphics thread is the limit), and on laptops and integrated
@@ -80,9 +81,10 @@ performance matters more than the graphics card.
 - Online features don't work.
 - Some graphics glitches remain. The worst: on some tracks, some textures show another texture's
   picture or noise (sponsor banners across the road and noisy fences at Chamonix in the snow here, Eiger
-  for a player: [#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14)). Traced to the game's
-  texture streaming: the SPU job that unpacks track textures works, but some slots are handed the wrong
-  compressed data, and which ones seems to depend on timing. Still being narrowed down.
+  for a player: [#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14)). Narrowed down: every
+  track texture is loaded and unpacked correctly, but textures of the same size end up in each other's
+  place in graphics memory (a 512x128 banner where the road's texture should be). Finding which step
+  of the game's texture streaming swaps them is being worked on.
 - The mouse change (Steam's controller mouse is ignored, the real mouse stays free) hasn't been
   tried with a physical controller yet.
 
@@ -90,6 +92,9 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
+- **12 Nov 2026:** the launcher: every setting in one window (resolution, borderless full screen, wheel,
+  language, mods), Play, one-click updates and a log saver, in English or Chinese; double-click
+  `Update.bat`; updates no longer stop with "Access is denied"; the version in the window title.
 - **11 Nov 2026:** 1080p: the game uses its own 1080p mode (races at 1728×972 instead of 1152×648, same
   speed on the tested rig; `PS3_VIDEO_MODE=720` for slow graphics chips); v0.1.10's window showed only
   part of that picture, fixed in v0.1.12; the previous run's log is kept as `play.prev.err`; the installer fits high-DPI (4K) screens, unpacks RPCS3 on Windows 10 too,

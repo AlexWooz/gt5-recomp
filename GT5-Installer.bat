@@ -119,8 +119,10 @@ function Get-GameInfo([string]$pick) {
             $info.Text = "Found $id, but PS3_GAME\USRDIR\EBOOT.BIN is missing: the dump isn't complete."
         } elseif ($Supported.ContainsKey($id)) {
             $info.Ok = $true; $info.Text = "Found: $title, $($Supported[$id]) ($id)"
-        } elseif ($title -match 'Gran Turismo') {
-            $info.Text = "Found $title ($id), but only $(($Supported.Keys | Sort-Object) -join ' and ') work so far."
+        } elseif ($title -match 'Gran Turismo' -and $title -notmatch 'Prologue') {
+            # Other releases (Japan, Asia) haven't been tried: let them through, with a warning.
+            $info.Ok = $true
+            $info.Text = "Found: $title ($id). Not tried yet (Europe and North America work): it may work; please report how it goes."
         } else {
             $info.Text = "That's $title ($id), not Gran Turismo 5."
         }
@@ -380,7 +382,9 @@ function New-Shortcut([string]$base) {
     $lnkPath = Join-Path $where "Gran Turismo 5 (PC).lnk"
     $ws = New-Object -ComObject WScript.Shell
     $l = $ws.CreateShortcut($lnkPath)
-    $l.TargetPath = Join-Path $base "GT5\play.bat"; $l.WorkingDirectory = Join-Path $base "GT5"; $l.WindowStyle = 7
+    $launcher = Join-Path $base "GT5Launcher.exe"   # settings, play and updates (built with the game)
+    if (Test-Path $launcher) { $l.TargetPath = $launcher; $l.WorkingDirectory = $base; $l.WindowStyle = 1 }
+    else { $l.TargetPath = Join-Path $base "GT5\play.bat"; $l.WorkingDirectory = Join-Path $base "GT5"; $l.WindowStyle = 7 }
     $l.Description = "Gran Turismo 5 for PC"
     if (Test-Path $icon) { $l.IconLocation = "$icon,0" }
     $l.Save()
@@ -545,9 +549,10 @@ if (-not (Test-Path (Join-Path $gt5 "build\gt5.exe"))) { Stop-Install "the build
 $lnk = New-Shortcut $base
 Write-Host ""
 Write-Host "  Done! Gran Turismo 5 is installed." -ForegroundColor Green
-Write-Host "  Start it with 'Gran Turismo 5 (PC)' on your desktop (or $gt5\play.bat)."
+Write-Host "  Start it with 'Gran Turismo 5 (PC)' on your desktop: the launcher, with settings (resolution,"
+Write-Host "  full screen, wheel, language), Play and Updates. (Or $gt5\play.bat directly.)"
 Write-Host "  Keyboard: Z = Cross, X = Circle, arrows, Enter = Start. Pads work too. More in README.md."
-Write-Host "  To update later, run GT5-Installer.bat again."
+Write-Host "  To update later: the launcher's Updates page, or double-click Update.bat in $base."
 if (-not $env:GT5_INSTALL_NOGUI) {
     $a = Read-Host "  Start it now? (Y/N)"
     if ($a -match '^[Yy]') { Start-Process -FilePath $lnk }

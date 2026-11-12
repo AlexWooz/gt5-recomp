@@ -5,13 +5,14 @@
 #   powershell -ExecutionPolicy Bypass -File update.ps1 -Version v0.1.0     switch to that version
 #   powershell -ExecutionPolicy Bypass -File update.ps1 -Dev                newest changes not yet released
 # -NoBuild switches without building (build later with GT5\scripts\build.cmd gt5); -Force re-lifts and
-# rebuilds even when nothing changed.
+# rebuilds even when nothing changed. Easiest: the launcher's Updates page, or double-click Update.bat.
+# (-Relaunch <exe>: the launcher's Update button; this opens it again when done.)
 #
 # Kept: your saves (GT5\hdd0), your game files, the shader cache, and edits you made to files such as
 # play.bat (set aside during the switch and put back). The previous gt5.exe is kept as
 # GT5\build\gt5.previous.exe. The slow re-lift only runs when a version changes the lift tools;
 # otherwise only the changed code is rebuilt.
-param([string]$Version, [switch]$List, [switch]$Dev, [switch]$NoBuild, [switch]$Force, [switch]$Here)
+param([string]$Version, [switch]$List, [switch]$Dev, [switch]$NoBuild, [switch]$Force, [switch]$Here, [string]$Relaunch)
 # Errors are checked through exit codes: with "Stop", Windows PowerShell turns git's progress messages
 # on stderr into errors.
 $ErrorActionPreference = "Continue"
@@ -24,7 +25,15 @@ $py = Join-Path $base "venv\Scripts\python.exe"
 $stamp = Get-Date -Format "yyyy-MM-dd_HHmm"
 $fallbackBase = "4e8f3ca87a3e1d87bb83b8b7e9348fe2685cd514"   # versions from before ps3recomp-base.txt existed
 
-function Fail([string]$m) { Write-Host "update: $m" -ForegroundColor Red; exit 1 }
+# Started from the launcher: open it again at the end; after a failure, wait so the message can be read.
+function Finish([int]$code) {
+    if ($Relaunch) {
+        if ($code -ne 0) { Write-Host ""; Read-Host "Press Enter to close this window" | Out-Null }
+        if (Test-Path -LiteralPath $Relaunch) { Start-Process -FilePath $Relaunch }
+    }
+    exit $code
+}
+function Fail([string]$m) { Write-Host "update: $m" -ForegroundColor Red; Finish 1 }
 function Warn([string]$m) { Write-Host $m -ForegroundColor Yellow }
 function Describe {
     if (-not (Test-Path (Join-Path $base ".git"))) { return "a downloaded copy (not a git clone)" }
@@ -111,7 +120,7 @@ if (-not $Here) {
     $targetCommit = git -C $base rev-parse "$target^{commit}"
     if ($targetCommit -eq (git -C $base rev-parse HEAD) -and -not $Force -and (Test-Path (Join-Path $state "applied.patch"))) {
         Write-Host "Already on $label."
-        exit 0
+        Finish 0
     }
     if ($targetCommit -eq (git -C $base rev-parse HEAD)) { Write-Host "Reinstalling $label" }
     else { Write-Host "Switching from $from to $label" }
@@ -232,3 +241,5 @@ if ($built -ne 0) { Fail "the build failed (see the messages above). The previou
 Write-Host ""
 Write-Host "Done: $from -> $label. Saves, game files, settings and the shader cache were kept." -ForegroundColor Green
 Write-Host "The previous build is GT5\build\gt5.previous.exe; to go back, run update.ps1 -Version <version> (see -List)."
+if ($Relaunch) { Write-Host "Opening the launcher again..."; Start-Sleep -Seconds 2 }
+Finish 0

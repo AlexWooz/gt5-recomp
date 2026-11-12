@@ -162,4 +162,5 @@ $built = $LASTEXITCODE
 Pop-Location
 if ($built -ne 0) { Stop-Setup "the build failed (see above). Please report it with that output: https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml" }
 Write-Host ""
-Write-Host "Done! Play with GT5\play.bat. Later, update.ps1 gets new versions." -ForegroundColor Green
+Write-Host "Done! Start GT5Launcher.exe in this folder (settings, Play, Updates), or GT5\play.bat directly." -ForegroundColor Green
+Write-Host "Later, the launcher's Updates page or a double-click on Update.bat gets new versions." -ForegroundColor Green

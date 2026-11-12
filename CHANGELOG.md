@@ -9,6 +9,27 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.15**
+
+🎛️ **The launcher** (asked for in [#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14))
+- `GT5Launcher.exe` in the install folder, and **Gran Turismo 5 (PC)** on the desktop now opens it: one
+  window with every setting, then **Play**. Display: 1080p/720p, screen shape, **borderless full screen**
+  (or maximized, or a window size), watch mode, SPU threads. Controls: steering wheel, rotation, force
+  feedback strength and direction, pad in the background. Game: the game's language, mods from
+  `GT5\mods`. Updates: your version, the newest one and what's new, and **Update now**. Help: **Save
+  logs for a report** (your logs on the desktop as `.txt`, which GitHub accepts), the logs folder, the
+  problem form. In English or Chinese (asked for in discussion #18).
+- It's built on your PC with the C# compiler that comes with Windows, each time the game is built, so it
+  arrives with this update by itself. Settings go to `GT5\settings.bat`, which `play.bat` reads after its
+  own lines, so `play.bat` still starts the game the same way.
+- **Updating is a double-click:** the launcher's **Update now**, or `Update.bat` in the install folder.
+- **README reorganised:** a link bar at the top (Install, Launcher, Updating, Version history, Changelog,
+  Status, FAQ, Modding, Contributing, License), a table of contents, and the sections in order: getting
+  started, how it's going, setting up by hand, about the project. The version history has its own page,
+  [VERSIONS.md](VERSIONS.md); each release adds its line.
+- The installer lets other GT5 releases (Japan, Asia) through with a warning instead of stopping: they
+  haven't been tried, so please report how they go.
+
 🏷️ Released as **v0.1.14**
 
 🔧 **Update stopped with "Access is denied"** ([#15](https://github.com/MormonFTP-hub/gt5-recomp/issues/15))

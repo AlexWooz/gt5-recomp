@@ -56,6 +56,9 @@ REM Resolution: the TV mode the game is told it's on, as on a PS3. 1080 = its 10
 REM at 1728x972, sharp HUD and menus at 1920x1080). 720 = its 720p mode (races at 1152x648), for a slow
 REM graphics chip. The window title shows the mode.
 set "PS3_VIDEO_MODE=1080"
+REM The launcher (GT5Launcher.exe in the install folder) saves its settings in settings.bat; they win
+REM over the lines above. Without the launcher there's no settings.bat and the lines above count.
+if exist "%HERE%settings.bat" call "%HERE%settings.bat"
 if not exist "%HERE%hdd0" mkdir "%HERE%hdd0"
 if not exist "%HERE%hdd1" mkdir "%HERE%hdd1"
 if not exist "%HERE%logs" mkdir "%HERE%logs"

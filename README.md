@@ -10,6 +10,18 @@
   <img src="https://img.shields.io/badge/license-MIT-E8312F?style=for-the-badge" alt="MIT license">
   <img src="https://img.shields.io/badge/Discord-mormonftp-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord: mormonftp">
 </p>
+<p align="center">
+  <a href="#install"><b>Install</b></a> ·
+  <a href="#launcher"><b>Launcher</b></a> ·
+  <a href="#updating"><b>Updating</b></a> ·
+  <a href="VERSIONS.md"><b>Version history</b></a> ·
+  <a href="CHANGELOG.md"><b>Changelog</b></a> ·
+  <a href="STATUS.md"><b>Status</b></a> ·
+  <a href="#faq"><b>FAQ</b></a> ·
+  <a href="MODDING.md"><b>Modding</b></a> ·
+  <a href="CONTRIBUTING.md"><b>Contributing</b></a> ·
+  <a href="LICENSE"><b>License</b></a>
+</p>
 
 # GT5 Recomp
 
@@ -29,6 +41,17 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
 >
 > See [Which copy of GT5](#which-copy-of-gt5) for how to check your files.
 
+## 📑 Contents
+
+| 🚀 Getting started | 📈 How it's going | 🛠️ Setting up by hand | 📚 About the project |
+|---|---|---|---|
+| [Install](#install) | [Current state](#current-state) | [Requirements](#requirements) | [What this repository contains](#repo-contents) |
+| [The launcher](#launcher) | [Try it, tell me how it went](#feedback) | [Which copy of GT5](#which-copy-of-gt5) | [Fork it, mod it](#modding) |
+| [Updating](#updating) | [FAQ](#faq) | [Setup](#setup) | [Credits](#credits) |
+| [Controls](#controls) | | [Switches](#switches) | [License](#license) |
+
+**More pages:** [Version history](VERSIONS.md) · [Changelog](CHANGELOG.md) · [Status board](STATUS.md) · [Modding guide](MODDING.md) · [Contributing](CONTRIBUTING.md) · [License](LICENSE)
+
 <a id="install"></a>
 
 ## ⬇️ Install
@@ -45,10 +68,142 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
 That's all. It installs whatever's missing (Git, Python, Microsoft's C++ build tools), downloads this
 code, unlocks your game's executable and the system software with RPCS3 (used only as a tool for that:
 the game itself runs natively as `gt5.exe`, not in an emulator), builds the game (about an hour the
-first time) and puts **Gran Turismo 5 (PC)** on your desktop. Run it again later to update to the
-newest version. Nothing from the game is ever uploaded or shared.
+first time) and puts **Gran Turismo 5 (PC)** on your desktop, which opens the [launcher](#launcher).
+Nothing from the game is ever uploaded or shared.
 
-Rather do it by hand? See [Setup](#-setup).
+Rather do it by hand? See [Setup](#setup).
+
+<a id="launcher"></a>
+
+## 🎛️ The launcher
+
+<p align="center">
+  <img src="docs/launcher.png" alt="The GT5 launcher: Display settings, with a big Play button" width="80%">
+</p>
+
+**Gran Turismo 5 (PC)** on your desktop (or `GT5Launcher.exe` in your `gt5-recomp` folder) opens the
+launcher: every setting in one window, then **Play**. No more editing `play.bat`.
+
+- **Display:** 1080p or 720p, screen shape (ultrawide), **borderless full screen**, maximized or a
+  window size, watch mode, SPU threads.
+- **Controls:** steering wheel on/off, wheel rotation, force feedback strength and direction, pad in the
+  background, mouse clipping.
+- **Game:** the game's language (as far as your disc has it), your mods from `GT5\mods`, the launcher's
+  own language (English or 中文).
+- **Updates:** shows your version and the newest one with what's new, and **Update now** does the
+  whole update for you and opens the launcher again.
+- **Help:** **Save logs for a report** puts your logs on the desktop as `.txt` files GitHub accepts,
+  plus the logs folder, the problem form and this FAQ.
+
+It's built on your PC from [`launcher/GT5Launcher.cs`](launcher/GT5Launcher.cs) with the C# compiler that
+comes with Windows, every time the game is built, so it updates with the game; its picture is the logo
+from your own disc. Settings are saved in `GT5\settings.bat`, which `play.bat` reads, so `play.bat`
+still works and starts the game the same way. (`GT5Launcher.exe --play` starts the game straight away.)
+
+<a id="updating"></a>
+
+## 🔄 Updating
+
+Every change to the port comes out as a numbered version (v0.1.0, v0.1.1, ...) on the
+[Releases page](https://github.com/MormonFTP-hub/gt5-recomp/releases), with what changed. To hear
+about new ones, click **Watch** at the top of this page, then **Custom** and tick **Releases**.
+
+### The easy way
+
+- **The launcher** checks for a new version when it opens: its **Updates** page shows what's new, and
+  **Update now** does everything below and opens the launcher again.
+- Or **double-click `Update.bat`** in your `gt5-recomp` folder.
+
+Both run `update.ps1`, so everything below applies. (No launcher or `Update.bat` yet? Your next update
+brings them: run the command below once.)
+
+### Are you out of date?
+
+Close the game, open PowerShell in your `gt5-recomp` folder and run:
+
+```
+powershell -ExecutionPolicy Bypass -File update.ps1 -List
+```
+
+It lists every version and marks the one you have (`<- installed`) and the newest (`[newest]`).
+If they're different, you're out of date.
+
+### Update to the newest version
+
+```
+powershell -ExecutionPolicy Bypass -File update.ps1
+```
+
+That one command does everything:
+
+1. It downloads the new version.
+2. It swaps the old ps3recomp patch for the new one.
+3. It re-generates the game code only if that version needs it (about 10 minutes).
+4. It rebuilds only what changed.
+
+Kept as they are:
+- your saves (`GT5\hdd0`) and game files (`GT5\input`, `GT5\vfs`, `GT5\dev_flash`);
+- the shader cache;
+- edits you made to files such as `play.bat`.
+
+The previous `gt5.exe` is kept as `GT5\build\gt5.previous.exe`. If one of your edits clashes with a
+change in the new version, the new version's file is used and your edit is saved in `backups\` so
+you can copy it back.
+
+**If you're several versions behind,** run the same command. It goes straight to the newest version;
+there's no need to step through the ones in between.
+
+### Installed before update.ps1 existed?
+
+If your folder has no `update.ps1` (you set up before v0.1.0), get it first, then update:
+
+```
+git pull
+powershell -ExecutionPolicy Bypass -File update.ps1
+```
+
+If `git pull` says your local changes would be overwritten (usually `play.bat`), run `git stash`,
+then `git pull`, then `git stash pop`, then the update. Your first update re-generates the game code
+once (about 10 minutes), because older installs have no record of what their code was made from.
+
+### Downloaded the ZIP instead of cloning?
+
+A ZIP download can't update itself. Clone the repository fresh as in [Setup](#setup), step 1. Then
+move these folders over from your old copy and run `update.ps1`:
+- your game files: `GT5\input`, `GT5\vfs`, `GT5\dev_flash`;
+- your saves: `GT5\hdd0`.
+
+### Go back to an older version
+
+If a new version gives you trouble, switch back to the one that worked (see `-List` for the names):
+
+```
+powershell -ExecutionPolicy Bypass -File update.ps1 -Version v0.1.0
+```
+
+To play the previous build right away instead, copy `GT5\build\gt5.previous.exe` over
+`GT5\build\gt5.exe` (the last update kept it). Please also
+[report what went wrong](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml).
+
+### Other options
+
+| Command | What it does |
+|---|---|
+| `update.ps1 -Dev` | The newest changes, before they're released. |
+| `update.ps1 -NoBuild` | Switch versions without building; build later with `GT5\scripts\build.cmd gt5`. |
+| `update.ps1 -Force` | Re-generate and rebuild everything, even when nothing changed. |
+
+<a id="controls"></a>
+
+## 🎮 Controls
+
+A DualSense, DualShock 4 or XInput pad works. Without one, the keyboard:
+Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
+
+A steering wheel works too, with force feedback (new and untested on real wheels): see the
+[FAQ](#faq).
+
+<a id="current-state"></a>
 
 ## 📋 Current state
 
@@ -61,6 +216,8 @@ board (tested rig, what works, what's being worked on, known issues, recent chan
 [STATUS.md](STATUS.md); updates are also posted in
 [Announcements](https://github.com/MormonFTP-hub/gt5-recomp/discussions/categories/announcements).
 Everything done on the port since the first day, with dates, is in [CHANGELOG.md](CHANGELOG.md).
+
+<a id="feedback"></a>
 
 ## 🏁 Try it, then tell me how it went
 
@@ -76,25 +233,24 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Post quick results, screenshots of it running, or ask for help | [Discussions](https://github.com/MormonFTP-hub/gt5-recomp/discussions/1) |
 | Talk to me directly | Discord: **mormonftp** (add me and send a message) |
 
-## 🔧 Fork it, mod it
-
-Forks are welcome; take whatever you like (MIT license). If you make something good, open a pull
-request or [show it here](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=4-my-fork-or-mod.yml)
-so it can come back into the main repo. [MODDING.md](MODDING.md) covers the ways in: switchable
-game-code mods in `GT5\mods`, the graphics, controller and sound code, and the tools for finding
-your way around. [CONTRIBUTING.md](CONTRIBUTING.md) has the few rules.
+<a id="faq"></a>
 
 ## ❓ FAQ
 
 | Question | Short answer |
 |---|---|
-| Steering wheels? | 🧪 New, not yet tried on a real wheel: [wheel owners wanted](#-faq) |
+| Steering wheels? | 🧪 New, not yet tried on a real wheel: [wheel owners wanted](#faq) |
 | Force feedback? | 🧪 New, with wheel support, also untried on a real wheel |
 | Widescreen (16:9)? | ✅ Yes, GT5 is a 16:9 game |
 | Ultrawide (21:9, 32:9)? | ✅ New: a wider view, with the HUD kept 16:9 in the middle |
 | Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard |
 | US copy (BCUS98114)? | ✅ Yes, players have raced on it |
 | Version 1.02, or a game update (2.xx)? | ⚠️ 1.02 untried; updates not yet (see below) |
+| Settings without editing files? | ✅ New: the [launcher](#launcher) |
+| Full screen? | ✅ New: borderless full screen in the launcher. Don't press Alt+Enter: it freezes the picture (being fixed) |
+| Higher than 1080p (4K)? | ⚠️ The game's top mode is its 1080p one (races drawn at 1728x972), scaled up to your window; drawing above that isn't there yet |
+| Japanese or Asian release (BCJS, BCAS)? | ⚠️ Untried; the installer lets them through now. Please report how it goes |
+| Linux, Android? | ❌ Windows only for now (an Android build is being worked on) |
 | Online? | ❌ No |
 | Is it legal? | ✅ No game files here: you build it from your own disc |
 | Ready-made download? | ❌ No, but [GT5-Installer.bat](#install) builds it for you |
@@ -159,7 +315,7 @@ the picture stays 16:9 for now, and `logs\play.err` says so in a `[widescreen]` 
 
 **A: GT5's own 1080p mode, as on a PS3 connected to a 1080p TV, scaled to fit your window.** Races are
 drawn at 1728×972 (the game keeps a black border around them for TVs that cut off the edges), the HUD
-and menus at 1920×1080. It's set in `play.bat`:
+and menus at 1920×1080. Choose it in the [launcher](#launcher) (Display, Resolution), or in `play.bat`:
 
 | In `play.bat` | |
 |---|---|
@@ -175,7 +331,7 @@ and spreads it sideways. Rendering above the PS3's resolutions is on the list.
 **Q: Which controllers work?**
 
 **A: DualSense and DualShock 4 (USB or Bluetooth), Xbox and other XInput pads, and the keyboard.** See
-[Controls](#-controls) for the keyboard layout.
+[Controls](#controls) for the keyboard layout.
 
 **Q: Can I use a US copy?**
 
@@ -229,7 +385,10 @@ with that line.
 **Q: The picture froze on one screen, but the menu sounds still react when I press buttons. What now?**
 
 **A: Restart the game, and send us the log of the frozen run.** The game kept running; only the picture
-stopped, most likely because the graphics driver reset or refused a frame. Attach that run's log to
+stopped. **Alt+Enter** always does this (Windows switches the window to exclusive full screen behind the
+port's back): don't press it, and use the launcher's **borderless full screen** instead; Alt+Enter
+will be switched off. If it froze without Alt+Enter, the graphics driver most likely reset or refused
+a frame. Attach that run's log to
 [issue #10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10), with your graphics card: it's
 `GT5\logs\play.err` until you start the game again, then `GT5\logs\play.prev.err` (each start keeps the
 previous log under that name; builds before v0.1.10 didn't, so there copy `play.err` before restarting). A
@@ -248,42 +407,7 @@ snow): some problems show on one track and not another.
 code written for the port. You build the game yourself from your own disc, and builds must never be
 shared (see below).
 
-## ⚖️ What this repository contains, and what it does not
-
-This repository holds only code and scripts written for the port:
-
-- `GT5/patches/ps3recomp.patch`: the changes to ps3recomp (runtime, graphics, SPU, audio, input).
-- `GT5/CMakeLists.txt`, `GT5/play.bat`, `GT5/src/`, `GT5/config/`: the GT5 build and launcher.
-- `GT5/scripts/`: the lift, build, test and analysis tools.
-
-It does **not** contain, and must never be given:
-
-- any part of the game: the EBOOT, disc or installed files, music, textures, models, shaders,
-  menu images, save data, or screenshots;
-- code generated from the game (the recompiled `generated/` and `spu/` folders, `src/gen/`): every
-  user produces these from their own copy;
-- PS3 firmware, system modules, or any decryption key.
-
-You need your own copy of Gran Turismo 5 (BCES00569 or BCUS98114), dumped from a console you own, and PS3 system
-software installed from Sony's official update file. Use this only with games you own.
-
-- **Never share what you build.** `gt5.exe`, the `generated/` folder and anything else made by the
-  lift contain code recompiled from the game, so each person has to build them from their own copy.
-  Don't upload them or a ready-to-play package, and don't ask for them.
-- This repository does not include, link to, or explain how to obtain decryption keys or game files.
-- Questions about downloaded copies of the game will not be answered.
-
-**Gran Turismo** is a trademark of Sony Interactive Entertainment. This project is not affiliated
-with, endorsed by, or connected to Sony Interactive Entertainment or Polyphony Digital.
-
-## 🏎️ Status
-
-- Boots, menus, A-Spec and B-Spec races, licence tests, special events, replays, Photo Mode, the
-  Course Maker and GT TV work in testing.
-- Performance depends mostly on the CPU: on a fast desktop CPU races run at roughly 45 to 58 fps (see
-  [STATUS.md](STATUS.md) for the tested rig). The first visit to a scene stutters while its shaders compile; later visits load them
-  from the shader cache.
-- Online features do not work. Some graphics issues remain.
+<a id="requirements"></a>
 
 ## 🧰 Requirements
 
@@ -294,6 +418,8 @@ with, endorsed by, or connected to Sony Interactive Entertainment or Polyphony D
 - About 25 GB free: the game files are about 17 GB, the build a few more.
 - Your own GT5 disc (BCES00569 or BCUS98114) and the means to dump it, and
   [RPCS3](https://rpcs3.net) to install PS3 firmware and decrypt the game's executable.
+
+<a id="which-copy-of-gt5"></a>
 
 ## Which copy of GT5
 
@@ -316,6 +442,8 @@ your EBOOT by what the code looks like, not by address, and prints your EBOOT's 
   output (the text only, never any game file).
 
 Check a file's hash with `Get-FileHash <file> -Algorithm SHA1` in PowerShell.
+
+<a id="setup"></a>
 
 ## 🚦 Setup
 
@@ -383,105 +511,18 @@ Optional, for speed: GT5 runs many SPU jobs. They run in an interpreter until th
 recompiled. Run the game once with `SPU_DUMP_MISS=<GT5 folder>\analysis\spu_miss` set, then run
 `python GT5\scripts\lift_spu_jobs.py` and build again (see the comments at the top of that script).
 
-## 🔄 Updating
-
-Every change to the port comes out as a numbered version (v0.1.0, v0.1.1, ...) on the
-[Releases page](https://github.com/MormonFTP-hub/gt5-recomp/releases), with what changed. To hear
-about new ones, click **Watch** at the top of this page, then **Custom** and tick **Releases**.
-
-### Are you out of date?
-
-Close the game, open PowerShell in your `gt5-recomp` folder and run:
-
-```
-powershell -ExecutionPolicy Bypass -File update.ps1 -List
-```
-
-It lists every version and marks the one you have (`<- installed`) and the newest (`[newest]`).
-If they're different, you're out of date.
-
-### Update to the newest version
-
-```
-powershell -ExecutionPolicy Bypass -File update.ps1
-```
-
-That one command does everything:
-
-1. It downloads the new version.
-2. It swaps the old ps3recomp patch for the new one.
-3. It re-generates the game code only if that version needs it (about 10 minutes).
-4. It rebuilds only what changed.
-
-Kept as they are:
-- your saves (`GT5\hdd0`) and game files (`GT5\input`, `GT5\vfs`, `GT5\dev_flash`);
-- the shader cache;
-- edits you made to files such as `play.bat`.
-
-The previous `gt5.exe` is kept as `GT5\build\gt5.previous.exe`. If one of your edits clashes with a
-change in the new version, the new version's file is used and your edit is saved in `backups\` so
-you can copy it back.
-
-**If you're several versions behind,** run the same command. It goes straight to the newest version;
-there's no need to step through the ones in between.
-
-### Installed before update.ps1 existed?
-
-If your folder has no `update.ps1` (you set up before v0.1.0), get it first, then update:
-
-```
-git pull
-powershell -ExecutionPolicy Bypass -File update.ps1
-```
-
-If `git pull` says your local changes would be overwritten (usually `play.bat`), run `git stash`,
-then `git pull`, then `git stash pop`, then the update. Your first update re-generates the game code
-once (about 10 minutes), because older installs have no record of what their code was made from.
-
-### Downloaded the ZIP instead of cloning?
-
-A ZIP download can't update itself. Clone the repository fresh as in [Setup](#-setup), step 1. Then
-move these folders over from your old copy and run `update.ps1`:
-- your game files: `GT5\input`, `GT5\vfs`, `GT5\dev_flash`;
-- your saves: `GT5\hdd0`.
-
-### Go back to an older version
-
-If a new version gives you trouble, switch back to the one that worked (see `-List` for the names):
-
-```
-powershell -ExecutionPolicy Bypass -File update.ps1 -Version v0.1.0
-```
-
-To play the previous build right away instead, copy `GT5\build\gt5.previous.exe` over
-`GT5\build\gt5.exe` (the last update kept it). Please also
-[report what went wrong](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml).
-
-### Other options
-
-| Command | What it does |
-|---|---|
-| `update.ps1 -Dev` | The newest changes, before they're released. |
-| `update.ps1 -NoBuild` | Switch versions without building; build later with `GT5\scripts\build.cmd gt5`. |
-| `update.ps1 -Force` | Re-generate and rebuild everything, even when nothing changed. |
-
-## 🎮 Controls
-
-A DualSense, DualShock 4 or XInput pad works. Without one, the keyboard:
-Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
-
-A steering wheel works too, with force feedback (new and untested on real wheels): see the
-[FAQ](#-faq).
+<a id="switches"></a>
 
 ## ⚙️ Switches
 
-`play.bat` sets the usual environment variables. Some useful ones:
+`play.bat` sets the usual environment variables, then reads `settings.bat` (what the launcher saves),
+so the launcher's settings win. Some useful ones:
 
 | Variable | Effect |
 |---|---|
-| `PS3_VIDEO_MODE=1080` | The game's 1080p mode (default); `720` for its 720p mode on a slow graphics chip. See the [FAQ](#-faq). |
+| `PS3_VIDEO_MODE=1080` | The game's 1080p mode (default); `720` for its 720p mode on a slow graphics chip. See the [FAQ](#faq). |
 | `PAD_BACKGROUND=1` | The pad keeps working when another window has focus. |
-| `PS3_WHEEL=off` | Don't look for a steering wheel. The other `PS3_WHEEL_*` settings are in the [FAQ](#-faq). |
+| `PS3_WHEEL=off` | Don't look for a steering wheel. The other `PS3_WHEEL_*` settings are in the [FAQ](#faq). |
 | `LD_WATCH=1` (or **F9** in the game) | Watch mode for B-Spec races and replays: draws every other frame while the race keeps full speed, draws nothing while minimized, and lowers the game's priority. Off unless you turn it on; with `LD_WATCH=1` it comes on after 10 s without input and goes off when you touch the controls. |
 | `PAD_CURSOR_CLIP=1` | Keep the mouse inside the window while the controller is in use (the old behaviour). By default the mouse is free, and only the mouse movement and clicks Steam makes from the controller are ignored. |
 | `GCM_DRAIN_STAT=1` | Timing lines every 5 s in `logs\play.err`. |
@@ -492,12 +533,56 @@ A steering wheel works too, with force feedback (new and untested on real wheels
 Most speed-ups in the patch can be switched off one by one to rule them out when something looks
 wrong; each is described in a comment next to its `getenv` in the patch.
 
+<a id="repo-contents"></a>
+
+## ⚖️ What this repository contains, and what it does not
+
+This repository holds only code and scripts written for the port:
+
+- `GT5/patches/ps3recomp.patch`: the changes to ps3recomp (runtime, graphics, SPU, audio, input).
+- `GT5/CMakeLists.txt`, `GT5/play.bat`, `GT5/src/`, `GT5/config/`: the GT5 build and launcher.
+- `GT5/scripts/`: the lift, build, test and analysis tools.
+
+It does **not** contain, and must never be given:
+
+- any part of the game: the EBOOT, disc or installed files, music, textures, models, shaders,
+  menu images, save data, or screenshots;
+- code generated from the game (the recompiled `generated/` and `spu/` folders, `src/gen/`): every
+  user produces these from their own copy;
+- PS3 firmware, system modules, or any decryption key.
+
+You need your own copy of Gran Turismo 5 (BCES00569 or BCUS98114), dumped from a console you own, and PS3 system
+software installed from Sony's official update file. Use this only with games you own.
+
+- **Never share what you build.** `gt5.exe`, the `generated/` folder and anything else made by the
+  lift contain code recompiled from the game, so each person has to build them from their own copy.
+  Don't upload them or a ready-to-play package, and don't ask for them.
+- This repository does not include, link to, or explain how to obtain decryption keys or game files.
+- Questions about downloaded copies of the game will not be answered.
+
+**Gran Turismo** is a trademark of Sony Interactive Entertainment. This project is not affiliated
+with, endorsed by, or connected to Sony Interactive Entertainment or Polyphony Digital.
+
+<a id="modding"></a>
+
+## 🔧 Fork it, mod it
+
+Forks are welcome; take whatever you like (MIT license). If you make something good, open a pull
+request or [show it here](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=4-my-fork-or-mod.yml)
+so it can come back into the main repo. [MODDING.md](MODDING.md) covers the ways in: switchable
+game-code mods in `GT5\mods`, the graphics, controller and sound code, and the tools for finding
+your way around. [CONTRIBUTING.md](CONTRIBUTING.md) has the few rules.
+
+<a id="credits"></a>
+
 ## 🏆 Credits
 
 - [ps3recomp](https://github.com/sp00nznet/ps3recomp) and [GT5P](https://github.com/sp00nznet/GT5P)
   by Ned Heller (sp00nznet), MIT licensed; their licences are in `licenses/`.
 - ps3recomp's live D3D12 renderer began as caner (canersaka)'s work for Yakuza: Dead Souls.
 - RPCS3, envytools and Mesa's nv30 driver were consulted as references for hardware behaviour.
+
+<a id="license"></a>
 
 ## 📄 License
 
