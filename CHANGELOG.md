@@ -9,6 +9,17 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 11 Nov 2026
 
+🏷️ Released as **v0.1.13**
+
+🩹 **Hotfix: v0.1.12 didn't install**
+- Setup and `update.ps1` stopped with "this version's patch doesn't apply to ps3recomp"
+  ([#15](https://github.com/MormonFTP-hub/gt5-recomp/issues/15), [#16](https://github.com/MormonFTP-hub/gt5-recomp/issues/16)).
+  Two files of the patch were rebuilt for v0.1.12 without one stray carriage return that ps3recomp
+  has in them, so the patch no longer matched a fresh copy. The game code is unchanged from v0.1.12.
+  Stuck on that message? Run `update.ps1` again (or the installer).
+- The release check now tests the patch on a copy of ps3recomp made the way setup makes it, which
+  rejects the v0.1.12 patch; the old check folder converted line endings and let it through.
+
 🏷️ Released as **v0.1.12**
 
 🖥️ **1080p, fixed**
