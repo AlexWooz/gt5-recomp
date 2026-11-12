@@ -257,7 +257,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Full screen? | ✅ New: borderless full screen in the launcher (Alt+Enter is switched off since v0.1.17: it used to freeze the picture) |
 | Higher than 1080p (4K)? | ⚠️ The game's top mode is its 1080p one (races drawn at 1728x972), scaled up to your window; drawing above that isn't there yet |
 | Japanese or Asian release (BCJS, BCAS)? | ✅ Hong Kong / Asia (BCAS20108) runs, reported by a player, and its disc 01.00 and update 2.01 race in tests too; Japanese untried, please report |
-| Slow PC or laptop? | 🛠️ Laptops now use their dedicated graphics card. On most PCs the CPU sets the pace (the game's own threads), so the launcher's **Speed: 30 fps** rarely helps: it's for a graphics card at its limit. Speed-ups for 4-6 core CPUs are being worked on |
+| Slow PC or laptop? | 🛠️ Laptops now use their dedicated graphics card. On most PCs the CPU sets the pace (the game's own threads), so the launcher's **Speed: 30 fps** rarely helps: it's for a graphics card at its limit. **On a laptop:** plug it in and set Windows' power mode to *Best performance* (and the maker's performance mode, e.g. in HP Command Center or Lenovo Vantage): a tester's i5-1135G7 ran into its power limit 88% of the time, which held its cores at 2.9 GHz instead of 4.2, while its graphics were only 30% busy. Speed-ups for 4-6 core CPUs are being worked on |
 | Linux? | 🧪 New and early: a [native Linux build](#linux). First test (no graphics card) reached the race start; races on a real GPU untested |
 | Steam Deck, Proton, Wine? | ❓ Not tried yet: the Linux build should suit the Deck. Reports welcome |
 | Android? | 🛠️ Being worked on |
@@ -333,7 +333,8 @@ and menus at 1920×1080. Choose it in the [launcher](#launcher) (Display, Resolu
 | `set "PS3_VIDEO_MODE=720"` | the 720p mode, races at 1152×648: for a slow graphics chip |
 
 On the tested rig both run at the same speed, since the CPU is the limit; on a laptop's built-in
-graphics 720 may be faster. (v0.1.10 had the 1080p mode on too, but its window showed only the top-left
+graphics 720 may be faster, but often the CPU is the limit there too (an Iris Xe laptop's graphics were
+30% busy at 1080p). (v0.1.10 had the 1080p mode on too, but its window showed only the top-left
 part of the picture; v0.1.11 went back to 720 until v0.1.12 fixed it.) On an ultrawide monitor the 720p
 mode draws the wider view pixel for pixel (about 1700×720), and the 1080p mode draws it into 1920×1080
 and spreads it sideways. Rendering above the PS3's resolutions is on the list.
