@@ -11,6 +11,10 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 🏷️ Released as **v0.1.20**
 
+🔁 **Updating to v0.1.20 re-lifts the game once**, so it takes longer than a normal update. The lift
+scripts learned about the executables of the game updates (2.xx, work in progress for the Hong Kong
+release); on 01.00 discs they give exactly the same result as before.
+
 💻 **Laptops draw on their dedicated graphics card**
 - The renderer took whichever GPU Windows listed first. On a laptop with two GPUs that's usually the
   built-in one the screen is wired to, so a GTX 1650 laptop could end up drawing on Intel graphics. It now
