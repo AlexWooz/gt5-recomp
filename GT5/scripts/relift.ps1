@@ -58,6 +58,9 @@ Run "setjmp_patch"   @("scripts\setjmp_patch.py")
 # The SPU code (the PS3's co-processors: physics, sound, graphics set-up), compiled like the main code:
 # the SPU programs and the SPURS jobs this copy's EBOOT carries. Without it every SPU job runs in the
 # SPU interpreter, many times slower. Anything not found in a release still runs, interpreted.
+# A GT5\spu from an older version may have a closed permission list: fix_spu_access.ps1 puts it right.
+& (Join-Path $PSScriptRoot "fix_spu_access.ps1")
+if ($LASTEXITCODE -ne 0) { exit 1 }
 Run "spu_programs"   @("$tk\build_spu_workloads.py", "--input", "input\EBOOT.elf", "--lifted", "spu",
                        "--out", "spu\spu_workloads.c", "--constructor", "--allow-partial")
 Run "spu_jobs_find"  @("scripts\spu_jobs_from_eboot.py")

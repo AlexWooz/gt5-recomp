@@ -8,6 +8,11 @@ set "PS3_HDD0_ROOT=%HERE%hdd0"
 set "PS3_HDD1_ROOT=%HERE%hdd1"
 set "RSX_LIVE_DRAW=1"
 set "PS3_TITLE=Gran Turismo 5"
+REM The port's version in the window title (update.ps1 notes it in .gt5\version.txt).
+set "GT5_VER=none"
+if exist "%HERE%..\.gt5\version.txt" set /p GT5_VER=<"%HERE%..\.gt5\version.txt"
+if "%GT5_VER:~0,18%"=="development build " set "GT5_VER=%GT5_VER:~18%"
+if "%GT5_VER:~0,1%"=="v" set "PS3_TITLE=Gran Turismo 5 (recomp %GT5_VER%)"
 set "PS3_VERBOSE=0"
 set "PS3_DEV_FLASH=%HERE%dev_flash"
 REM An SPU job manager polls for work while the game loads; it is not stuck.

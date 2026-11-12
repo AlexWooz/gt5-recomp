@@ -17352,3 +17352,30 @@ index a657ba61..cad74784 100644
              jt_dispatchers = tables
              for ts in tables.values():
                  jt_targets.update(ts)
+diff --git a/tools/spu_program_pipeline.py b/tools/spu_program_pipeline.py
+--- a/tools/spu_program_pipeline.py
++++ b/tools/spu_program_pipeline.py
+@@ -5,8 +5,10 @@
+ """
+ import hashlib
+ import json
++import os
+ from pathlib import Path
+ import re
++import secrets
+ import shutil
+ import subprocess
+ import sys
+@@ -80,7 +82,11 @@
+     if any(Path(p).is_relative_to(destination.resolve()) for p in inputs):
+         raise SystemExit('input files must be outside the owned output directory')
+     destination.parent.mkdir(parents=True, exist_ok=True)
+-    stage = Path(tempfile.mkdtemp(prefix=destination.name + '.stage-', dir=destination.parent))
++    # A plain mkdir, not tempfile.mkdtemp: on Windows, Python 3.12.4+ gives a mkdtemp folder a closed
++    # permission list (SYSTEM, Administrators, its owner) and publish()'s rename carries it to the output,
++    # so a folder made from an Administrator window can't be read from a normal one.
++    stage = destination.parent / f'{destination.name}.stage-{os.getpid()}-{secrets.token_hex(4)}'
++    stage.mkdir()
+     report = dict(schema_version=1, generator='build_spu_workloads', complete=False,
+                   inputs=[], programs=[], errors=[], provenance={})
+     try:

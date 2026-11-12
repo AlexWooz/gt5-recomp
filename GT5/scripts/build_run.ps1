@@ -26,6 +26,9 @@ function Remove-DamagedObjects {
     }
 }
 
+# A GT5\spu from an older version may have a closed permission list ("Access is denied" from ninja).
+& (Join-Path $PSScriptRoot "fix_spu_access.ps1")
+if ($LASTEXITCODE -ne 0) { exit 1 }
 Write-Host "Building with $Jobs parallel jobs (set GT5_JOBS to change)."
 if ((Invoke-Build $Jobs) -eq 0) { exit 0 }
 # Up to four retries: the linker names only a few files per error, so damaged objects surface one at a time.

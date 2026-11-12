@@ -9,6 +9,21 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.14**
+
+🔧 **Update stopped with "Access is denied"** ([#15](https://github.com/MormonFTP-hub/gt5-recomp/issues/15))
+- The build could stop with `ninja: error: ... GetFileAttributesEx(...GT5/spu/sources.cmake): Access is
+  denied`. On Python 3.12.4 and newer, the step that compiles the SPU code made `GT5\spu` readable only
+  by its owner, SYSTEM and Administrators; made from an Administrator window, a normal window then
+  couldn't read it. The step now makes the folder with the install's normal permissions, and the build
+  first puts them back on a `GT5\spu` an older version made (Windows asks once when only an
+  administrator can do that).
+- This version re-lifts once when you update (about 10 minutes), which also rebuilds `GT5\spu`.
+
+🏷️ **Version in the window title**
+- The window title shows the port's version, e.g. `Gran Turismo 5 (recomp v0.1.14) | FPS ...`, read
+  from what `update.ps1` installed (asked for in #15).
+
 📝 **Reporting problems**
 - The problem form lists the installer and `update.ps1` as steps, asks for the port's version and, for
   a picture problem, the mode, track and its time or weather, and has a field for attaching logs.
