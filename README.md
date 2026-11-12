@@ -247,7 +247,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | US copy (BCUS98114)? | ✅ Yes, players have raced on it |
 | Version 1.02, or a game update (2.xx)? | ⚠️ 1.02 untried; updates not yet (see below) |
 | Settings without editing files? | ✅ New: the [launcher](#launcher) |
-| Full screen? | ✅ New: borderless full screen in the launcher. Don't press Alt+Enter: it freezes the picture (being fixed) |
+| Full screen? | ✅ New: borderless full screen in the launcher (Alt+Enter is switched off since v0.1.17: it used to freeze the picture) |
 | Higher than 1080p (4K)? | ⚠️ The game's top mode is its 1080p one (races drawn at 1728x972), scaled up to your window; drawing above that isn't there yet |
 | Japanese or Asian release (BCJS, BCAS)? | ⚠️ Untried; the installer lets them through now. Please report how it goes |
 | Linux, Android? | ❌ Windows only for now (an Android build is being worked on) |
@@ -385,10 +385,10 @@ with that line.
 **Q: The picture froze on one screen, but the menu sounds still react when I press buttons. What now?**
 
 **A: Restart the game, and send us the log of the frozen run.** The game kept running; only the picture
-stopped. **Alt+Enter** always does this (Windows switches the window to exclusive full screen behind the
-port's back): don't press it, and use the launcher's **borderless full screen** instead; Alt+Enter
-will be switched off. If it froze without Alt+Enter, the graphics driver most likely reset or refused
-a frame. Attach that run's log to
+stopped. Before v0.1.17, **Alt+Enter** always did this (Windows switched the window to exclusive full
+screen behind the port's back); it's switched off now, so update, and use the launcher's **borderless
+full screen** for full screen. If it froze without Alt+Enter, the graphics driver most likely reset or
+refused a frame. Attach that run's log to
 [issue #10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10), with your graphics card: it's
 `GT5\logs\play.err` until you start the game again, then `GT5\logs\play.prev.err` (each start keeps the
 previous log under that name; builds before v0.1.10 didn't, so there copy `play.err` before restarting). A

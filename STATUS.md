@@ -60,9 +60,9 @@ performance matters more than the graphics card.
 - **The picture can freeze on one screen at the first start** while the game carries on behind it
   (the menu sounds still react to the controller). Two players have seen it; restarting the game got
   past it. Being looked into ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10)). One
-  sure way to cause it is **Alt+Enter** (found by a player): Windows switches the window to exclusive
-  full screen behind the port's back. Use the launcher's borderless full screen instead; Alt+Enter
-  will be turned off. Another possible cause is the graphics driver resetting or refusing a frame. **If it happens to you:** attach that run's log to #10: `GT5\logs\play.err`, or
+  sure cause, **Alt+Enter** (found by a player), is fixed since v0.1.17: Alt+Enter now does nothing,
+  and the launcher's borderless full screen fills the screen instead. The other possible cause is the
+  graphics driver resetting or refusing a frame. **If it still happens to you:** attach that run's log to #10: `GT5\logs\play.err`, or
   `GT5\logs\play.prev.err` once you've started the game again (since v0.1.10 each start keeps the
   previous log); a line starting with `[d3d-fail]` says what failed.
 - More speed in busy race scenes (the graphics thread is the limit), and on laptops and integrated
@@ -91,7 +91,8 @@ performance matters more than the graphics card.
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
 - **12 Nov 2026:** wrong track textures fixed (banners across the road at Chamonix, scrambled Eiger):
-  the game's graphics-memory copies now happen (v0.1.16); the launcher: every setting in one window (resolution, borderless full screen, wheel,
+  the game's graphics-memory copies now happen (v0.1.16); Alt+Enter no longer freezes the picture
+  (v0.1.17); the launcher: every setting in one window (resolution, borderless full screen, wheel,
   language, mods), Play, one-click updates and a log saver, in English or Chinese; double-click
   `Update.bat`; updates no longer stop with "Access is denied"; the version in the window title.
 - **11 Nov 2026:** 1080p: the game uses its own 1080p mode (races at 1728×972 instead of 1152×648, same
