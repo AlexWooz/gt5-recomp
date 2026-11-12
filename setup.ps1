@@ -115,9 +115,13 @@ if (-not (Test-Path $elf)) {
         Ok "GT5\input\EBOOT.elf: Europe BCES00569, version 01.00 (the tested one)"
     } elseif ($sha1 -eq "40126D2D14B0A95B9601BB11E3A6E778186067AC") {
         Ok "GT5\input\EBOOT.elf: North America BCUS98114 (players have raced on it)"
+    } elseif ($sha1 -eq "49A3662D4B541BB4E0C2E72D2602F89FEB710E71") {
+        Ok "GT5\input\EBOOT.elf: Hong Kong / Asia BCAS20108, version 01.00 (tested)"
+    } elseif ($sha1 -eq "96DEA35B194AA80E993CAD9EBE42E96072F3A3D5") {
+        Ok "GT5\input\EBOOT.elf: Hong Kong / Asia BCAS20108, update 2.01 (tested; needs the update's data in GT5\hdd0, README: Game updates)"
     } else {
         Ok "GT5\input\EBOOT.elf (SHA-1 $sha1)"
-        Write-Host "            Not one tried yet (Europe and US 01.00 are). Another disc version may work: please report how it goes. One from a game update (2.xx) won't." -ForegroundColor Yellow
+        Write-Host "            Not one tried yet. Another disc version may well work: please report how it goes. One from a game update (2.xx) also needs the update's data in GT5\hdd0 (README: Game updates)." -ForegroundColor Yellow
     }
 }
 

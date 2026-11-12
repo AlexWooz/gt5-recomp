@@ -9,7 +9,30 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
-🏷️ Released as **v0.1.21**
+🏷️ Released as **v0.1.22**
+
+🎮 **Game updates (2.xx) run, and the Hong Kong / Asian release is tested** ([discussion #18](https://github.com/MormonFTP-hub/gt5-recomp/discussions/18))
+- Tested with the Asian release BCAS20108: its disc executable 01.00 and its game update 2.01. Both get
+  through the menus and race in Arcade Mode (High Speed Ring); 2.01 also loaded a long-played career save
+  made in RPCS3.
+- What the update executable needed:
+  - The lift scripts from v0.1.20: the jump table the game fills while it runs is found in any
+    executable now, and the update reaches setjmp through linker stubs (its code needs more than one
+    TOC), which count as setjmp calls.
+  - Two SPU jobs (programs for the PS3's co-processors) changed in 2.01. Their new versions are on the
+    list now, so setup says `SPU jobs found in EBOOT.elf: 15 of 15`. A job the port doesn't have can't
+    run at all: the game stays black after the logos and `play.err` has a line ending in `is DROPPED`.
+  - Two system functions 2.01 calls (the SPURS "workload flag") are in the runtime now. Without them
+    it got an unset pointer back.
+- **An update needs its data too.** Besides `EBOOT.BIN` it brings files the game reads from the PS3's
+  hard disk (about 2.2 GB in `USRDIR\PDIPFS` for 2.01). Without them the game starts, but Arcade Mode
+  has no courses to choose. How to set an update up: README,
+  [Game updates](README.md#game-updates). The installer doesn't do it yet.
+- Not tried yet: 2.11 (what the GT5 Master Mod needs), 2.17 (the last update) and other regions'
+  updates. Each can change SPU jobs again; if setup finds fewer than 15, please post its lines.
+- Frame rates on 2.01 aren't measured yet: the test races ran with shaders still compiling and other
+  builds running on the same PC.
+- Setup now names the Asian release's executables (01.00 and 2.01) when it checks `GT5\input\EBOOT.elf`.
 
 🎬 **The opening movie is skipped, so it can't freeze the first start** ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10))
 - Found while testing on a slower PC: under heavy CPU load GT5's opening movie (the Earth from space)

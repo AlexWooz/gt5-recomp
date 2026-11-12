@@ -246,11 +246,11 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Ultrawide (21:9, 32:9)? | ✅ New: a wider view, with the HUD kept 16:9 in the middle |
 | Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard |
 | US copy (BCUS98114)? | ✅ Yes, players have raced on it |
-| Version 1.02, or a game update (2.xx)? | ⚠️ 1.02 untried; updates not yet (see below) |
+| Version 1.02, or a game update (2.xx)? | 🧪 New: game updates run (2.01 tested, [how to set one up](#game-updates)); 1.02, 2.11 and 2.17 untried |
 | Settings without editing files? | ✅ New: the [launcher](#launcher) |
 | Full screen? | ✅ New: borderless full screen in the launcher (Alt+Enter is switched off since v0.1.17: it used to freeze the picture) |
 | Higher than 1080p (4K)? | ⚠️ The game's top mode is its 1080p one (races drawn at 1728x972), scaled up to your window; drawing above that isn't there yet |
-| Japanese or Asian release (BCJS, BCAS)? | ✅ Hong Kong / Asia (BCAS20108) runs, reported by a player; Japanese untried, please report |
+| Japanese or Asian release (BCJS, BCAS)? | ✅ Hong Kong / Asia (BCAS20108) runs, reported by a player, and its disc 01.00 and update 2.01 race in tests too; Japanese untried, please report |
 | Slow PC or laptop? | 🛠️ Laptops now use their dedicated graphics card; the launcher's **Speed: 30 fps** draws every other frame (a little faster on slow CPUs). Bigger speed-ups are being worked on |
 | Linux, Android? | ❌ Windows only for now (an Android build is being worked on) |
 | Online? | ❌ No |
@@ -343,12 +343,13 @@ and the tools find the few spots that could differ between releases in your own 
 
 **Q: My copy says version 1.02, or I have a game update (2.xx). Does that work? What about the Master Mod?**
 
-**A: The port is built from the disc's own executable, version 01.00.** Another disc version, like
-1.02, hasn't been tried: it may well work, since the tools look for what they need in your own
-executable. Setup prints `SPU jobs found in EBOOT.elf: N of 15` while it builds, and that number (15 is
-everything) plus `version_addrs.py`'s output tell us how close it is, so please report them. Executables
-from game updates (2.xx) are a much bigger change to the game's code and data and aren't supported yet;
-so mods that need one, like the GT5 Master Mod (2.11), don't work yet. It's on the list.
+**A: Game updates work now, as far as they've been tried.** The Asian release's update 2.01 boots,
+loads a career save and races. An update needs two things from your PS3 (or RPCS3): its executable
+and its data, see [Game updates](#game-updates). 2.11 (the one the GT5 Master Mod needs) and 2.17 (the
+last one) haven't been tried yet: each update can change the game's SPU programs again, so please
+report what setup prints (`version_addrs.py`'s lines and `SPU jobs found in EBOOT.elf: N of 15`; 15
+is everything). Another disc version, like 1.02, hasn't been tried either; the same lines tell us how
+close it is. The Master Mod itself (its changed game files) hasn't been tried.
 
 **Q: Does online work?**
 
@@ -425,7 +426,7 @@ shared (see below).
   (provides clang-cl, CMake and Ninja).
 - Python 3.11 or newer, and Git.
 - About 25 GB free: the game files are about 17 GB, the build a few more.
-- Your own GT5 disc (BCES00569 or BCUS98114) and the means to dump it, and
+- Your own GT5 disc (BCES00569, BCUS98114 or BCAS20108) and the means to dump it, and
   [RPCS3](https://rpcs3.net) to install PS3 firmware and decrypt the game's executable.
 
 <a id="which-copy-of-gt5"></a>
@@ -433,12 +434,15 @@ shared (see below).
 ## Which copy of GT5
 
 Use the Blu-ray disc's own executable, `PS3_GAME\USRDIR\EBOOT.BIN`, application version **01.00**
-(the `APP_VER` in `PS3_GAME\PARAM.SFO`). Executables from game updates are not supported.
+(the `APP_VER` in `PS3_GAME\PARAM.SFO`), or the executable of a game update together with that
+update's data (see [Game updates](#game-updates)).
 
 | Release | Title ID | Status | SHA-1 of the disc's files |
 |---|---|---|---|
 | Europe / PAL | **BCES00569** | tested | `EBOOT.BIN` `1FFABF4C029CF3099579B73425C91C1FD48CAFCA`, decrypted `EBOOT.elf` `1535B865EC7DD58E7704B378B8621532ECF844E1` |
 | North America | **BCUS98114** | works (run by players) | decrypted `EBOOT.elf` `40126D2D14B0A95B9601BB11E3A6E778186067AC` |
+| Hong Kong / Asia | **BCAS20108** | tested (and run by a player) | decrypted `EBOOT.elf` `49A3662D4B541BB4E0C2E72D2602F89FEB710E71` |
+| Hong Kong / Asia, update 2.01 | **BCAS20108** | tested: menus, career save, Arcade race | decrypted update `EBOOT.elf` `96DEA35B194AA80E993CAD9EBE42E96072F3A3D5` |
 
 Almost everything in the port works for any release, because the recompiled code is generated from
 your own executable. Only three things are tied to where the code sits in one executable: the end of
@@ -451,6 +455,27 @@ your EBOOT by what the code looks like, not by address, and prints your EBOOT's 
   output (the text only, never any game file).
 
 Check a file's hash with `Get-FileHash <file> -Algorithm SHA1` in PowerShell.
+
+<a id="game-updates"></a>
+
+### Game updates (2.xx)
+
+A game update brings a new executable and data the game reads from the PS3's hard disk (for 2.01,
+about 2.2 GB of files in `PDIPFS`). The port needs both:
+
+1. **Get the update's files**: install the update in [RPCS3](https://rpcs3.net) (*File > Install
+   Packages/Raps/Edats* with the update's `.pkg`), or copy the game's folder from your PS3's hard disk.
+   Either way they're in `dev_hdd0\game\<title ID>\USRDIR` (for example `dev_hdd0\game\BCES00569\USRDIR`).
+2. **The executable**: decrypt that folder's `EBOOT.BIN` (RPCS3, *Utilities > Decrypt PS3 Binaries*) and
+   save the result as `GT5\input\EBOOT.elf`. The disc's `PS3_GAME` stays as it is in `GT5\vfs`.
+3. **The data**: copy everything else in that `USRDIR` folder (`PDIPFS` and the rest, not `EBOOT.BIN`)
+   to `GT5\hdd0\game\<title ID>\USRDIR`, keeping the folder names. Without it the game starts, but
+   Arcade Mode has no courses to choose.
+4. Run `setup.ps1` again: it lifts and builds the new executable (about an hour).
+
+If your disc folder's `PS3_GAME\PARAM.SFO` already says version 02.xx, it holds the update's
+executable, but usually not its data: step 3 is still needed. `GT5-Installer.bat` doesn't do these
+steps yet.
 
 <a id="setup"></a>
 

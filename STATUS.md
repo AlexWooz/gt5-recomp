@@ -47,6 +47,9 @@ performance matters more than the graphics card.
   and a GTX 1650 laptop), with frame rates to match those machines. Thanks for the reports!
 - The Hong Kong / Asian release (BCAS20108), new: a player ran it on v0.1.18, with the launcher and the
   game's own text in Chinese ([discussion #18](https://github.com/MormonFTP-hub/gt5-recomp/discussions/18))
+- Game updates (2.xx), new: the Asian release's update 2.01 boots, loads a long-played career save and
+  races in Arcade Mode. It needs the update's data as well as its executable (README, Game updates).
+  Frame rates on it aren't measured yet
 - One-click install: `GT5-Installer.bat` (README, Install)
 - Ultrawide monitors (21:9, 32:9), new: the game draws a wider view itself and keeps the HUD and
   menus 16:9 in the middle (checked in 2560×1080, 3440×1440 and 3840×1080 windows, not yet on a real
@@ -78,8 +81,9 @@ performance matters more than the graphics card.
 ## ❌ Not supported yet
 
 - Ultrawide on releases other than the European disc 01.00: they keep the 16:9 picture for now
-- Executables from game updates (2.xx), so mods that need one, like the GT5 Master Mod (2.11), don't
-  work yet
+- Game updates other than 2.01 are untried: 2.11 (what the GT5 Master Mod needs), 2.17 (the last one)
+  and other regions' updates. Each can change the game's SPU programs again; setup's
+  `SPU jobs found in EBOOT.elf: N of 15` says whether yours are all known
 
 ## ⚠️ Known issues
 

@@ -6813,7 +6813,6 @@ index 17e7c674..2a62f53b 100644
 +    ps3_hle_register_ctx(0x8692FCD2u, "cellOskDialogExtRegisterConfirmWordFilterCallback", hle_osk_noop);
 +}
 diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
-index 82ea66c6..08bebd68 100644
 --- a/libs/spurs/cellSpurs.c
 +++ b/libs/spurs/cellSpurs.c
 @@ -14,6 +14,7 @@
@@ -6824,7 +6823,35 @@ index 82ea66c6..08bebd68 100644
  #include "../../runtime/ppu/ppu_memory.h"   /* vm_base (guest mem) */
  #include "ps3emu/ps3_tprof.h"    /* PS3_TPROF: in-process samples of the SPU workers */
  #include <stdio.h>
-@@ -448,13 +449,17 @@ struct SpursPmSlot {
+@@ -420,9 +421,11 @@
+     SPURS_WKL_CURCONT  = 0x20,
+     SPURS_WKL_MINCONT  = 0x40,
+     SPURS_WKL_MAXCONT  = 0x50,
+-    SPURS_WKL_FLAG     = 0x60,
++    SPURS_WKL_FLAG     = 0x60,   /* CellSpursWorkloadFlag (16 bytes), its flag word at +0xC */
++    SPURS_WKL_FLAG_WORD = 0x6C,
+     SPURS_WKL_SIGNAL1  = 0x70,
+     SPURS_NSPUS        = 0x76,
++    SPURS_WKL_FLAG_RECV = 0x77,  /* the workload the flag wakes; 0xFF = none */
+     SPURS_WKL_STATE1   = 0x80,
+     SPURS_WKL_ENABLED  = 0xB0,
+     SPURS_SYSSRV_MSG   = 0xBD,
+@@ -434,6 +437,14 @@
+      * the allocator (abort in the job pump's first object destruction). */
+     SPURS_INST_SIZE    = 0x1000,
+ };
++
++/* The workload flag (cellSpursGetWorkloadFlag): a store of 0 to its flag word makes the receiver
++ * workload (_cellSpursWorkloadFlagReceiver) runnable, and the kernel raises the flag again when it
++ * picks that workload, as the real SPURS kernel does. GT5's game updates (2.xx) use it. */
++static inline int spurs_wkl_flagged(u32 ea, u32 wid)
++{
++    return vm_base[ea + SPURS_WKL_FLAG_RECV] == wid && vm_read32(ea + SPURS_WKL_FLAG_WORD) == 0;
++}
+ 
+ #define MAX_SPURS_INST 4
+ struct SpursInst;
+@@ -448,13 +459,17 @@
  };
  static struct SpursInst {
      u32 ea, nspus;
@@ -6843,7 +6870,7 @@ index 82ea66c6..08bebd68 100644
      u8 active[16], idle[16];
      u32 cursor, pass_no;
  } s_inst[MAX_SPURS_INST];
-@@ -551,6 +556,10 @@ static s32 spurs_initialize_common(u32 spurs_ea, u32 nspus, const char* prefix)
+@@ -551,6 +566,10 @@
      ReleaseSRWLockExclusive(&si->lock);
      ReleaseSRWLockExclusive(&s_inst_directory_lock);
      si->nspus = (nspus > 0 && nspus <= CELL_SPURS_MAX_SPU) ? nspus : 1;
@@ -6854,7 +6881,17 @@ index 82ea66c6..08bebd68 100644
      memset(si->prefix, 0, sizeof(si->prefix));
      if (prefix) memcpy(si->prefix, prefix, 15);
  
-@@ -756,6 +765,7 @@ static u32 s_spurs_event_queue[MAX_SPURS_QUEUES];
+@@ -559,7 +578,8 @@
+      * instances before adding workloads to any of them.) */
+     memset(vm_base + spurs_ea, 0, SPURS_INST_SIZE);
+     *(vm_base + spurs_ea + SPURS_NSPUS) = (u8)si->nspus;
+-    vm_write64(spurs_ea + SPURS_WKL_FLAG, 0xFFFFFFFFFFFFFFFFull); /* no receiver */
++    memset(vm_base + spurs_ea + SPURS_WKL_FLAG, 0xFF, 16);   /* flag raised */
++    vm_base[spurs_ea + SPURS_WKL_FLAG_RECV] = 0xFF;           /* no receiver */
+ 
+     s32 start_rc = spurs_scheduler_start(si);
+     AcquireSRWLockExclusive(&si->lock);
+@@ -756,6 +776,7 @@
  static u32 s_spurs_event_queue_owner[MAX_SPURS_QUEUES];
  static int s_spurs_event_queue_n = 0;
  static SRWLOCK s_spurs_queue_lock = SRWLOCK_INIT;
@@ -6862,7 +6899,7 @@ index 82ea66c6..08bebd68 100644
  static u32 s_spurs_port_queue[64];
  
  /* Release anyone blocked on the completion queues SPURS attached; see
-@@ -1157,11 +1167,15 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
+@@ -1157,11 +1178,15 @@
                   * as the guest EA (the SPU job's DMA uses guest EAs / r3). */
                  const uint8_t* host_elf = GUEST_PTR(elf, const uint8_t*);
                  size_t sz = spu_elf_image_size(host_elf, 2u * 1024 * 1024);
@@ -6880,10 +6917,13 @@ index 82ea66c6..08bebd68 100644
              }
              return CELL_OK;
          }
-@@ -1302,6 +1316,92 @@ s32 _cellSpursTasksetAttributeInitialize(CellSpursTasksetAttribute* attr,
-     return CELL_OK;
- }
- 
+@@ -1299,6 +1324,92 @@
+     attr->revision = revision ? revision : 1;
+     attr->tasksetSize = CSTS_STRUCT_END;
+     printf("[cellSpurs] _TasksetAttributeInitialize(rev=%u)\n", revision);
++    return CELL_OK;
++}
++
 +/* =========================================================================
 + * Taskset2 and Task2
 + *
@@ -6967,13 +7007,10 @@ index 82ea66c6..08bebd68 100644
 +    }
 +    if (exitCode) vm_write32(exitCode, vm_read32(e + 8));
 +    vm_write8(e + 15, TASK2_STATE_JOINED);
-+    return CELL_OK;
-+}
-+
- s32 cellSpursJoinTask(CellSpursTaskset* taskset, CellSpursTaskId taskId,
-                       s32* exitCode)
- {
-@@ -1573,9 +1673,9 @@ s32 cellSpursAddWorkloadWithAttribute(CellSpurs* spurs,
+     return CELL_OK;
+ }
+ 
+@@ -1573,9 +1684,9 @@
  /* The SDK-versioned workload-attribute initializer (the import the game links;
   * NID differs from the non-underscore inline wrapper). Args arrive raw in
   * r3..r10; writes the REAL BE layout so AddWorkloadWithAttribute round-trips. */
@@ -6986,7 +7023,7 @@ index 82ea66c6..08bebd68 100644
  {
      if (!attr_ea) return CELL_SPURS_CORE_ERROR_NULL_POINTER;
      vm_write32((u32)attr_ea + WKATTR_REVISION,   revision);
-@@ -1587,16 +1687,42 @@ s32 _cellSpursWorkloadAttributeInitialize(u64 attr_ea, u32 revision, u32 sdkVers
+@@ -1587,14 +1698,40 @@
          *(vm_base + (u32)attr_ea + WKATTR_PRIORITY + i) =
              prio_ea ? *(vm_base + (u32)prio_ea + i) : 0;
      vm_write32((u32)attr_ea + WKATTR_MIN_CONT, minContention);
@@ -7001,8 +7038,8 @@ index 82ea66c6..08bebd68 100644
 +    printf("[cellSpurs] _WorkloadAttributeInitialize(attr=0x%08X pm=0x%08X size=%u data=0x%llX minC=%u maxC=%u)\n",
 +           (u32)attr_ea, (u32)pm_ea, size, (unsigned long long)data, minContention, maxContention);
      return CELL_OK;
- }
- 
++}
++
 +s32 _cellSpursWorkloadAttributeInitialize(u64 attr_ea, u32 revision, u32 sdkVersion,
 +                                          u64 pm_ea, u32 size, u64 data,
 +                                          u64 prio_ea, u32 minContention)
@@ -7027,12 +7064,10 @@ index 82ea66c6..08bebd68 100644
 +void spurs_register_ctx(void)
 +{
 +    ps3_hle_register_ctx(0xEFEB2679u, "_cellSpursWorkloadAttributeInitialize", hle_wkl_attr_init);
-+}
-+
+ }
+ 
  s32 cellSpursWorkloadAttributeSetName(u64 attr_ea, u64 nameClass_ea, u64 nameInstance_ea)
- {
-     if (!attr_ea) return CELL_SPURS_CORE_ERROR_NULL_POINTER;
-@@ -1778,7 +1904,33 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+@@ -1778,7 +1915,33 @@
          AcquireSRWLockExclusive(&s_workload_registry_lock);
          if (!kick_pass) si->pass_no++;
          u32 enabled = vm_read32(ea + SPURS_WKL_ENABLED);
@@ -7067,7 +7102,7 @@ index 82ea66c6..08bebd68 100644
              struct SpursPmSlot* slot = &si->slots[sn];
              if (slot->busy) continue;
              for (u32 checked = 0; checked < 16; checked++) {
-@@ -1788,10 +1940,16 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+@@ -1788,15 +1951,21 @@
                      vm_read8(ea + SPURS_WKL_STATE1 + wid) != 2 ||
                      !s_workloads[wid].in_use || s_workloads[wid].spurs_ea != ea)
                      continue;
@@ -7085,7 +7120,22 @@ index 82ea66c6..08bebd68 100644
                  WklPm* pm = spurs_resolve_pm(wid);
                  if (!pm) continue;
                  u32 signal = vm_read16(ea + SPURS_WKL_SIGNAL1);
-@@ -1833,12 +1991,18 @@ static s32 spurs_scheduler_start(struct SpursInst* si)
+                 u32 ready = vm_read8(ea + SPURS_WKL_READY1 + wid);
+-                int kicked = ready || (signal & (0x8000u >> wid));
++                int kicked = ready || (signal & (0x8000u >> wid)) || spurs_wkl_flagged(ea, wid);
+                 if (kicked) si->idle[wid] = 0;
+                 if (!kicked && (kick_pass || (si->pass_no & ((1u << si->idle[wid]) - 1))))
+                     continue;
+@@ -1806,6 +1975,8 @@
+                 if (ready) vm_base[ea + SPURS_WKL_READY1 + wid] = (u8)(ready - 1);
+                 if (signal & (0x8000u >> wid))
+                     ef_w16(ea + SPURS_WKL_SIGNAL1, (u16)(signal & ~(0x8000u >> wid)));
++                if (spurs_wkl_flagged(ea, wid))
++                    memset(vm_base + ea + SPURS_WKL_FLAG_WORD, 0xFF, 4);
+                 ef_line_end(ea);
+                 slot->fn = pm->fn; slot->image_id = pm->image_id;
+                 slot->pm = vm_base + (u32)(uintptr_t)s_workloads[wid].pm;
+@@ -1833,12 +2004,18 @@
      __atomic_store_n(&si->kick, 0, __ATOMIC_RELAXED);
      { extern void (*g_spu_line_commit_hook)(uint32_t);
        g_spu_line_commit_hook = spurs_commit_hook; }
@@ -7106,7 +7156,7 @@ index 82ea66c6..08bebd68 100644
          slot->thread = CreateThread(NULL, 1u << 20, spurs_pm_worker, slot, 0, NULL);
          if (!slot->thread) goto failed;
      }
-@@ -1849,7 +2013,7 @@ failed:
+@@ -1849,7 +2026,7 @@
      AcquireSRWLockExclusive(&si->lock);
      si->stopping = 1; WakeAllConditionVariable(&si->wake);
      ReleaseSRWLockExclusive(&si->lock);
@@ -7115,7 +7165,7 @@ index 82ea66c6..08bebd68 100644
          HANDLE h = si->slots[sn].thread;
          if (h) { WaitForSingleObject(h, INFINITE); CloseHandle(h); si->slots[sn].thread = NULL; }
      }
-@@ -1869,7 +2033,7 @@ static s32 spurs_scheduler_stop(struct SpursInst* si, u32 ea)
+@@ -1869,7 +2046,7 @@
      si->stopping = 1; WakeAllConditionVariable(&si->wake);
      ReleaseSRWLockExclusive(&si->lock);
      if (si->coordinator) { WaitForSingleObject(si->coordinator, INFINITE); CloseHandle(si->coordinator); si->coordinator = NULL; }
@@ -7124,7 +7174,48 @@ index 82ea66c6..08bebd68 100644
          HANDLE h = si->slots[sn].thread;
          if (h) { WaitForSingleObject(h, INFINITE); CloseHandle(h); si->slots[sn].thread = NULL; }
      }
-@@ -2299,6 +2463,7 @@ static struct {
+@@ -1919,6 +2096,40 @@
+     }
+     spurs_api_unlock(si);
+     return CELL_OK;
++}
++
++/* The workload flag's address (spurs + 0x60). Unregistered, this import faked CELL_OK and left
++ * the game's pointer unset. */
++s32 cellSpursGetWorkloadFlag(CellSpurs* spurs, u32* flag)
++{
++    if (!spurs || !flag) return CELL_SPURS_CORE_ERROR_NULL_POINTER;
++    if ((u32)(uintptr_t)spurs & 127) return CELL_SPURS_CORE_ERROR_ALIGN;
++    vm_write32((u32)(uintptr_t)flag, (u32)(uintptr_t)spurs + SPURS_WKL_FLAG);
++    return CELL_OK;
++}
++
++/* Make wid the workload the flag wakes (is_set) or stop it being that. Policy-module error codes. */
++s32 _cellSpursWorkloadFlagReceiver(CellSpurs* spurs, CellSpursWorkloadId wid, u32 is_set)
++{
++    if (!spurs) return (s32)0x80410811;                       /* POLICY_MODULE_ERROR_NULL_POINTER */
++    if ((u32)(uintptr_t)spurs & 127) return (s32)0x80410810;  /* ..._ALIGN */
++    if (wid >= CELL_SPURS_MAX_WORKLOAD) return (s32)0x80410802; /* ..._INVAL */
++    const u32 ea = (u32)(uintptr_t)spurs;
++    if (!(vm_read32(ea + SPURS_WKL_ENABLED) & (0x80000000u >> wid))) return (s32)0x80410805; /* ..._SRCH */
++    s32 rc = CELL_OK;
++    spu_lockline_lock();
++    const u8 recv = vm_base[ea + SPURS_WKL_FLAG_RECV];
++    if (is_set ? recv != 0xFF : recv != wid) {
++        rc = is_set ? (s32)0x8041080A : (s32)0x80410809;      /* ..._BUSY / ..._PERM */
++    } else {
++        memset(vm_base + ea + SPURS_WKL_FLAG_WORD, 0xFF, 4);
++        vm_base[ea + SPURS_WKL_FLAG_RECV] = is_set ? (u8)wid : 0xFF;
++    }
++    ef_line_end(ea);
++    {   static int _n = 0;
++        if (_n++ < 16) printf("[cellSpurs] WorkloadFlagReceiver(wid=%u, set=%u) -> 0x%08X\n", wid, is_set, (u32)rc);
++    }
++    return rc;
+ }
+ 
+ static s32 spurs_ready_exchange(CellSpurs* spurs, CellSpursWorkloadId wid,
+@@ -2299,6 +2510,7 @@
      u16 max_grab;
      int run_count;
      volatile long running;   /* 1 while a host thread walks this chain */
@@ -7132,7 +7223,7 @@ index 82ea66c6..08bebd68 100644
  } s_jobchains[MAX_JOBCHAINS];
  
  static void jc_dump_commands(const char* tag, u32 ea, int max_words)
-@@ -2526,9 +2691,12 @@ static struct {
+@@ -2526,9 +2738,12 @@
      u32 ea;          /* guest CellSpursJobGuard address (128-byte aligned) */
      u32 count;       /* notifications still outstanding                    */
      u32 reset;       /* value to restore when autoReset is set             */
@@ -7146,7 +7237,7 @@ index 82ea66c6..08bebd68 100644
  } s_jobguards[MAX_JOBGUARDS];
  
  static int jg_find(u32 ea)
-@@ -2562,6 +2730,9 @@ s32 cellSpursJobGuardInitialize(u64 jc_ea, u64 guard_ea, u32 notify_count,
+@@ -2562,6 +2777,9 @@
      s_jobguards[i].pending    = 0;
      s_jobguards[i].auto_reset = auto_reset;
      s_jobguards[i].active     = 1;
@@ -7156,7 +7247,7 @@ index 82ea66c6..08bebd68 100644
  
      /* Mirror the count into guest memory. The SPU side reads the guard on
       * hardware; keeping the two consistent costs nothing and makes a guest-side
-@@ -2587,11 +2758,18 @@ s32 cellSpursJobGuardNotify(u64 guard_ea)
+@@ -2587,11 +2805,18 @@
       * OBSERVED zero, which threw away any notify that arrived while the job
       * was still running -- the title notified 6 times and the chain completed
       * 2 laps, so the thread waiting on the other 4 completions never woke. */
@@ -7178,7 +7269,7 @@ index 82ea66c6..08bebd68 100644
      { static int _n = 0;
        if (PS3_LOG_FIRST(_n, 8))
            printf("[cellSpurs] JobGuardNotify(0x%08X) -> %u remaining\n",
-@@ -2610,32 +2788,36 @@ s32 cellSpursJobGuardReset(u64 guard_ea)
+@@ -2610,32 +2835,36 @@
      return CELL_OK;
  }
  
@@ -7226,7 +7317,7 @@ index 82ea66c6..08bebd68 100644
  }
  
  /* Tell the application a lap of chain work is done.
-@@ -2671,6 +2853,14 @@ static u64 spurs_event_data3_probe(void)
+@@ -2671,6 +2900,14 @@
  
  static void jc_signal_done(u32 jc_ea, int job_index)
  {
@@ -7241,7 +7332,7 @@ index 82ea66c6..08bebd68 100644
      /* Carry the job's mailbox answer in the completion event. On hardware the
       * SPU's outbound/interrupt mailbox is what the SPURS event delivers; a
       * synthetic payload means the caller reads back zero for whatever it
-@@ -2724,7 +2914,7 @@ static void jc_signal_done(u32 jc_ea, int job_index)
+@@ -2724,7 +2961,7 @@
      }
  }
  
@@ -7250,7 +7341,7 @@ index 82ea66c6..08bebd68 100644
  {
      u32 pc = entry_ea, ret_pc = 0;
      int jobs = 0;
-@@ -2738,6 +2928,7 @@ static void jc_execute(u32 entry_ea, u32 jc_ea, u32 size_desc)
+@@ -2738,6 +2975,7 @@
      int idle = 0;
      for (;; idle++) {
          if (idle > 4096) break;
@@ -7258,7 +7349,7 @@ index 82ea66c6..08bebd68 100644
          u64 cmd = vm_read64(pc);
          u32 op  = (u32)(cmd & 7);
          u32 ext = (u32)(cmd & 127);
-@@ -2775,7 +2966,7 @@ static void jc_execute(u32 entry_ea, u32 jc_ea, u32 size_desc)
+@@ -2775,7 +3013,7 @@
          }
          if (op == 7 && ext == (7 | (1 << 3))) {           /* GUARD */
              u32 g_ea = (u32)(cmd & ~127ull);
@@ -7267,7 +7358,7 @@ index 82ea66c6..08bebd68 100644
              pc += 8; continue;
          }
          /* NOP(0) / SYNC+LWSYNC(2, one virtual SPU: nothing to wait for) /
-@@ -2791,6 +2982,7 @@ static DWORD WINAPI jc_thread(LPVOID p)
+@@ -2791,6 +3029,7 @@
  {
      int slot = (int)(intptr_t)p;
      ps3_thread_name("spurs jc %d", slot);
@@ -7275,26 +7366,26 @@ index 82ea66c6..08bebd68 100644
      /* TIMING PROBE (SPURS_JC_DELAY=ms): the real jm2 chain walker is async and
       * picks up jobs as the PPU appends them + fills their descriptors. Our walk
       * is one-shot; if it reads descriptors before the PPU populates the I/O
-@@ -2799,11 +2991,14 @@ static DWORD WINAPI jc_thread(LPVOID p)
+@@ -2799,11 +3038,14 @@
      { const char* d = getenv("SPURS_JC_DELAY");
        if (d && *d) Sleep((unsigned)atoi(d)); }
      jc_execute(s_jobchains[slot].entry_ea, s_jobchains[slot].jc_ea,
 -               s_jobchains[slot].size_desc);
--    s_jobchains[slot].running = 0;
 +               s_jobchains[slot].size_desc, &s_jobchains[slot].stop);
-     /* Tell the application the chain is done. Without this the walk finishes
--     * in silence and a thread waiting on the attached queue never runs again. */
--    jc_signal_done(s_jobchains[slot].jc_ea, -1);
++    /* Tell the application the chain is done. Without this the walk finishes
 +     * in silence and a thread waiting on the attached queue never runs again.
 +     * A chain it shut down itself has nobody waiting: an event here would be
 +     * taken for the completion of the next chain's first job. */
 +    if (!s_jobchains[slot].stop)
 +        jc_signal_done(s_jobchains[slot].jc_ea, -1);
-+    s_jobchains[slot].running = 0;
+     s_jobchains[slot].running = 0;
+-    /* Tell the application the chain is done. Without this the walk finishes
+-     * in silence and a thread waiting on the attached queue never runs again. */
+-    jc_signal_done(s_jobchains[slot].jc_ea, -1);
      return 0;
  }
  
-@@ -2834,8 +3029,12 @@ static s32 jc_start(u64 jc_ea, const char* who)
+@@ -2834,8 +3076,12 @@
              jc_dump_commands(who, s_jobchains[i].entry_ea, 16);
          }
          if (s_off || !s_jobchains[i].entry_ea) return CELL_OK;
@@ -7307,7 +7398,7 @@ index 82ea66c6..08bebd68 100644
              HANDLE th = CreateThread(NULL, 1u << 20, jc_thread, (LPVOID)(intptr_t)i, 0, NULL);
              if (th) CloseHandle(th);
              else s_jobchains[i].running = 0;
-@@ -2859,8 +3058,12 @@ s32 cellSpursRunJobChain(u64 jc_ea)
+@@ -2859,8 +3105,12 @@
   * r3, so the caller reads a garbage result for "did the shutdown take?" and a
   * title that checks it can decide the subsystem failed and tear itself down.
   *
@@ -7322,7 +7413,7 @@ index 82ea66c6..08bebd68 100644
   * Found in Tokyo Jungle, whose sound engine shuts its chain down during init
   * and then reports "failed to recv data from SPU" when the handshake does not
   * complete. */
-@@ -2870,7 +3073,7 @@ s32 cellSpursShutdownJobChain(u64 jc_ea)
+@@ -2870,7 +3120,7 @@
      if (PS3_LOG_FIRST(_n, 8)) printf("[cellSpurs] ShutdownJobChain(jc=0x%08X)\n", (u32)jc_ea);
      for (int i = 0; i < MAX_JOBCHAINS; i++) {
          if (s_jobchains[i].jc_ea == (u32)jc_ea) {
@@ -7332,23 +7423,31 @@ index 82ea66c6..08bebd68 100644
          }
      }
 diff --git a/libs/spurs/cellSpurs.h b/libs/spurs/cellSpurs.h
-index 07a3d2e4..2b2d83d6 100644
 --- a/libs/spurs/cellSpurs.h
 +++ b/libs/spurs/cellSpurs.h
-@@ -288,6 +288,13 @@ s32 cellSpursWakeUp(CellSpurs* spurs);
+@@ -277,6 +277,8 @@
+ 
+ s32 cellSpursReadyCountStore(CellSpurs* spurs, CellSpursWorkloadId wid,
+                              u32 value);
++s32 cellSpursGetWorkloadFlag(CellSpurs* spurs, u32* flag);
++s32 _cellSpursWorkloadFlagReceiver(CellSpurs* spurs, CellSpursWorkloadId wid, u32 is_set);
+ s32 cellSpursReadyCountSwap(CellSpurs* spurs, CellSpursWorkloadId wid,
+                             u32* old, u32 value);
+ s32 cellSpursReadyCountCompareAndSwap(CellSpurs* spurs,
+@@ -287,6 +289,13 @@
+ /* ---------------------------------------------------------------------------
   * Event flag functions
   * -----------------------------------------------------------------------*/
- 
++
 +s32 _cellSpursTasksetAttribute2Initialize(u32 attr, u32 revision);
 +s32 _cellSpursTaskAttribute2Initialize(u32 attr, u32 revision);
 +s32 cellSpursCreateTaskset2(CellSpurs* spurs, CellSpursTaskset* taskset, u32 attr);
 +s32 cellSpursDestroyTaskset2(CellSpursTaskset* taskset);
 +s32 cellSpursCreateTask2(CellSpursTaskset* taskset, CellSpursTaskId* id, void* elf, u32 argument, u32 attr);
 +s32 cellSpursJoinTask2(u32 taskset, u32 id, u32 exitCode);
-+
+ 
  s32 cellSpursEventFlagInitialize(CellSpursTaskset* taskset,
                                   CellSpursEventFlag* eventFlag,
-                                  u32 clearMode, u32 direction);
 diff --git a/libs/system/cellSysmodule.c b/libs/system/cellSysmodule.c
 index 93eba8cf..ffad7380 100644
 --- a/libs/system/cellSysmodule.c
