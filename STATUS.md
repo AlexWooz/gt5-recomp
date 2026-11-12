@@ -78,9 +78,11 @@ performance matters more than the graphics card.
 
 - The first visit to a scene stutters while its shaders compile; later visits load them from the cache.
 - Online features don't work.
-- Some graphics glitches remain. Chamonix in the snow is the worst seen so far: the road shows the
-  sponsor-banner texture and the fences show noise ([#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14));
-  being looked into.
+- Some graphics glitches remain. The worst: on some tracks, some textures show another texture's
+  picture or noise (sponsor banners across the road and noisy fences at Chamonix in the snow here, Eiger
+  for a player: [#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14)). Traced to the game's
+  texture streaming: the SPU job that unpacks track textures works, but some slots are handed the wrong
+  compressed data, and which ones seems to depend on timing. Still being narrowed down.
 - The mouse change (Steam's controller mouse is ignored, the real mouse stays free) hasn't been
   tried with a physical controller yet.
 

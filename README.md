@@ -235,6 +235,13 @@ stopped, most likely because the graphics driver reset or refused a frame. Attac
 previous log under that name; builds before v0.1.10 didn't, so there copy `play.err` before restarting). A
 line in it starting with `[d3d-fail]` says what failed, and that decides the fix.
 
+**Q: How do I attach my log to an issue? GitHub won't take it.**
+
+**A: Rename it first.** GitHub refuses `.err` files, so rename `GT5\logs\play.err` to `play.err.txt` (or put
+it in a `.zip`) and drag it into the issue. The installer's `GT5-Installer.log` attaches as it is. For a
+graphics problem, also say the mode, the track and its time or weather (for example Arcade, Chamonix,
+snow): some problems show on one track and not another.
+
 **Q: Is this legal? Do I need the game?**
 
 **A: You need your own copy of GT5, and nothing from the game is in this repository.** It holds only

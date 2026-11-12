@@ -85,7 +85,7 @@ body:
     id: problems
     attributes:
       label: Anything wrong?
-      description: Graphics, sound, controls, speed, freezes. Where it happened (menu, track, car) helps a lot. Screenshots of the problem are welcome.
+      description: Graphics, sound, controls, speed, freezes. Where it happened (mode, track and its time or weather, car) helps a lot. Screenshots are welcome, and so is `GT5\logs\play.err` (rename it to `play.err.txt` first, GitHub refuses `.err` files).
   - type: textarea
     id: change
     attributes:

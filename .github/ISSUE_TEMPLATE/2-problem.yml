@@ -33,6 +33,12 @@ body:
         - Saving or loading
     validations:
       required: true
+  - type: input
+    id: version
+    attributes:
+      label: Which version of the port?
+      description: "`update.ps1 -List` shows it, or the release you downloaded the installer from."
+      placeholder: e.g. v0.1.13
   - type: textarea
     id: what
     attributes:
@@ -44,14 +50,23 @@ body:
     id: repro
     attributes:
       label: How to make it happen again
+      description: For a picture problem, name the mode, the track and its time or weather (e.g. Arcade, Chamonix, snow).
       placeholder: |
         1. Arcade > Single Race > Suzuka
         2. Pick any car
         3. At the start line the screen flickers
   - type: textarea
+    id: logfile
+    attributes:
+      label: Log file
+      description: |
+        Drag the file into this box. Installer: `GT5-Installer.log` (next to the installer). Game:
+        `GT5\logs\play.err`, renamed to `play.err.txt` first because GitHub refuses `.err` files (or zip it).
+        After a restart, the earlier run's log is `play.prev.err`.
+  - type: textarea
     id: log
     attributes:
-      label: Log
+      label: Or paste the log
       description: |
         For setup, lift or build problems: the error lines from the window.
         For the game: the last 60 lines of `GT5\logs\play.err` (open it in Notepad, copy from the bottom).
