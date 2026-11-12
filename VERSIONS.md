@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.16](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.16) | 12 Nov 2026 | Fix wrong track textures (#14): GT5's graphics-memory copies (NV0039) now happen |
 | [v0.1.15](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.15) | 12 Nov 2026 | The launcher: settings, borderless full screen, Play, Updates and Help in one window (English and Chinese); double-click `Update.bat`; the installer lets other GT5 releases through |
 | [v0.1.14](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.14) | 12 Nov 2026 | Fix updates stopping with "Access is denied" on `GT5\spu`; the version in the window title |
 | [v0.1.13](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.13) | 11 Nov 2026 | Hotfix: installs and updates work again (v0.1.12's patch didn't apply) |

@@ -9,6 +9,22 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.16**
+
+🛠️ **Wrong track textures fixed** ([#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14))
+- Some track textures showed another texture's picture: sponsor banners across the road and noise on
+  the fences at Chamonix in the snow, scrambled textures at Eiger for a player. GT5 moves textures
+  around in graphics memory to make room for new ones (it defragments its texture memory), and moves
+  the data with a copy command for the PS3's graphics chip (NV0039, "memory to memory format"). The
+  port never carried that command out, so a moved texture showed whatever had been in its new place
+  before, usually another texture of the same size. It now does the copy. Which tracks it hit depended
+  on what the game had loaded before, which is why it differed from PC to PC.
+- Checked at Chamonix in the snow and at Eiger in the rain: roads, fences, banners and buildings
+  look right. A check of every texture in a Chamonix race went from about 100 mismatched to 26; a few
+  (some trees and see-through masks) can still show another texture, and that is being worked on.
+- The "Wrong textures" note further down (from earlier today) was wrong about the cause: the texture
+  data was loaded and unpacked correctly all along; the copy afterwards was what went missing.
+
 🏷️ Released as **v0.1.15**
 
 🎛️ **The launcher** (asked for in [#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14))

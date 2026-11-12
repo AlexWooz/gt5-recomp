@@ -7518,10 +7518,9 @@ index 30290c73..57780fcf 100644
  }
  #endif
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 298ee7de..8ea23d2c 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
-@@ -103,6 +103,18 @@ u32 cellGcm_flip_request_count(void)
+@@ -103,6 +103,18 @@
  {
      return s_flip_request_count;
  }
@@ -7540,7 +7539,7 @@ index 298ee7de..8ea23d2c 100644
  static u32  s_debug_level = CELL_GCM_DEBUG_LEVEL0;
  
  /* Display buffers */
-@@ -135,10 +147,18 @@ static volatile int s_flip_direct_pending = 0;
+@@ -135,10 +147,18 @@
   * second to build its next frame here, then queues the flip, and a beat in
   * between that reported a flip made it take the new one for done. It then
   * rebuilt the command segment the walker was still waiting in. */
@@ -7560,7 +7559,7 @@ index 298ee7de..8ea23d2c 100644
      if (s_flip_direct_pending) { s_flip_direct_pending = 0; return 1; }
      return 0;
  }
-@@ -156,9 +176,37 @@ int cellGcm_take_flip_pending(void)
+@@ -156,9 +176,37 @@
  /* The flip now names this buffer. The shared draw engine presents on the
   * host's call and only learns a buffer from 0xE944 by itself, so it would
   * keep presenting display buffer 0 for a title that flips through 0xFEAD. */
@@ -7598,7 +7597,7 @@ index 298ee7de..8ea23d2c 100644
      if (rsx_draw_engine_enabled())
          rsx_draw_engine_note_flip(bufferId);
  }
-@@ -382,6 +430,13 @@ static u32 s_labels[CELL_GCM_MAX_LABEL_COUNT];
+@@ -382,6 +430,13 @@
   * label slots (0x03000000..0x03001000). Fields are big-endian (vm_write32). */
  #define GCM_CONTROL_GUEST_ADDR (VM_HLE_INJECT_BASE + 0x2000u)
  
@@ -7612,7 +7611,7 @@ index 298ee7de..8ea23d2c 100644
  /* Synthetic guest code EA for the FIFO command-buffer-full callback. The title's
   * inline gcmReserve calls context->callback(context, count) when `current` nears
   * `end`; we point the context's callback OPD at this EA and register it in the
-@@ -597,6 +652,7 @@ u32 cellGcmSetupContext(u32 ctx_out_addr, u32 cmdSize, u32 ioSize, u32 ioAddress
+@@ -597,6 +652,7 @@
  {
      if (cmdSize < 0x10000)
          cmdSize = 0x10000;
@@ -7620,7 +7619,7 @@ index 298ee7de..8ea23d2c 100644
  
      /* PSL1GHT's gcmInitBody passes ioAddress = 0, expecting gcm to allocate the
       * IO region itself (the official SDK has the app allocate and pass it).
-@@ -775,9 +831,16 @@ static atomic_flag s_gcm_pumping = ATOMIC_FLAG_INIT;
+@@ -775,9 +831,16 @@
   * and mark a vblank+flip tick pending for the main thread to deliver. */
  static u32 s_fifo_getoff;   /* tentative: defined below */
  
@@ -7637,7 +7636,7 @@ index 298ee7de..8ea23d2c 100644
      /* GCM_FLIP_NEEDS_FIFO=1: only mark a flip pending once the walker has
       * actually consumed up to `put`.
       *
-@@ -850,10 +913,34 @@ void ppu_gcm_pump(void)
+@@ -850,10 +913,34 @@
                 if ((calls % 20000) == 0)
                     fprintf(stderr, "[gcm-pump] calls=%u vblank=%u flip=%u vcount=%u%c",
                             calls, nv, nf, s_vblank_count, 10); } }
@@ -7676,7 +7675,7 @@ index 298ee7de..8ea23d2c 100644
      }
      if (p & 2) {
          /* Delivery waits for a guest thread to reach an HLE call or a timer
-@@ -867,10 +954,18 @@ void ppu_gcm_pump(void)
+@@ -867,10 +954,18 @@
          if (s_flip_tick_seq == s_flip_req_seq)
              s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
          FLIP_UNLOCK();
@@ -7699,7 +7698,7 @@ index 298ee7de..8ea23d2c 100644
      }
      if (user) {
          u32 cmd = (u32)user;
-@@ -882,7 +977,7 @@ void ppu_gcm_pump(void)
+@@ -882,7 +977,7 @@
  
  /* Back-compat: the old direct entry points now just mark a tick pending (so any
   * caller other than the ticker still works) -- delivery stays on the main thread. */
@@ -7708,7 +7707,7 @@ index 298ee7de..8ea23d2c 100644
  /* Only deliver a flip completion when a flip is actually outstanding.
   *
   * Ticking unconditionally at 60 Hz fires the guest's flip handler even when
-@@ -895,15 +990,36 @@ void cellGcmTickVBlank(void) { s_vblank_count++; GCM_PENDING_SET(1); }
+@@ -895,15 +990,36 @@
   * and its handler runs code that puts the status back to WAITING, so the
   * poll never saw DONE and the game never rendered another frame. On hardware
   * the callback IS the flip interrupt -- no flip, no callback. */
@@ -7747,7 +7746,7 @@ index 298ee7de..8ea23d2c 100644
  }
  
  /* Drain the game's GCM FIFO into the RSX backend. Called from the present thread
-@@ -946,6 +1062,14 @@ unsigned long long ps3_ms_now(void)
+@@ -946,6 +1062,14 @@
  static u32 s_sema_offset = 0;   /* NV406E semaphore offset (label window) */
  static int s_sema_blocked_pass = 0;   /* this drain stopped on a semaphore acquire */
  static int s_park_pass = 0;           /* this drain stopped on a self-JUMP park */
@@ -7762,7 +7761,7 @@ index 298ee7de..8ea23d2c 100644
  /* The park the walker is waiting on (0 = none), the `put` it saw there, and
   * since when it has stood with that put: the jump-park grace in the walker. */
  static u32 park_off, park_put;
-@@ -1106,6 +1230,11 @@ static void nv3089_engine_wrote(u32 dst_pitch, u32 x0, u32 y0, u32 x1, u32 y1)
+@@ -1106,6 +1230,11 @@
   * vm_read32/vm_write32 pair does cancel, so the bytes move verbatim. */
  static void gcm_row_copy(u32 d, u32 s, u32 n)
  {
@@ -7774,7 +7773,7 @@ index 298ee7de..8ea23d2c 100644
      extern u8* vm_base;
      const u32 l0 = d & ~127u, l1 = (d + n - 1) & ~127u;
      int reserved = 0;
-@@ -1118,7 +1247,7 @@ static void gcm_row_copy(u32 d, u32 s, u32 n)
+@@ -1118,7 +1247,7 @@
      spu_lockline_unlock();
  }
  
@@ -7783,10 +7782,12 @@ index 298ee7de..8ea23d2c 100644
  {
      u32 out_w = s_nv3089.out_sz & 0xFFFF, out_h = s_nv3089.out_sz >> 16;
      u32 out_x = s_nv3089.out_pt & 0xFFFF, out_y = s_nv3089.out_pt >> 16;
-@@ -1320,6 +1449,39 @@ static void nv3089_blit(void)
+@@ -1318,6 +1447,138 @@
+       if (cap && _n < cap) { _n++;
+         printf("[NV3089] %ux%u fmt=0x%X src=0x%08X(pitch %u) -> dst=0x%08X(pitch %u) at %u,%u\n",
                 out_w, out_h, f, src, in_pitch, dst, dst_pitch, out_x, out_y); } }
- }
- 
++}
++
 +/* Write one row of guest memory, as gcm_row_copy does for a copy. */
 +void gcm_guest_row_write(u32 d, const u8* s, u32 n)
 +{
@@ -7820,10 +7821,107 @@ index 298ee7de..8ea23d2c 100644
 +                            dst_pitch);
 +}
 +
++/* NV0039 "memory to memory format": libgcm's cellGcmSetTransferData, a copy of LINE_COUNT lines of
++ * LINE_LENGTH bytes between local and main memory (or within one). GT5 binds it to subchannel 1 and
++ * uses it when it defragments its VRAM texture heap (0x00BE9320): the texture object's offset is moved
++ * to the new block at once and the data follows by this copy. Without the copy the moved texture
++ * samples whatever was in the new block before -- another texture of the same size -- which is the
++ * sponsor-banner road at Chamonix and the scrambled Eiger textures (#14). Which tracks it hits depends
++ * on what was loaded before, so it differed from PC to PC.
++ *
++ * Registers: 0x0184/0x0188 buffer in/out DMA (0xFEED0000 local, 0xFEED0001 main), 0x030C/0x0310
++ * offset in/out, 0x0314/0x0318 pitch in/out, 0x031C line length, 0x0320 line count, 0x0324 format
++ * (in increment | out increment << 8), 0x0328 buffer notify -- the trigger. */
++static struct {
++    u32 src_dma, dst_dma, off_in, off_out, line_len, line_count, format;
++    int32_t pitch_in, pitch_out;
++} s_nv0039 = { 0xFEED0000u, 0xFEED0000u, 0, 0, 0, 0, 0x101u, 0, 0 };
++
++static void nv0039_copy(void)
++{
++    const u32 len = s_nv0039.line_len, lines = s_nv0039.line_count;
++    if (!len || !lines) return;
++    const int sl = s_nv0039.src_dma != 0xFEED0001u, dl = s_nv0039.dst_dma != 0xFEED0001u;
++    const u32 src = cellGcmResolveLocated(sl, s_nv0039.off_in);
++    const u32 dst = cellGcmResolveLocated(dl, s_nv0039.off_out);
++    const u32 in_inc = s_nv0039.format & 0xFFu, out_inc = (s_nv0039.format >> 8) & 0xFFu;
++    const int64_t pin = s_nv0039.pitch_in, pout = s_nv0039.pitch_out;
++    { static int n = 0, cap = -1;
++      if (cap < 0) { const char* e = getenv("NV0039_DBG"); cap = e ? atoi(e) : 0; }
++      if (cap && n < cap) { n++;
++          fprintf(stderr, "[NV0039] %u x %X bytes  0x%08X (pitch %lld) -> 0x%08X (pitch %lld) fmt=0x%X%c",
++                  lines, len, src, (long long)pin, dst, (long long)pout, s_nv0039.format, 10); } }
++    /* Every line inside the 4 GB guest space, or nothing is copied. */
++    for (u32 k = 0; k < 2; k++) {
++        const int64_t last = (int64_t)(k ? dst : src) + (int64_t)(lines - 1) * (k ? pout : pin);
++        if (last < 0 || last + (int64_t)len * (k ? (out_inc ? out_inc : 1) : (in_inc ? in_inc : 1)) > 0x100000000ll)
++            return;
++    }
++    if ((in_inc > 1) || (out_inc > 1)) {   /* strided bytes: rare, done byte by byte */
++        for (u32 y = 0; y < lines; y++)
++            for (u32 x = 0; x < len; x++)
++                vm_write8((u32)(dst + y * pout + (int64_t)x * (out_inc ? out_inc : 1)),
++                          vm_read8((u32)(src + y * pin + (int64_t)x * (in_inc ? in_inc : 1))));
++        return;
++    }
++    if (lines == 1 || (pin == (int64_t)len && pout == (int64_t)len)) {
++        gcm_row_copy(dst, src, len * lines);   /* one block; memmove handles an overlap */
++        return;
++    }
++    /* Line by line, in the order that never reads a line already overwritten. */
++    if (dst > src)
++        for (u32 y = lines; y-- > 0;) gcm_row_copy((u32)(dst + y * pout), (u32)(src + y * pin), len);
++    else
++        for (u32 y = 0; y < lines; y++) gcm_row_copy((u32)(dst + y * pout), (u32)(src + y * pin), len);
++}
++
++static void nv0039_method(u32 method, u32 data)
++{
++    switch (method) {
++    case 0x0184: s_nv0039.src_dma    = data; return;
++    case 0x0188: s_nv0039.dst_dma    = data; return;
++    case 0x030C: s_nv0039.off_in     = data; return;
++    case 0x0310: s_nv0039.off_out    = data; return;
++    case 0x0314: s_nv0039.pitch_in   = (int32_t)data; return;
++    case 0x0318: s_nv0039.pitch_out  = (int32_t)data; return;
++    case 0x031C: s_nv0039.line_len   = data; return;
++    case 0x0320: s_nv0039.line_count = data; return;
++    case 0x0324: s_nv0039.format     = data; return;
++    case 0x0328: nv0039_copy(); return;
++    }
++}
++
++/* Which engine subchannel 1 drives. SET_OBJECT binds do not reach this FIFO, and titles differ:
++ * Twisted Metal and Yakuza Dead Souls put NV4097 there, GT5 puts NV0039 there. Decided from the
++ * stream: any method at 0x0400 or above exists only on NV4097; the libgcm transfer sequence -- the
++ * two buffer DMAs (0xFEED000x) then an 8-word packet from 0x030C -- is NV0039. Until one is seen,
++ * subchannel 1 stays 3D as before, and the DMA words are kept for the first copy.
++ * GCM_SUBCH1_M2MF=1/0 decides it outright. */
++static int s_subch1_m2mf = -1;
++static int gcm_subch1_is_m2mf(u32 m, u32 data, u32 packet_method, u32 count, u32 type)
++{
++    if (s_subch1_m2mf < 0) {
++        static int forced = -2;
++        if (forced == -2) { const char* e = getenv("GCM_SUBCH1_M2MF"); forced = e ? (atoi(e) != 0) : -1; }
++        if (forced >= 0) {
++            s_subch1_m2mf = forced;
++        } else if (m >= 0x0400u) {
++            s_subch1_m2mf = 0;
++        } else if ((m == 0x0184u || m == 0x0188u) && (data & ~1u) == 0xFEED0000u) {
++            nv0039_method(m, data);   /* kept for the copy, if that is what this is */
++            return 0;
++        } else if (m == 0x030Cu && packet_method == 0x030Cu && count >= 8u && type == 0u) {
++            s_subch1_m2mf = 1;
++            fprintf(stderr, "[gcm] subchannel 1 is NV0039 (memory-to-memory copies)%c", 10);
++        } else {
++            return 0;
++        }
++    }
++    return s_subch1_m2mf == 1;
+ }
+ 
  static void gcm_2d_method(u32 subch, u32 method, u32 data)
- {
-     /* GCM2D_TRACE=1: histogram of (subchannel, method) actually seen. The
-@@ -1783,8 +1945,52 @@ void* cellGcm_fifo_kick_event(void)
+@@ -1783,8 +2044,52 @@
   * starved guest still paid the full tick. Waiting here instead costs nothing
   * when no one kicks (the timeout is the old sleep) and drains immediately when
   * someone does. */
@@ -7876,7 +7974,7 @@ index 298ee7de..8ea23d2c 100644
      static int on = -1;
      if (on < 0) { const char* e = getenv("GCM_FIFO_KICK"); on = (e && *e == '0') ? 0 : 1; }
      HANDLE ev = on ? (HANDLE)cellGcm_fifo_kick_event() : NULL;
-@@ -1952,7 +2158,29 @@ void cellGcm_rsx_process_fifo(void)
+@@ -1952,7 +2257,29 @@
      g_gcm_drain_tid = GetCurrentThreadId();
      const uint64_t ft_t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
      AcquireSRWLockExclusive(&s_gcm_fifo_lock);
@@ -7907,7 +8005,7 @@ index 298ee7de..8ea23d2c 100644
      ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
      if (ft_t0) {
          const uint64_t t1 = ps3_ft_now();
-@@ -1988,16 +2216,42 @@ static int gcm_get_eq_put(void)
+@@ -1988,14 +2315,40 @@
   * drain: the walker hands every data word through these checks, a million a
   * second in God of War HD gameplay, and it used to test each switch on its
   * own for every word. */
@@ -7925,16 +8023,16 @@ index 298ee7de..8ea23d2c 100644
                getenv("GCM_VAL_WATCH") || getenv("GCM_METHOD_HIST") || getenv("RSX_LIVE_FEED_DBG") ||
 -              rsx_live_draw_enabled() || rsx_draw_engine_enabled()) ? 1 : 0;
 +              getenv("GCM_LIVE_PER_WORD") || rsx_draw_engine_enabled()) ? 1 : 0;
-+    return on;
+     return on;
 +}
 +static int gcm_word_diag(void)
 +{
 +    static int on = -1;
 +    if (on < 0)
 +        on = (gcm_word_diag_env() || rsx_live_draw_enabled()) ? 1 : 0;
-     return on;
- }
- 
++    return on;
++}
++
 +/* With the legacy state off, the 3D methods gcm_3d_method still has to see:
 + * the ones rsx_process_method acts on outside its state, and the two the
 + * walker answers itself (GET_REPORT and its DMA context). */
@@ -7947,12 +8045,10 @@ index 298ee7de..8ea23d2c 100644
 +    default:
 +        return 0;
 +    }
-+}
-+
+ }
+ 
  /* One data word for the 3D engine (subchannel 0, or 1 unless GCM_SUBCH1_2D),
-  * plus the methods whose answer the walker writes itself. */
- static void gcm_3d_method(rsx_state* st, u32 m, u32 v, int legacy_state_live)
-@@ -2074,14 +2328,27 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2074,14 +2427,27 @@
      if (!s_gcm_context_ea && !s_gcm_syscall_mode) return;
      if (!s_inited) { rsx_state_init(&s_state); s_inited = 1; }
      const int wdiag = gcm_word_diag();
@@ -7983,7 +8079,7 @@ index 298ee7de..8ea23d2c 100644
  
  
      /* Walk the FIFO exactly like the RSX: chase the guest-written `put` (an IO
-@@ -2091,6 +2358,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2091,6 +2457,7 @@
       * one flat ring (cellmark), but PSL1GHT/Tiny3D immediately JUMPs into its
       * own command ring, so everything after the jump (including the reference
       * writes its waits spin on) silently never executed. */
@@ -7991,7 +8087,7 @@ index 298ee7de..8ea23d2c 100644
      u32 put = vm_read32(GCM_CONTROL_GUEST_ADDR + 0);
      /* The words behind `put` were stored by another thread (the title, or the
       * recycle below) before it stored `put`. On x86 the hardware keeps loads
-@@ -2257,7 +2525,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2257,7 +2624,7 @@
           * skip is a faster decode, not a bigger tick, and VF5 depends on the
           * walker yielding at the cap (it lost 7 milestones when a whole run
           * cost one word). */
@@ -8000,7 +8096,7 @@ index 298ee7de..8ea23d2c 100644
              const u32 page_end = (s_fifo_getoff | 0xFFFFFu) + 1u;
              const u32 lim = (put > s_fifo_getoff && put < page_end) ? put : page_end;
              u32 off = s_fifo_getoff + 4u, nea = ea + 4u;
-@@ -2302,12 +2570,14 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2302,12 +2669,14 @@
                            flips, 10); }
              if (PS3_FT_ON()) { const uint64_t t = ps3_ft_now();
                                 ps3_ft_span(PS3_FT_FLIP_FIFO, 0, w & 7u, 0, t, t); }
@@ -8016,7 +8112,7 @@ index 298ee7de..8ea23d2c 100644
                  /* Not past `queued`: a resync may already have written off
                   * this flip. */
                  if (s_fifo_flips_reached != s_fifo_flips_queued) s_fifo_flips_reached++;
-@@ -2384,6 +2654,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2384,6 +2753,8 @@
                    }
                    why = "parked";
                    s_park_pass = 1;
@@ -8025,12 +8121,13 @@ index 298ee7de..8ea23d2c 100644
                    break;
                }
                if (tgt < s_fifo_getoff) s_fifo_back_jumps++;
-@@ -2519,21 +2791,33 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2519,21 +2890,34 @@
               * which can match, are skipped. Most of a frame's words come this
               * way (God of War HD: about five million vertex-program microcode and
               * constant words a second). */
 -            if (!wdiag && count && (subch == 0 || (subch == 1 && !s1_2d)) &&
-+            if (!wenv && count && (subch == 0 || (subch == 1 && !s1_2d)) &&
++            /* Subchannel 1 takes this path only once it is known to be 3D (gcm_subch1_is_m2mf). */
++            if (!wenv && count && (subch == 0 || (subch == 1 && !s1_2d && s_subch1_m2mf == 0)) &&
                  ((s_fifo_getoff + 4) >> 20) == ((s_fifo_getoff + count * 4) >> 20)) {
                  const u32 dea = gcm_io2ea(s_fifo_getoff + 4);
                  if (dea) {
@@ -8066,16 +8163,19 @@ index 298ee7de..8ea23d2c 100644
              for (u32 i = 0; i < count; i++) {
                  u32 dea = gcm_io2ea(s_fifo_getoff + 4 + i * 4);
                  if (!dea) break;
-@@ -2680,6 +2964,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2680,7 +3064,11 @@
                  if (mfull == 0xEB00u || mfull == 0xEB04u) {
                      cellGcmQueueUserCommand(vm_read32(dea));
                  } else if (mfull == 0xE920u || mfull == 0xE924u) {
 +                    { static int said; if (getenv("FLIP_SEQ") && said++ < 12)
 +                        fprintf(stderr, "[fliproute] method 0x%04X data=0x%08X count=%u%c", mfull, vm_read32(dea), count, 10); }
                      cellGcmSetFlipCommand(vm_read32(dea) & 7u);
++                } else if (subch == 1 && !s1_2d && gcm_subch1_is_m2mf(m, vm_read32(dea), method, count, type)) {
++                    nv0039_method(m, vm_read32(dea));
                  } else if (subch == 0 || (subch == 1 && !s1_2d)) {
                      gcm_3d_method(&s_state, m, vm_read32(dea), legacy_state_live);
-@@ -2757,6 +3043,10 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                 } else
+@@ -2757,6 +3145,10 @@
       * ring start, and the resync dropped them: inFAMOUS 2 stopped presenting
       * for good that way in about one New Marais run in five ("stuck-get" at a
       * self-jump with no "jump-park" before it). */
@@ -8086,7 +8186,7 @@ index 298ee7de..8ea23d2c 100644
      { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
        if (s_sema_blocked_pass || s_park_pass) {
            stuck = 0; last = s_fifo_getoff; s_sema_blocked_pass = 0; s_park_pass = 0; }
-@@ -3102,10 +3392,12 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -3102,10 +3494,12 @@
      /* in_fifo: the flip sits in the command stream as a GCM_FLIP_MARKER, and
       * the drain does this half when it reaches it (see the 0xFEAD case). */
      if (!in_fifo) {
@@ -8100,7 +8200,7 @@ index 298ee7de..8ea23d2c 100644
      }
      /* Flip requested but not yet shown: a subsequent cellGcmSetWaitFlip blocks
       * until the present thread's cellGcmTickFlip marks it done (vsync). */
-@@ -3214,9 +3506,9 @@ s32 cellGcmSetPrepareFlip(void* ctx, u32 bufferId)
+@@ -3214,9 +3608,9 @@
      if (!s_display_buffer_set[bufferId])
          return CELL_GCM_ERROR_INVALID_VALUE;
  
@@ -8112,7 +8212,7 @@ index 298ee7de..8ea23d2c 100644
      s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
      s_flip_request_count++;
      s_last_flip_time = get_timestamp_ns();
-@@ -4231,7 +4523,8 @@ u32 cellGcmGetDefaultSegmentWordSize(void)
+@@ -4231,7 +4625,8 @@
  /* Immediate flip — perform flip right now */
  s32 cellGcmSetFlipImmediate(u32 bufferId)
  {

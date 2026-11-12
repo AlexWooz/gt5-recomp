@@ -79,12 +79,10 @@ performance matters more than the graphics card.
 
 - The first visit to a scene stutters while its shaders compile; later visits load them from the cache.
 - Online features don't work.
-- Some graphics glitches remain. The worst: on some tracks, some textures show another texture's
-  picture or noise (sponsor banners across the road and noisy fences at Chamonix in the snow here, Eiger
-  for a player: [#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14)). Narrowed down: every
-  track texture is loaded and unpacked correctly, but textures of the same size end up in each other's
-  place in graphics memory (a 512x128 banner where the road's texture should be). Finding which step
-  of the game's texture streaming swaps them is being worked on.
+- Some graphics glitches remain. If a track looks wrong, please
+  [report it](https://github.com/MormonFTP-hub/gt5-recomp/issues/new/choose) with the track, its time
+  and weather, and a screenshot. (Textures showing another texture's picture, like banners across the
+  road at Chamonix, are fixed since v0.1.16: [#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14).)
 - The mouse change (Steam's controller mouse is ignored, the real mouse stays free) hasn't been
   tried with a physical controller yet.
 
@@ -92,7 +90,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **12 Nov 2026:** the launcher: every setting in one window (resolution, borderless full screen, wheel,
+- **12 Nov 2026:** wrong track textures fixed (banners across the road at Chamonix, scrambled Eiger):
+  the game's graphics-memory copies now happen (v0.1.16); the launcher: every setting in one window (resolution, borderless full screen, wheel,
   language, mods), Play, one-click updates and a log saver, in English or Chinese; double-click
   `Update.bat`; updates no longer stop with "Access is denied"; the version in the window title.
 - **11 Nov 2026:** 1080p: the game uses its own 1080p mode (races at 1728×972 instead of 1152×648, same
