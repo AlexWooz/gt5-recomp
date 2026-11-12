@@ -8893,11 +8893,10 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          return;
      g_ld_present_dumped = 1;
  
-@@ -1051,6 +1078,17 @@
-     LD_FLUSH_SHUTDOWN,
+@@ -1052,6 +1079,17 @@
      LD_FLUSH_REASON_COUNT
  } ld_flush_reason;
-+
+ 
 +/* What each flip asks of the GPU beyond its draws, printed with [fps]:
 + * LD_GPU_WORK=1. A copy per self-read or per snapshot is what makes a PS3-era
 + * scene heavy on a modern card, and nothing else shows it. */
@@ -8908,9 +8907,10 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 +static u64 g_ldw_rt_switch;
 +/* Which surfaces cost the full copies, and whether anything was written since the last one. */
 +static struct { u32 offset, w, h; u64 n, same; } g_ldw_fb[12];
- 
++
  #if defined(YZ_PERF_PROFILE)
  typedef enum {
+     LD_REJECT_WORLD = 0,
 @@ -1239,7 +1277,51 @@
      return g.guest_ptr(g.guest_user, location, offset, min_bytes);
  }
@@ -10236,14 +10236,8 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 -        memcpy(&word, src + i, sizeof(word));
 -        hash ^= word;
 -        hash *= 1099511628211ull;
--    }
--    for (; i < span; i++) {
--        hash ^= src[i];
--        hash *= 1099511628211ull;
--    }
 +    const u64 hash = ld_fast_hash(src, span, 1469598103934665603ull);
-     *readable = 1;
--    return hash;
++    *readable = 1;
 +    return hash ? hash : 1u;
 +}
 +
@@ -10297,7 +10291,10 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 +            p[2][c] = (p[0][c] + p[1][c]) * 0.5f;
 +            p[3][c] = 0.0f;
 +        }
-+    }
+     }
+-    for (; i < span; i++) {
+-        hash ^= src[i];
+-        hash *= 1099511628211ull;
 +    const u32 idx = (u32)cb[4] | ((u32)cb[5] << 8) | ((u32)cb[6] << 16) | ((u32)cb[7] << 24);
 +    u32 cnt[4] = {0, 0, 0, 0};
 +    for (int i = 0; i < 16; i++) cnt[(idx >> (2 * i)) & 3]++;
@@ -10355,7 +10352,9 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 +        for (int c = 0; c < 3; c++) p[2][c] = (u8)((p[0][c] + p[1][c]) / 2);
 +        p[2][3] = 255;
 +        p[3][0] = p[3][1] = p[3][2] = p[3][3] = 0;
-+    }
+     }
+-    *readable = 1;
+-    return hash;
 +    const u32 idx = (u32)cb[4] | ((u32)cb[5] << 8) | ((u32)cb[6] << 16) | ((u32)cb[7] << 24);
 +    for (int i = 0; i < 16; i++) memcpy(out[i], p[(idx >> (2 * i)) & 3], 4);
 +    if (block != 16) return;
@@ -11912,16 +11911,16 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 +static ID3DBlob* shader_disk_cache_load_raw(
 +    u32 stage, const char* source, u32 source_length, u64 hash);
  static ID3DBlob* shader_disk_cache_load(
-     u32 stage, const char* source, u32 source_length, u64 hash)
- {
++    u32 stage, const char* source, u32 source_length, u64 hash)
++{
 +    const LONGLONG hx0 = hx_now();
 +    ID3DBlob* r = shader_disk_cache_load_raw(stage, source, source_length, hash);
 +    g_hx_cache += hx_now() - hx0; g_hx_cache_n++;
 +    return r;
 +}
 +static ID3DBlob* shader_disk_cache_load_raw(
-+    u32 stage, const char* source, u32 source_length, u64 hash)
-+{
+     u32 stage, const char* source, u32 source_length, u64 hash)
+ {
      char path[MAX_PATH];
      const u32 stage_index = shader_disk_cache_stage_index(stage);
 +    if (InterlockedCompareExchange(&s_shader_mem_ready, 0, 0)) {
@@ -12031,10 +12030,6 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 -        DeleteFileA(temporary);
 -        return;
 -    }
--
--    const u32 stage_index = shader_disk_cache_stage_index(stage);
--    const u64 value = ++g_ld_shader_disk_writes[stage_index];
--    shader_disk_cache_progress(value);
 +    job->next = NULL;
 +    job->stage = stage;
 +    job->header = header;
@@ -12043,7 +12038,10 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 +    memcpy(job->data, source, source_length);
 +    memcpy(job->data + source_length,
 +           blob->lpVtbl->GetBufferPointer(blob), blob_length);
-+
+ 
+-    const u32 stage_index = shader_disk_cache_stage_index(stage);
+-    const u64 value = ++g_ld_shader_disk_writes[stage_index];
+-    shader_disk_cache_progress(value);
 +    AcquireSRWLockExclusive(&s_shader_store_lock);
 +    if (s_shader_store_tail)
 +        s_shader_store_tail->next = job;
@@ -12311,11 +12309,10 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      }
      g.fp_alpha_ref = rsx_fp_alpha_ref(
          rs.alpha_ref_raw, rs.alpha_ref_format);
--
++    const unsigned long long pt4 = __rdtsc();
+ 
 -    u64 key = fnv1a(
 -        vp_uc, vp_instrs * 16, 1469598103934665603ull);
-+    const unsigned long long pt4 = __rdtsc();
-+
 +    const u64 vp_key_hash = vpm->hash;
 +    u64 key = vp_key_hash;
      if (ld_fp_constants_buffered())
@@ -13640,10 +13637,6 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 -    if (!rsx_vertex_topology_plan(prim, dc.refs_remapped, &indexed)) {
 -        g_ld_stats.group_drop_primitive++;
 -        return;
--    }
--    u32 n_tri = indexed
--        ? topology_index_count(prim)
--        : dc.n_source_refs - dc.n_source_refs % 3;
 +    u32 n_tri;
 +    if (vc_mode == 3) {
 +        indexed = vce->indexed;
@@ -13656,7 +13649,10 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 +        n_tri = indexed
 +            ? topology_index_count(prim)
 +            : dc.n_source_refs - dc.n_source_refs % 3;
-+    }
+     }
+-    u32 n_tri = indexed
+-        ? topology_index_count(prim)
+-        : dc.n_source_refs - dc.n_source_refs % 3;
  
      if (!n_tri) {
          g_ld_stats.group_drop_degenerate++;
@@ -13976,9 +13972,6 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 -    u8* cbdst = g.cb_mapped + g.cb_used;
 -    memcpy(cbdst, g.rsx.constants, RSX_DSP_NUM_CONSTANTS * 16);
 -    memcpy(cbdst + 512 * 16, xf, sizeof(xf));
--
--    g.list->lpVtbl->SetPipelineState(g.list, pso);
--    g.list->lpVtbl->SetGraphicsRootSignature(g.list, g.rootsig_x);
 +    /* The vertex constant block (all 512 constants and the viewport transform, 8 KB) goes into the
 +     * ring once per change, not once per draw: a draw whose constants and transform are those of the
 +     * block uploaded last binds that block again. Only the draw path advances cb_used between draws,
@@ -14004,7 +13997,9 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 +        g_cb_dedup[1]++;
 +    }
 +    s_cb_after = g.cb_used;
-+
+ 
+-    g.list->lpVtbl->SetPipelineState(g.list, pso);
+-    g.list->lpVtbl->SetGraphicsRootSignature(g.list, g.rootsig_x);
 +    ld_set_pso(pso);
 +    ld_set_rootsig(g.rootsig_x);
      g.list->lpVtbl->SetGraphicsRootConstantBufferView(
@@ -14227,7 +14222,17 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      g.dev->lpVtbl->CreateFence(g.dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void**)&g.fence);
      g.fence_event = CreateEventA(NULL, FALSE, FALSE, NULL);
  
-@@ -8385,7 +12168,7 @@
+@@ -8373,6 +12156,9 @@
+             (HWND)hwnd, &scd, NULL, NULL, &sc1))) {
+         factory->lpVtbl->Release(factory); return -1;
+     }
++    /* No DXGI Alt+Enter: its exclusive full screen switch behind the renderer's back froze the
++     * picture while the game ran on (#10). The window's own full screen is the launcher's setting. */
++    factory->lpVtbl->MakeWindowAssociation(factory, (HWND)hwnd, DXGI_MWA_NO_ALT_ENTER);
+     sc1->lpVtbl->QueryInterface(sc1, &IID_IDXGISwapChain3, (void**)&g.swap);
+     sc1->lpVtbl->Release(sc1);
+     factory->lpVtbl->Release(factory);
+@@ -8385,7 +12171,7 @@
      g.rtv_step = g.dev->lpVtbl->GetDescriptorHandleIncrementSize(g.dev, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
      for (u32 i = 0; i < LD_SWAP_BUFFERS; i++) {
          g.swap->lpVtbl->GetBuffer(g.swap, i, &IID_ID3D12Resource, (void**)&g.backbuf[i]);
@@ -14236,7 +14241,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      }
  
      /* upload arena */
-@@ -8395,28 +12178,28 @@
+@@ -8395,28 +12181,28 @@
      bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
      bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
      bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
@@ -14270,7 +14275,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          g.dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
          D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
          &IID_ID3D12Resource, (void**)&g.ps_cb);
-@@ -8475,18 +12258,19 @@
+@@ -8475,18 +12261,19 @@
          drd.MipLevels = 1; drd.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT; drd.SampleDesc.Count = 1;
          drd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
          D3D12_CLEAR_VALUE dcv = {0}; dcv.Format = drd.Format; dcv.DepthStencil.Depth = 1.0f;
@@ -14293,7 +14298,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          return -1;
  
      static const u8 white[4] = {255, 255, 255, 255};
-@@ -8501,6 +12285,7 @@
+@@ -8501,6 +12288,7 @@
      sink.end = sink_end;
      sink.draw_arrays = sink_draw_arrays;
      sink.inline_array = sink_inline_array;
@@ -14301,10 +14306,12 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      sink.draw_index_array = sink_draw_index;
      sink.flip = sink_flip;
      rsx_dispatch_init(&g.rsx, &sink);
-@@ -8615,6 +12400,32 @@
+@@ -8613,6 +12401,32 @@
+         if (!g_ld_movie_track_rsx) return;
+     }
      rsx_dispatch_method(&g.rsx, method, arg);
- }
- 
++}
++
 +/* A FIFO run of methods in one call (cellGcmSys's run fast path). The checks
 + * rsx_live_draw_method makes for every word are made once; any of them that
 + * is not the plain case -- the vertex-state trace, the serialized movie and
@@ -14329,12 +14336,10 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 +int rsx_live_draw_owns_rendering(void)
 +{
 +    return g.ready && g.enabled;
-+}
-+
+ }
+ 
  void rsx_live_draw_set_movie_mode(int on)
- {
-     static unsigned long long suppressed_at_start = 0;
-@@ -8929,12 +12740,81 @@
+@@ -8929,12 +12743,81 @@
   * through here while recording). */
  static FILE* g_ld_record_to;
  
@@ -14418,7 +14423,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      if (!width || !height) return UINT64_MAX;
      const int fp16 = surface->fmt == DXGI_FORMAT_R16G16B16A16_FLOAT;
      const u32 texel = fp16 ? 8u : 4u;
-@@ -8948,7 +12828,7 @@
+@@ -8948,7 +12831,7 @@
      bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
      bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
      ID3D12Resource* rb = NULL;
@@ -14427,7 +14432,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
              D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&rb)))
          return UINT64_MAX;
  
-@@ -8968,7 +12848,9 @@
+@@ -8968,7 +12851,9 @@
      dst.PlacedFootprint.Footprint.Height = height;
      dst.PlacedFootprint.Footprint.Depth = 1;
      dst.PlacedFootprint.Footprint.RowPitch = pitch;
@@ -14438,7 +14443,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  
      b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
      b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-@@ -9202,6 +13084,7 @@
+@@ -9202,6 +13087,7 @@
  void rsx_live_draw_present(u32 buffer_id)
  {
      if (!g.ready) return;
@@ -14446,7 +14451,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  
      /* LD_SURF_DUMP=<dir>: dump EVERY live surface once, with its non-black
       * count, at LD_SURF_DUMP_FRAME (default 1200).
-@@ -9262,20 +13145,38 @@
+@@ -9262,20 +13148,38 @@
       * late scene, e.g. frames for a GIF, without thousands of early files). */
      static long dump_from = -1;
      if (dump_from < 0) { const char* e = getenv("LD_FRAME_DUMP_FROM"); dump_from = e ? atol(e) : 0; }
@@ -14490,7 +14495,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          }
      }
      if (target == LD_INVALID_SURFACE && buffer_id < 8 &&
-@@ -9296,10 +13197,25 @@
+@@ -9296,10 +13200,25 @@
          return;
      }
      g_ld_last_present_target = target;
@@ -14516,7 +14521,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          fprintf(stderr, "[frame-dump] %s %ux%u nonblack=%llu\n", path,
                  g.surfaces[target].w, g.surfaces[target].h,
                  (unsigned long long)(nb == UINT64_MAX ? 0 : nb));
-@@ -9416,7 +13332,23 @@
+@@ -9416,7 +13335,23 @@
      bar[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
      g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
  
@@ -14541,7 +14546,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  
      bar[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
      bar[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-@@ -9424,9 +13356,13 @@
+@@ -9424,9 +13359,13 @@
      bar[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
      g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
  
@@ -14556,7 +14561,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          if (SUCCEEDED(present_hr))
              ld_present_measure_record(g_ld_frames + 1u);
          else {
-@@ -10153,6 +14089,30 @@
+@@ -10153,6 +14092,30 @@
                    } }
                  (void)hi; (void)rbase;
              } }
@@ -14587,7 +14592,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
            fprintf(stderr, "[fps] %.1f (frames %u..%u over %.1fs)\n",
                    (g_ld_frames - fps_f0) * 1000.0 / (double)(now - fps_t0),
                    fps_f0, g_ld_frames, (now - fps_t0) / 1000.0);
-@@ -10275,9 +14235,11 @@
+@@ -10275,9 +14238,11 @@
      }
  #endif
  
@@ -14602,7 +14607,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  #if !defined(YZ_PERF_CLEAN)
      g_ld_frame_vertex_constant_ring_recycles = 0;
  #endif
-@@ -10520,6 +14482,10 @@
+@@ -10520,6 +14485,10 @@
      if (g.ps_cb) g.ps_cb->lpVtbl->Release(g.ps_cb);
      if (g.depth_snapshot_pso)
          g.depth_snapshot_pso->lpVtbl->Release(g.depth_snapshot_pso);
@@ -14613,7 +14618,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      for (u32 i = 0; i < 4; i++)
          if (g.downsample_pso[i]) g.downsample_pso[i]->lpVtbl->Release(g.downsample_pso[i]);
      if (g.downsample_rootsig)
-@@ -10552,3 +14518,31 @@
+@@ -10552,3 +14521,31 @@
  }
  
  #endif /* _WIN32 */

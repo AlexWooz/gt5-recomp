@@ -9,6 +9,13 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.17**
+
+⌨️ **Alt+Enter no longer freezes the picture** ([#10](https://github.com/MormonFTP-hub/gt5-recomp/issues/10))
+- Alt+Enter froze the picture while the game kept running (found by Arpadiam): Windows' own Alt+Enter
+  switched the window to exclusive full screen behind the renderer's back. The port now turns that off,
+  so Alt+Enter does nothing. For full screen, use the launcher's **borderless full screen**.
+
 🏷️ Released as **v0.1.16**
 
 🛠️ **Wrong track textures fixed** ([#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14))
