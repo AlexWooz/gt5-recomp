@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Chat on Discord (live help, test results, new releases)
+    url: https://discord.gg/9cVPS7r5Ha
+    about: "MormonFTP's Workshop: #gt5-help, #gt5-test-reports and #gt5-chat."
   - name: Ask a question or chat about it
     url: https://github.com/MormonFTP-hub/gt5-recomp/discussions
     about: Setup help, results, anything that isn't a report or a bug.

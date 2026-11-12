@@ -8,7 +8,7 @@ body:
       value: |
         Forks and mods are welcome; do what you like with the code (it's MIT licensed).
         If something should come back into the main repo, a pull request is the quickest way,
-        but a link here (or a message to **mormonftp** on Discord) works too.
+        but a link here (or a post in #dev-chat on the [Workshop Discord](https://discord.gg/9cVPS7r5Ha)) works too.
   - type: input
     id: link
     attributes:

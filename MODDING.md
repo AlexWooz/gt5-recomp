@@ -4,7 +4,7 @@ There are three ways into the port, from no code at all to changing the PC side 
 make, share **your own work only**: never the game's files, `gt5.exe` builds or the generated code.
 When you've made something, tell us with the
 [fork/mod form](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=4-my-fork-or-mod.yml)
-or on Discord (**mormonftp**).
+or in the [Workshop Discord](https://discord.gg/9cVPS7r5Ha) (#dev-chat).
 
 ## 1. Your own game files
 

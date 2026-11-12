@@ -128,17 +128,18 @@ function Get-GameInfo([string]$pick) {
         } elseif ($Supported.ContainsKey($id)) {
             $info.Ok = $true; $info.Text = "Found: $title, $($Supported[$id]) ($id)"
         } elseif ($title -notmatch $Prologue -and ($title -match $Gt5Title -or $OtherIds -contains $id)) {
-            # Other releases (Japan, Asia) haven't been tried: let them through, with a warning.
+            # Other releases: the Asian BCAS20108 runs (v0.1.18); the rest are let through with a warning.
             $info.Ok = $true
-            $info.Text = "Found: $title ($id). Not tried yet (Europe and North America work): it may work; please report how it goes."
+            if ($id -eq "BCAS20108") { $info.Text = "Found: $title ($id), the Hong Kong / Asian release. It runs (tested with disc 01.00 and update 2.01)." }
+            else { $info.Text = "Found: $title ($id). Not tried yet (Europe, North America and Hong Kong/Asia work): it may work; please report how it goes." }
         } else {
             $info.Text = "That's $title ($id), not Gran Turismo 5."
         }
         # A copy with a game update built in (APP_VER 02.xx, the disc says 01.00): its EBOOT.BIN is the
-        # update's, which the port can't run yet. Let it through, but say so.
+        # update's. 2.01 runs (v0.1.22) but also needs the update's data, which the installer doesn't copy.
         $v = 0.0
         if ($info.Ok -and [double]::TryParse($appVer, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$v) -and $v -ge 2) {
-            $info.Text = "Found: $title ($id), game version $appVer (an update is built in). The port needs the disc's own version 01.00; update versions (2.xx) don't work yet."
+            $info.Text = "Found: $title ($id), game version $appVer (an update is built in). Update 2.01 is tested, others aren't yet. The update's data (USRDIR, PDIPFS) must also go in GT5\hdd0: README, Game updates."
         }
     }
     if ($iso) { Dismount-Iso $iso }

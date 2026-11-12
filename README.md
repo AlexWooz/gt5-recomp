@@ -8,9 +8,10 @@
   <img src="https://img.shields.io/badge/US_BCUS98114-works_(players)-2E8BFF?style=for-the-badge" alt="US BCUS98114: works, run by players">
   <img src="https://img.shields.io/badge/Windows_x64-Direct3D_12-5CC8FF?style=for-the-badge" alt="Windows x64, Direct3D 12">
   <img src="https://img.shields.io/badge/license-MIT-E8312F?style=for-the-badge" alt="MIT license">
-  <img src="https://img.shields.io/badge/Discord-mormonftp-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord: mormonftp">
+  <a href="https://discord.gg/9cVPS7r5Ha"><img src="https://img.shields.io/badge/Discord-join_the_Workshop-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord: join the Workshop"></a>
 </p>
 <p align="center">
+  <a href="https://discord.gg/9cVPS7r5Ha"><b>💬 Discord</b></a> ·
   <a href="#install"><b>Install</b></a> ·
   <a href="#launcher"><b>Launcher</b></a> ·
   <a href="#updating"><b>Updating</b></a> ·
@@ -21,6 +22,9 @@
   <a href="MODDING.md"><b>Modding</b></a> ·
   <a href="CONTRIBUTING.md"><b>Contributing</b></a> ·
   <a href="LICENSE"><b>License</b></a>
+</p>
+<p align="center">
+  <a href="https://discord.gg/9cVPS7r5Ha"><img src="docs/discord.png" width="100%" alt="Join MormonFTP's Workshop on Discord: install help, test reports, new releases and racing talk"></a>
 </p>
 
 # GT5 Recomp
@@ -84,9 +88,9 @@ Rather do it by hand? See [Setup](#setup).
 **Gran Turismo 5 (PC)** on your desktop (or `GT5Launcher.exe` in your `gt5-recomp` folder) opens the
 launcher: every setting in one window, then **Play**. No more editing `play.bat`.
 
-- **Display:** 1080p or 720p, **Speed** (30 fps for slower PCs: draws every other frame and leaves that
-  CPU time to the game; picked for your PC the first time), screen shape (ultrawide), **borderless full
-  screen**, maximized or a window size, watch mode, SPU threads.
+- **Display:** 1080p or 720p, **Speed** (30 fps draws every other frame; it only helps when the graphics
+  card is the limit, the window title then shows both numbers, e.g. `FPS: 15 (game 30)`), screen shape
+  (ultrawide), **borderless full screen**, maximized or a window size, watch mode, SPU threads.
 - **Controls:** steering wheel on/off, wheel rotation, force feedback strength and direction, pad in the
   background, mouse clipping.
 - **Game:** the game's language (as far as your disc has it), your mods from `GT5\mods`, the launcher's
@@ -232,7 +236,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Report something broken | [Something's broken](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml) |
 | Ask for a change | [Suggest a change](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=3-idea.yml) |
 | Post quick results, screenshots of it running, or ask for help | [Discussions](https://github.com/MormonFTP-hub/gt5-recomp/discussions/1) |
-| Talk to me directly | Discord: **mormonftp** (add me and send a message) |
+| Chat, get help live, share results | **[The Workshop Discord](https://discord.gg/9cVPS7r5Ha)**: #gt5-help, #gt5-test-reports, #gt5-chat (I'm **mormonftp** there) |
 
 <a id="faq"></a>
 
@@ -251,7 +255,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Full screen? | ✅ New: borderless full screen in the launcher (Alt+Enter is switched off since v0.1.17: it used to freeze the picture) |
 | Higher than 1080p (4K)? | ⚠️ The game's top mode is its 1080p one (races drawn at 1728x972), scaled up to your window; drawing above that isn't there yet |
 | Japanese or Asian release (BCJS, BCAS)? | ✅ Hong Kong / Asia (BCAS20108) runs, reported by a player, and its disc 01.00 and update 2.01 race in tests too; Japanese untried, please report |
-| Slow PC or laptop? | 🛠️ Laptops now use their dedicated graphics card; the launcher's **Speed: 30 fps** draws every other frame (a little faster on slow CPUs). Bigger speed-ups are being worked on |
+| Slow PC or laptop? | 🛠️ Laptops now use their dedicated graphics card. On most PCs the CPU sets the pace (the game's own threads), so the launcher's **Speed: 30 fps** rarely helps: it's for a graphics card at its limit. Speed-ups for 4-6 core CPUs are being worked on |
 | Linux, Android? | ❌ Windows only for now (an Android build is being worked on) |
 | Online? | ❌ No |
 | Is it legal? | ✅ No game files here: you build it from your own disc |

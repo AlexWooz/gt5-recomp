@@ -133,9 +133,9 @@ namespace Gt5Launcher
             { "speed", new[] { "Speed", "速度" } },
             { "intro", new[] { "Skip the opening movie", "跳过开场动画" } },
             { "intro.help", new[] { "A quicker start. On a busy or slower PC the opening movie could stop on one frame at the first start. GT TV still has it.", "启动更快。在繁忙或较慢的电脑上，开场动画在首次启动时可能会卡在一帧。GT TV 中仍可观看。" } },
-            { "speed.help", new[] { "For slower PCs. GT5 counts time in frames, so when the PC can't keep up the whole game slows down. 30 fps draws every other frame and leaves that CPU time to the game: about 10% faster on a 6-core test, more where drawing is what holds it back. Picked for your PC the first time the launcher starts.", "适合较慢的电脑。GT5 以帧计时，电脑跟不上时整个游戏都会变慢。30 fps 隔帧绘制，把省下的 CPU 时间留给游戏：在 6 核测试中快约 10%，在绘制是瓶颈的电脑上更多。启动器第一次运行时会按你的电脑自动选择。" } },
-            { "speed.full", new[] { "Draw every frame (fast PCs)", "每帧都绘制（高性能电脑）" } },
-            { "speed.30", new[] { "30 fps: draw every other frame (slower PCs, laptops)", "30 fps：隔帧绘制（较慢的电脑、笔记本）" } },
+            { "speed.help", new[] { "30 fps draws every other frame. It only makes the game faster when the graphics card is what holds it back (GPU busy near 100%). On most PCs the CPU is the limit: then the picture gets less smooth for little or no gain (about 10% on a 6-core test, nothing on a player's Ryzen 5 3600). While it's on, the window title shows both numbers, e.g. FPS: 15 (game 30); the game number is the one that counts.", "30 fps 隔帧绘制。只有在显卡是瓶颈（GPU 占用接近 100%）时才会让游戏变快。大多数电脑的瓶颈是 CPU：这时画面变得不流畅，速度几乎没有提升（6 核测试中约 10%，一位玩家的 Ryzen 5 3600 上没有提升）。开启时窗口标题会同时显示两个数字，例如 FPS: 15 (game 30)；以 game 后面的数字为准。" } },
+            { "speed.full", new[] { "Draw every frame (recommended)", "每帧都绘制（推荐）" } },
+            { "speed.30", new[] { "30 fps: draw every other frame (only if the graphics card is the limit)", "30 fps：隔帧绘制（仅当显卡是瓶颈时）" } },
             { "watch", new[] { "Watch mode by itself", "自动观看模式" } },
             { "watch.help", new[] { "Comes on after 10 s without input (B-Spec, replays): draws every other frame and lowers the game's priority. F9 toggles it any time.", "10 秒无操作后自动开启（B-Spec、回放）：隔帧绘制并降低游戏优先级。随时可按 F9 切换。" } },
             { "spus", new[] { "Extra SPU threads", "额外 SPU 线程" } },
@@ -220,6 +220,7 @@ namespace Gt5Launcher
         public bool Fresh;
         public Dictionary<string, string> V = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         readonly string path;
+        const string SpeedMark = "REM Speed";
         static readonly Regex SetLine = new Regex("^\\s*set\\s+\"([A-Za-z0-9_]+)=(.*)\"\\s*$", RegexOptions.IgnoreCase);
 
         public Settings(string path)
@@ -229,10 +230,21 @@ namespace Gt5Launcher
             foreach (var d in Defaults) V[d[0]] = d[1];
             try
             {
+                // The Speed lines Save() adds at the end are not settings of their own. v0.1.20-v0.1.22
+                // wrote them with no marker, so they were read back as LD_WATCH=2 and 30 fps stayed on
+                // after Speed was set back: the first value of a key counts, and LD_WATCH_PRIORITY that
+                // came with such a repeated LD_WATCH is dropped.
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                bool speedLines = false;
                 foreach (var line in File.ReadAllLines(path))
                 {
+                    if (line.TrimStart().StartsWith(SpeedMark, StringComparison.OrdinalIgnoreCase)) break;
                     var m = SetLine.Match(line);
-                    if (m.Success) V[m.Groups[1].Value] = m.Groups[2].Value;
+                    if (!m.Success) continue;
+                    string k = m.Groups[1].Value;
+                    if (!seen.Add(k)) { if (k.Equals("LD_WATCH", StringComparison.OrdinalIgnoreCase)) speedLines = true; continue; }
+                    if (speedLines && k.Equals("LD_WATCH_PRIORITY", StringComparison.OrdinalIgnoreCase)) continue;
+                    V[k] = m.Groups[2].Value;
                 }
             }
             catch { }
@@ -252,7 +264,11 @@ namespace Gt5Launcher
             // Speed (GT5_SPEED) turns into the renderer's own switches, after the keys so it wins.
             // GT5 counts time in frames: these draw fewer frames instead of letting the game slow down.
             string speed = Get("GT5_SPEED");
-            if (speed == "30") { sb.AppendLine("set \"LD_WATCH=2\""); sb.AppendLine("set \"LD_WATCH_PRIORITY=0\""); }
+            if (speed == "30")
+            {
+                sb.AppendLine(SpeedMark + " (GT5_SPEED=30): the renderer's own switches. The launcher writes these from Speed; reading stops here.");
+                sb.AppendLine("set \"LD_WATCH=2\""); sb.AppendLine("set \"LD_WATCH_PRIORITY=0\"");
+            }
             File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
         }
     }
@@ -331,14 +347,15 @@ namespace Gt5Launcher
             }
         }
 
-        // First start on this install: a first guess at Speed and resolution from the CPU, which sets the
-        // pace in this port (the graphics work runs on one thread). Everything stays changeable.
+        // First start on this install: laptops and small CPUs start at 720p, easier on their graphics chip.
+        // Speed stays at every frame: drawing half the frames only helps when the graphics card is the
+        // limit, and on a player's 6-core desktop it gained nothing (discussion #1). Everything stays changeable.
         void AutoPick()
         {
             int n = Environment.ProcessorCount;
             var bs = SystemInformation.PowerStatus.BatteryChargeStatus;
             bool laptop = (bs & BatteryChargeStatus.NoSystemBattery) == 0 && bs != BatteryChargeStatus.Unknown;
-            if (n <= 8 || (laptop && n <= 12)) { S.Set("GT5_SPEED", "30"); S.Set("PS3_VIDEO_MODE", "720"); }
+            if (n <= 8 || (laptop && n <= 12)) S.Set("PS3_VIDEO_MODE", "720");
         }
 
         public LauncherForm(bool screenshots)
@@ -346,6 +363,17 @@ namespace Gt5Launcher
             shots = screenshots;
             S = new Settings(P.Settings);
             if (S.Fresh) AutoPick();
+            // v0.1.20-v0.1.22 chose 30 fps by themselves for small CPUs and laptops; it rarely helps, so
+            // those installs go back to every frame once (it can be chosen again on the Display page).
+            if (S.Get("GT5_LAUNCHER_REV") == "")
+            {
+                if (!S.Fresh && S.Get("GT5_SPEED") == "30") S.Set("GT5_SPEED", "");
+                // Saved again by those versions, the Speed lines became settings of their own (LD_WATCH=2,
+                // which the launcher never offers), so 30 fps stayed on with Speed set back.
+                if (!S.Fresh && S.Get("LD_WATCH") == "2") { S.Set("LD_WATCH", ""); S.V.Remove("LD_WATCH_PRIORITY"); }
+                S.Set("GT5_LAUNCHER_REV", "23");
+                if (!S.Fresh) { try { S.Save(); } catch { } }
+            }
             T.Zh = S.Get("GT5_LAUNCHER_LANG") == "zh";
             Text = "Gran Turismo 5 — PC";
             BackColor = Look.Bg; ForeColor = Look.Text;

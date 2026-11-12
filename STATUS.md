@@ -74,8 +74,10 @@ performance matters more than the graphics card.
   previous log); a line starting with `[d3d-fail]` says what failed.
 - More speed on 4-6 core CPUs and laptops. Measured on 6 slow cores of the tested rig: races at about
   22 game frames a second, and the CPU wasn't even full, so it's the game's own threads handing work to
-  each other, not the drawing, that sets the pace there (drawing half the frames gave about 10%). That's
-  what's being looked at next. Laptops now draw on their dedicated graphics card (v0.1.20).
+  each other, not the drawing, that sets the pace there (drawing half the frames gave about 10%). A
+  player's Ryzen 5 3600 showed the same: the launcher's 30 fps setting halved the frames drawn and left
+  the game's speed unchanged, so it's no longer picked by itself. That's what's being looked at next.
+  Laptops now draw on their dedicated graphics card (v0.1.20).
 - Shorter shader-compile stutter the first time a scene is seen
 
 ## ❌ Not supported yet
@@ -102,7 +104,7 @@ The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGE
 
 - **12 Nov 2026:** the opening movie is skipped, so it can't freeze the first start (v0.1.21);
   laptops draw on their dedicated graphics card, and the launcher has a **Speed**
-  setting (30 fps) picked for your PC (v0.1.20); a black screen from a split or missing `GT.VOL` is
+  setting (30 fps, for a graphics card at its limit) (v0.1.20); a black screen from a split or missing `GT.VOL` is
   fixed or explained (v0.1.19); the Hong Kong release runs; wrong track textures fixed (banners across the road at Chamonix, scrambled Eiger):
   the game's graphics-memory copies now happen (v0.1.16); Alt+Enter no longer freezes the picture
   (v0.1.17); the launcher: every setting in one window (resolution, borderless full screen, wheel,
@@ -128,4 +130,4 @@ The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGE
 ---
 
 Tried it? Say how it went in the [discussion](https://github.com/MormonFTP-hub/gt5-recomp/discussions)
-or on Discord (**mormonftp**).
+or in the [Workshop Discord](https://discord.gg/9cVPS7r5Ha) (#gt5-test-reports).

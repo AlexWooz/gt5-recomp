@@ -22,7 +22,9 @@ if (-not $Window) { $env:PS3_HEADLESS = "1"; $env:PS3_WINDOW_BEHIND = "1" }
 foreach ($k in $Env.Keys) { Set-Item "env:$k" $Env[$k] }
 $out = "$root\logs\$Tag.out"; $err = "$root\logs\$Tag.err"
 $t0 = Get-Date
-$p = Start-Process "$root\build\gt5.exe" -ArgumentList "`"$root\input\EBOOT.elf`"" -WorkingDirectory $root `
+# GT5_TEST_EXE=<path>: run another build (e.g. one made from the published source) with the same data.
+$exe = if ($env:GT5_TEST_EXE) { $env:GT5_TEST_EXE } else { "$root\build\gt5.exe" }
+$p = Start-Process $exe -ArgumentList "`"$root\input\EBOOT.elf`"" -WorkingDirectory $root `
     -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err
 $h = $p.Handle  # keeps ExitCode readable after exit
 $peak = 0

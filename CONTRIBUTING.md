@@ -8,7 +8,7 @@ so I can try it and maybe bring it into the main repo:
 - open a pull request,
 - fill in the [fork/mod form](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=4-my-fork-or-mod.yml)
   with a link to your fork or branch, or
-- message me on Discord: **mormonftp**.
+- post it in the [Workshop Discord](https://discord.gg/9cVPS7r5Ha) (#dev-chat), or message **mormonftp** there.
 
 ## Rules for pull requests and forks
 

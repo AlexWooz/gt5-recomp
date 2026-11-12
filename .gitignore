@@ -45,6 +45,7 @@ GT5/scripts/refs/
 !docs/social.png
 !docs/status.png
 !docs/launcher.png
+!docs/discord.png
 *.ppm
 *.jpg
 *.f32
@@ -54,6 +55,7 @@ GT5/scripts/refs/
 backups/
 # Build output and fetched dependencies
 GT5/build/
+GT5/build-linux/
 build/
 ps3recomp/
 ffmpeg/
@@ -62,6 +64,9 @@ tools/
 # The launcher, built on your PC by launcher\build-launcher.ps1, and the settings it saves
 GT5Launcher.exe
 GT5/settings.bat
+# Linux: your own play.sh settings, and the Vulkan renderer's shader cache
+GT5/settings.sh
+GT5/shadercache/
 venv/
 __pycache__/
 *.pyc

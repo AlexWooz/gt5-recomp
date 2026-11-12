@@ -9,6 +9,33 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.23**
+
+💬 **Discord server**: [MormonFTP's Workshop](https://discord.gg/9cVPS7r5Ha) for live help, test reports and new releases; linked from the top of the README, the issue forms and the New issue page.
+
+⚙️ **Speed: 30 fps is now off unless you choose it, and a launcher bug that kept it on is fixed** ([discussion #1](https://github.com/MormonFTP-hub/gt5-recomp/discussions/1))
+- A player's test (Ryzen 5 3600, GTX 1650 SUPER) showed what 30 fps does on a typical 6-core PC.
+  It drew half the frames (15, 14 and 19 a second against 29, 27 and 35), but the game itself ran at
+  the same speed. GT5's pace on most PCs is set by the CPU (the game's own threads), so drawing fewer
+  frames only helps when the graphics card is the limit.
+- The launcher no longer picks 30 fps by itself for small CPUs and laptops, as v0.1.20 to v0.1.22 did.
+  Installs it set to 30 fps go back to drawing every frame once; you can choose 30 fps again under
+  Display. The help text now says when it helps.
+- **Bug fixed:** once Speed had been saved as 30 fps, the next launcher start read the extra lines it
+  writes back as settings of their own. Setting Speed back to "Draw every frame" in a later session
+  then left the game at 30 fps. The launcher repairs such a `settings.bat` once.
+- While some frames go undrawn (30 fps, watch mode), the window title also shows the game's own rate,
+  for example `FPS: 15.00 (game 30)`. The game number is the one that says how fast the game runs.
+
+⏱️ **The 1 ms timer stays on when the window is hidden.** The game asks Windows for 1 ms timer steps,
+because its short waits get much slower at Windows' default 15.6 ms. Windows 11 drops that request for
+a program whose window is minimized or hidden. The game now asks Windows to keep it. Older Windows
+versions ignore the request. Its effect on speed isn't measured yet: the test PC was too busy today.
+
+🧾 **Installer:** it says the Hong Kong / Asian release (BCAS20108) runs. For a copy with an update
+built in, it says update 2.01 is tested and that the update's data has to be copied too (README,
+[Game updates](README.md#game-updates)). Before, it said updates don't work.
+
 🏷️ Released as **v0.1.22**
 
 🎮 **Game updates (2.xx) run, and the Hong Kong / Asian release is tested** ([discussion #18](https://github.com/MormonFTP-hub/gt5-recomp/discussions/18))
