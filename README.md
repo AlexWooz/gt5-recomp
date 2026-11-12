@@ -255,7 +255,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Is it legal? | ✅ No game files here: you build it from your own disc |
 | Ready-made download? | ❌ No, but [GT5-Installer.bat](#install) builds it for you |
 | Errors during setup? | 🛠️ Use [GT5-Installer.bat](#install), or run `setup.ps1` (see below) |
-| Black screen, `draws: 0`? | 🛠️ Fixed: update (see below) |
+| Black screen, `draws: 0`? | 🛠️ Fixed: update; if it's still black, `GT.VOL` may be missing or in pieces (see below) |
 
 **Q: Does it support steering wheels and force feedback?**
 
@@ -378,9 +378,15 @@ from python.org with "Add python.exe to PATH" ticked, then run setup again.
 rebuilt with that code: in the `gt5-recomp` folder run `powershell -ExecutionPolicy Bypass -File update.ps1`
 (or double-click `setup.bat`; if you downloaded the ZIP, download it again and move your `input`,
 `vfs` and `dev_flash` folders into the new `GT5` folder). While it builds, it prints
-`SPU jobs found in EBOOT.elf: N of 15`. If it's still black afterwards, attach the whole
-`GT5\logs\play.err` to a [problem report](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml),
-with that line.
+`SPU jobs found in EBOOT.elf: N of 15`.
+
+**Still black on a new version?** Look in `GT5\logs\play.err` for `open FAIL '/dev_bdvd/PS3_GAME/USRDIR/GT.VOL'`.
+That means the game's data file, `GT.VOL` (about 12 GB), isn't in `GT5\vfs\PS3_GAME\USRDIR`. Dumps made
+to a FAT32 USB drive split it into pieces (`GT.VOL.66600`, `GT.VOL.66601`, ...); since v0.1.19 they're
+joined automatically by `Update.bat`, setup and the launcher's **Play**. If there's no `GT.VOL` at all,
+copy it from `PS3_GAME\USRDIR` in your dump. Otherwise attach the whole `GT5\logs\play.err` to a
+[problem report](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml), with
+that line.
 
 **Q: The picture froze on one screen, but the menu sounds still react when I press buttons. What now?**
 

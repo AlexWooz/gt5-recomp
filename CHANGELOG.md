@@ -9,6 +9,16 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.19**
+
+🧩 **Black screen from a game copy whose GT.VOL is in pieces, or missing** ([#12](https://github.com/MormonFTP-hub/gt5-recomp/issues/12))
+- `GT.VOL` is the game's data (about 12 GB). Dumps made to a FAT32 USB drive split every file over 4 GB
+  into pieces (`GT.VOL.66600`, `GT.VOL.66601`, ...), the installer copied them as they were, and the game,
+  finding no `GT.VOL`, started to a black screen. Now `Update.bat`, setup and every build join the pieces
+  into one file (new `GT5\scripts\fix_game_files.ps1`), and say plainly when `GT.VOL` is missing altogether.
+- The launcher's Play page warns about it, and **Play** offers to join the pieces first.
+- FAQ: what to look for in `play.err` when it's still black (`open FAIL ... GT.VOL`).
+
 🏷️ Released as **v0.1.18**
 
 📀 **The installer knows GT5 by its Chinese, Japanese and Korean names too**

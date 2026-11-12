@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.19](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.19) | 12 Nov 2026 | Fix the black screen from a GT.VOL split into pieces by a FAT32 dump, or missing (#12): joined automatically, and the launcher warns |
 | [v0.1.18](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.18) | 12 Nov 2026 | Installer: recognise GT5 by its Chinese, Japanese and Korean titles (#18); say when a copy has a 2.xx update built in |
 | [v0.1.17](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.17) | 12 Nov 2026 | Alt+Enter no longer freezes the picture (#10) |
 | [v0.1.16](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.16) | 12 Nov 2026 | Fix wrong track textures (#14): GT5's graphics-memory copies (NV0039) now happen |

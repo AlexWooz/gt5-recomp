@@ -29,6 +29,10 @@ function Remove-DamagedObjects {
 # A GT5\spu from an older version may have a closed permission list ("Access is denied" from ninja).
 & (Join-Path $PSScriptRoot "fix_spu_access.ps1")
 if ($LASTEXITCODE -ne 0) { exit 1 }
+# The game's data: joins a GT.VOL split by a FAT32 dump, and says when it's missing (the build itself
+# doesn't need it, so this never stops the build).
+& (Join-Path $PSScriptRoot "fix_game_files.ps1")
+$global:LASTEXITCODE = 0
 # After a good build: the launcher (GT5Launcher.exe in the install folder), rebuilt with every update.
 function Exit-Built {
     $lb = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) "launcher\build-launcher.ps1"

@@ -123,7 +123,14 @@ if (-not (Test-Path $elf)) {
 
 $game = Join-Path $gt5 "vfs\PS3_GAME"
 if (Test-Path (Join-Path $game "USRDIR")) {
-    if (Test-Path (Join-Path $game "PARAM.SFO")) { Ok "GT5\vfs\PS3_GAME (your disc's game data)" }
+    if (Test-Path (Join-Path $game "PARAM.SFO")) {
+        # Joins a GT.VOL that a FAT32 dump split into pieces, and checks it's there at all.
+        & (Join-Path $gt5 "scripts\fix_game_files.ps1") -Gt5 $gt5
+        if ($LASTEXITCODE -eq 2) {
+            Todo "GT5\vfs\PS3_GAME\USRDIR\GT.VOL (the game's data, about 12 GB)" "Copy it from PS3_GAME\USRDIR in your disc dump (or its pieces GT.VOL.66600, .66601, ...: they're joined automatically)."
+        } else { Ok "GT5\vfs\PS3_GAME (your disc's game data)" }
+        $global:LASTEXITCODE = 0
+    }
     else { Todo "GT5\vfs\PS3_GAME\PARAM.SFO" "Copy the whole PS3_GAME folder from your disc, including PARAM.SFO." }
 } elseif (Test-Path (Join-Path $game "PS3_GAME\USRDIR")) {
     Todo "GT5\vfs\PS3_GAME at the right level" "It's one folder too deep: move the contents of GT5\vfs\PS3_GAME\PS3_GAME up into GT5\vfs\PS3_GAME."

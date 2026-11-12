@@ -59,7 +59,7 @@ namespace Gt5Launcher
     // ---- Where things are ------------------------------------------------------------------------
     class Paths
     {
-        public string Root, Gt5, PlayBat, Settings, Exe, Elf, Logs, Mods, VersionFile, Icon0, Update, Readme;
+        public string Root, Gt5, PlayBat, Settings, Exe, Elf, Logs, Mods, VersionFile, Icon0, Update, Readme, Vol, FixFiles;
         public Paths()
         {
             string here = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
@@ -76,7 +76,11 @@ namespace Gt5Launcher
             Icon0 = Path.Combine(Gt5, "vfs", "PS3_GAME", "ICON0.PNG");
             Update = Path.Combine(Root, "update.ps1");
             Readme = Path.Combine(Root, "README.md");
+            Vol = Path.Combine(Gt5, "vfs", "PS3_GAME", "USRDIR", "GT.VOL");
+            FixFiles = Path.Combine(Gt5, "scripts", "fix_game_files.ps1");
         }
+        // GT.VOL in pieces (GT.VOL.66600, .66601, ...): a dump made to a FAT32 drive.
+        public bool VolInPieces() { return File.Exists(Vol + ".66600"); }
         public string InstalledVersion()
         {
             try { return File.ReadAllLines(VersionFile)[0].Trim(); } catch { return ""; }
@@ -101,6 +105,9 @@ namespace Gt5Launcher
             { "ready", new[] { "Ready. Settings are saved when you press Play.", "就绪。按“开始游戏”时会保存设置。" } },
             { "notbuilt", new[] { "The game isn't built yet (GT5\\build\\gt5.exe is missing). Run GT5-Installer.bat or setup.ps1 first.", "游戏尚未构建（缺少 GT5\\build\\gt5.exe）。请先运行 GT5-Installer.bat 或 setup.ps1。" } },
             { "noelf", new[] { "GT5\\input\\EBOOT.elf is missing: setup isn't finished (see README, Install).", "缺少 GT5\\input\\EBOOT.elf：安装尚未完成（见 README 的安装部分）。" } },
+            { "novol", new[] { "GT5\\vfs\\PS3_GAME\\USRDIR\\GT.VOL is missing. It's the game's data (about 12 GB): without it the game starts to a black screen. Copy it from PS3_GAME\\USRDIR in your disc dump into that folder.", "缺少 GT5\\vfs\\PS3_GAME\\USRDIR\\GT.VOL。这是游戏数据（约 12 GB），没有它游戏会黑屏。请从光盘 dump 的 PS3_GAME\\USRDIR 中把它复制到该文件夹。" } },
+            { "volparts", new[] { "GT.VOL is in pieces (GT.VOL.66600, .66601, ...), as dumps made to a FAT32 drive are. The game needs it in one file. Join the pieces now? It takes a few minutes and about 12 GB of free space.", "GT.VOL 被分成了多个部分（GT.VOL.66600、.66601 ……），这是保存到 FAT32 硬盘的 dump 的特点。游戏需要完整的一个文件。现在合并吗？需要几分钟和约 12 GB 可用空间。" } },
+            { "volparts.page", new[] { "GT.VOL is in pieces (GT.VOL.66600, .66601, ...), as dumps made to a FAT32 drive are. Press Play to join them into one file (a few minutes, about 12 GB of free space).", "GT.VOL 被分成了多个部分（GT.VOL.66600、.66601 ……），这是保存到 FAT32 硬盘的 dump 的特点。按“开始游戏”即可合并为一个文件（需要几分钟和约 12 GB 可用空间）。" } },
             { "already", new[] { "The game is already running.", "游戏已经在运行。" } },
             { "started", new[] { "Starting the game...", "正在启动游戏..." } },
             { "stopped", new[] { "The game has closed.", "游戏已关闭。" } },
@@ -496,9 +503,13 @@ namespace Gt5Launcher
             y = AddHeading(p, T.Get("nav.play"), y);
             var summary = new Label { ForeColor = Look.Text, AutoSize = true, Location = new Point(0, y), MaximumSize = new Size(700, 0), Font = Look.F(10.5f, FontStyle.Regular) };
             p.Controls.Add(summary);
-            p.VisibleChanged += delegate { if (p.Visible) summary.Text = Summary(); };
-            summary.Text = Summary();
-            y += 150;
+            // Below the settings: what would stop the game (not built, GT.VOL missing or in pieces).
+            var warn = new Label { ForeColor = Color.FromArgb(240, 180, 70), AutoSize = true, Location = new Point(0, y + 112), MaximumSize = new Size(700, 0), Font = Look.F(10f, FontStyle.Bold) };
+            p.Controls.Add(warn);
+            Action refresh = delegate { summary.Text = Summary(); warn.Text = Warning(); };
+            p.VisibleChanged += delegate { if (p.Visible) refresh(); };
+            refresh();
+            y += 112 + 64;
             y = AddHelp(p, T.Get("keys"), y, 0);
             y = AddHelp(p, T.Get("help.about"), y + 6, 0);
             return p;
@@ -516,8 +527,14 @@ namespace Gt5Launcher
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("window"), win));
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("wheel"), wheel));
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("lang"), S.Get("PS3_LANG") == "" ? T.Get("lang.system") : S.Get("PS3_LANG")));
-            if (!File.Exists(P.Exe)) { sb.AppendLine(); sb.AppendLine(T.Get("notbuilt")); }
             return sb.ToString();
+        }
+
+        string Warning()
+        {
+            if (!File.Exists(P.Exe)) return T.Get("notbuilt");
+            if (!File.Exists(P.Vol)) return T.Get(P.VolInPieces() ? "volparts.page" : "novol");
+            return "";
         }
 
         Panel BuildDisplayPage()
@@ -796,6 +813,20 @@ namespace Gt5Launcher
             if (running || GameRunning()) { status.Text = T.Get("already"); return; }
             if (!File.Exists(P.Exe)) { MessageBox.Show(this, T.Get("notbuilt"), "GT5"); return; }
             if (!File.Exists(P.Elf)) { MessageBox.Show(this, T.Get("noelf"), "GT5"); return; }
+            if (!File.Exists(P.Vol) && P.VolInPieces() && File.Exists(P.FixFiles))
+            {
+                if (MessageBox.Show(this, T.Get("volparts"), "GT5", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+                try
+                {
+                    var fix = Process.Start(new ProcessStartInfo("powershell.exe",
+                        "-NoProfile -ExecutionPolicy Bypass -File \"" + P.FixFiles + "\""));
+                    Cursor = Cursors.WaitCursor;
+                    while (!fix.WaitForExit(200)) Application.DoEvents();
+                }
+                catch (Exception e) { MessageBox.Show(this, e.Message, "GT5"); }
+                finally { Cursor = Cursors.Default; }
+            }
+            if (!File.Exists(P.Vol)) { MessageBox.Show(this, T.Get("novol"), "GT5"); return; }
             try { S.Save(); } catch (Exception e) { MessageBox.Show(this, "settings.bat: " + e.Message, "GT5"); return; }
             Process cmd;
             try
