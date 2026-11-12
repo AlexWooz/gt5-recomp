@@ -9,6 +9,15 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 11 Nov 2026
 
+🏷️ Released as **v0.1.11**
+
+🩹 **Hotfix: 720p is the default again**
+- In v0.1.10's 1080p mode the window showed only the top-left two-thirds of the picture: the game drew
+  1920×1080, but the window's buffer stayed 1280×720 and took the corner of it. The tests had checked the
+  game's own frames, not the window. `play.bat` is back to `PS3_VIDEO_MODE=720`; 1080p returns once the
+  window follows the mode. Updated to v0.1.10? Run `update.ps1` again, or set `PS3_VIDEO_MODE=720` in
+  `GT5\play.bat` yourself.
+
 🏷️ Released as **v0.1.10**
 
 🖥️ **1080p** (after a report from a 4K TV, [#14](https://github.com/MormonFTP-hub/gt5-recomp/issues/14))
