@@ -9,6 +9,11 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+📖 **README: the Linux setup in five steps** (a pull request by melroy89, #27)
+- Install the build tools, get the firmware with RPCS3, copy the disc's `PS3_GAME`, decrypt the
+  executable, then check and build, each with commands to copy, plus the file layout to expect.
+  Requirements list Windows and Linux side by side; the Linux test report moved below the steps.
+
 🏷️ Released as **v0.1.31**
 
 🎁 **DLC works, offline, with your own licences** (US release, update 2.17; a community pull request by
