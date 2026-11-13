@@ -137,11 +137,14 @@ if(SPU_SOURCES)
         COMPILE_DEFINITIONS SPU_USE_DISPATCH_MT
         COMPILE_OPTIONS "-O2;-w;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1")
 endif()
-# GT5's sound job: its numbers are samples, and it needs every bit of speed to keep up.
-if(EXISTS "${SPU_DIR}/jobs/jD58063CD/spu_recomp.c")
-    set_source_files_properties("${SPU_DIR}/jobs/jD58063CD/spu_recomp.c" PROPERTIES
-        COMPILE_OPTIONS "-O2;-w;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1;-DSPU_X86_FAST_FLOAT=1")
-endif()
+# GT5's sound job: its numbers are samples, and it needs every bit of speed to keep up. jD58063CD is
+# the disc's; game update 2.17 replaces it with jCB9BD024 (spu_jobs_from_eboot.py, UPDATED).
+foreach(_sound_job jD58063CD jCB9BD024)
+    if(EXISTS "${SPU_DIR}/jobs/${_sound_job}/spu_recomp.c")
+        set_source_files_properties("${SPU_DIR}/jobs/${_sound_job}/spu_recomp.c" PROPERTIES
+            COMPILE_OPTIONS "-O2;-w;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1;-DSPU_X86_FAST_FLOAT=1")
+    endif()
+endforeach()
 
 target_link_libraries(gt5 PRIVATE ps3recomp_runtime SDL2::SDL2 ${CMAKE_DL_LIBS} m pthread)
 set_target_properties(gt5 PROPERTIES LINKER_LANGUAGE CXX)

@@ -90,8 +90,11 @@ if(SPU_SOURCES)
         COMPILE_OPTIONS "-O2;/w;/GS-;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1")
 endif()
 # GT5's sound job: its numbers are samples, and it was about 10% short of real time with a full grid.
-set_source_files_properties("${SPU_DIR}/jobs/jD58063CD/spu_recomp.c" PROPERTIES
-    COMPILE_OPTIONS "-O2;/w;/GS-;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1;-DSPU_X86_FAST_FLOAT=1")
+# jD58063CD is the disc's; game update 2.17 replaces it with jCB9BD024 (spu_jobs_from_eboot.py, UPDATED).
+foreach(_sound_job jD58063CD jCB9BD024)
+    set_source_files_properties("${SPU_DIR}/jobs/${_sound_job}/spu_recomp.c" PROPERTIES
+        COMPILE_OPTIONS "-O2;/w;/GS-;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1;-DSPU_X86_FAST_FLOAT=1")
+endforeach()
 
 target_include_directories(gt5 PRIVATE
     "${RECOMP_DIR}"

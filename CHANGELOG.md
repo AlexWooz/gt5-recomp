@@ -113,6 +113,15 @@ reported on Discord with update 2.11 and the Master Mod on the US release)
   sound device (checked on Android: 187.5 blocks a second, the queue steady at 20 ms).
 - The title screen's white model city is drawn white by GT5 itself (Windows shows it the same).
 
+⚡ **Update 2.17: the sound job gets its fast floating-point setting back**
+- GT5's sound job (the "soc-job" chain, run 125 times a second whatever the frame rate) is built
+  with `SPU_X86_FAST_FLOAT`: its numbers are sound samples, so the exact SPU range and signed-zero
+  handling can go. Update 2.17 replaces that job (`jD58063CD`) with a new version (`jCB9BD024`), and
+  the setting named only the old one, so on 2.17 the heaviest job in a race ran the slower exact
+  path. Both versions get it now, on Windows and Linux.
+- On a Steam Deck in a race: the job's time went from about 390 to about 340 ms a second, its thread
+  from 86% to 82% busy, and frames from about 135-150 to 130-140 ms. Sound unchanged.
+
 🏷️ Released as **v0.1.32**
 
 ⚡ **First-visit stutter about three times shorter: new shaders compile in parallel** (a community pull
