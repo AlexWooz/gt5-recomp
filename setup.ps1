@@ -161,6 +161,8 @@ if (-not (Test-Path $elf)) {
         Ok "GT5\input\EBOOT.elf: Hong Kong / Asia BCAS20108, update 2.01 (tested; needs the update's data in GT5\hdd0, README: Game updates)"
     } elseif ($sha1 -eq "12EF249F9B95591E08251AC85F103B1451DA23BF") {
         Ok "GT5\input\EBOOT.elf: North America BCUS98114, update 2.17 (tested; needs the update's data in GT5\hdd0, README: Game updates)"
+    } elseif ($sha1 -eq "266EE27115B2AAC6318AD0122DAE56EDE94B797F") {
+        Ok "GT5\input\EBOOT.elf: North America BCUS98114, update 2.11 with the GT5 Master Mod 1.9.2 (a player raced on it; needs 2.11's and the mod's data in GT5\hdd0, README: Game updates)"
     } elseif ($sha1 -eq "306F86C62B9F03041C903BE96AC59E5C3F130452") {
         Ok "GT5\input\EBOOT.elf: Europe BCES00569, update 2.17 (tested; needs the update's data in GT5\hdd0, README: Game updates)"
     } else {

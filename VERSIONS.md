@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.36](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.36) | 13 Nov 2026 | The GT5 Master Mod runs (2.11, US): setup names its executable; README and STATUS list it |
 | [v0.1.35](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.35) | 13 Nov 2026 | An installed game update gets its executable by itself: setup and Update unlock its EBOOT.BIN with RPCS3 |
 | [v0.1.34](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.34) | 13 Nov 2026 | Setup catches a game update installed without its executable (black screen before the main menu) |
 | [v0.1.33](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.33) | 13 Nov 2026 | Linux: races full screen, right exposure, sound effects on time (#20) |

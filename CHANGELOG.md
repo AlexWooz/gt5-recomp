@@ -9,6 +9,15 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🏷️ Released as **v0.1.36**
+
+🏁 **The GT5 Master Mod runs** (Nenkai's, 1.9.2 on update 2.11, US release; reported on Discord by
+brocolison)
+- With 2.11's and the mod's data in `GT5\hdd0` and the mod's executable unlocked into `GT5\input`: the
+  mod's boot screen, the menus, its SELECT debug menu and an A-Spec race.
+- `setup.ps1` names that executable (SHA-1 `266EE27115B2AAC6318AD0122DAE56EDE94B797F`), and README and
+  STATUS list 2.11 with the Master Mod as working.
+
 🏷️ Released as **v0.1.35**
 
 🛠️ **An installed game update gets its executable by itself** (the fix for the 2.11 black screen below)

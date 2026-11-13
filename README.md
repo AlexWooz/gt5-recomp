@@ -253,7 +253,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Ultrawide (21:9, 32:9)? | ✅ New: a wider view, with the HUD kept 16:9 in the middle |
 | Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard |
 | US copy (BCUS98114)? | ✅ Yes, players have raced on it |
-| Version 1.02, or a game update (2.xx)? | 🧪 New: game updates run: 2.17 (the last) tested on the US and European releases, 2.01 on the Asian one ([how to set one up](#game-updates)); 1.02 and 2.11 untried |
+| Version 1.02, or a game update (2.xx)? | 🧪 New: game updates run: 2.17 (the last) tested on the US and European releases, 2.01 on the Asian one, 2.11 with the Master Mod on the US one by a player ([how to set one up](#game-updates)); 1.02 untried |
 | Settings without editing files? | ✅ New: the [launcher](#launcher) |
 | Full screen? | ✅ New: borderless full screen in the launcher (Alt+Enter is switched off since v0.1.17: it used to freeze the picture) |
 | Higher than 1080p (4K)? | ⚠️ The game's top mode is its 1080p one (races drawn at 1728x972), scaled up to your window; drawing above that isn't there yet |
@@ -357,11 +357,18 @@ and the tools find the few spots that could differ between releases in your own 
 release (menus, GT Mode and a full 16-car Arcade race at 60 fps) and on the European one (its first-start
 questions, the opening movie, Arcade and a 16-car race). The Asian release's 2.01 boots,
 loads a career save and races. An update needs two things from your PS3 (or RPCS3): its executable
-and its data, see [Game updates](#game-updates). 2.11 (the one the GT5 Master Mod needs) and the Asian
-2.17 haven't been tried yet: each update can change the game's SPU programs again, so please
+and its data, see [Game updates](#game-updates).
+
+**The GT5 Master Mod runs too** (Nenkai's, 1.9.2 on update 2.11, US release; a player's report on
+13 Nov): its boot screen, the menus, its SELECT debug menu and an A-Spec race. Set it up like an
+update: install 2.11 and the mod in RPCS3, copy the data, and use the mod's `EBOOT.BIN` as the
+executable (`setup.ps1` unlocks it from RPCS3's `dev_hdd0` by itself since v0.1.35). The data alone,
+with the disc's executable, gives a black screen before the main menu.
+
+The Asian 2.17 hasn't been tried yet: each update can change the game's SPU programs again, so please
 report what setup prints (`version_addrs.py`'s lines and `SPU jobs found in EBOOT.elf: N of 15`; 2.17
 shows 13 of 15 plus 3 of its own, and that is complete). Another disc version, like 1.02, hasn't been tried either; the same lines tell us how
-close it is. The Master Mod itself (its changed game files) hasn't been tried.
+close it is.
 
 **Q: Does online work?**
 

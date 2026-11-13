@@ -97,8 +97,8 @@ performance matters more than the graphics card.
 ## ❌ Not supported yet
 
 - Ultrawide on releases other than the European disc 01.00: they keep the 16:9 picture for now
-- Game updates other than 2.01 and 2.17 (US, Europe) are untried: 2.11 (what the GT5 Master Mod
-  needs) and other regions' updates. Each can change the game's SPU programs again; setup's
+- Game updates other than 2.01, 2.17 (US, Europe) and 2.11 with the GT5 Master Mod (US, a player's
+  report: menus, the mod's debug menu, an A-Spec race) are untried. Each can change the game's SPU programs again; setup's
   `SPU jobs found in EBOOT.elf: N of 15` says whether yours are all known
 
 ## ⚠️ Known issues
