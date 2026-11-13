@@ -639,6 +639,30 @@ If your disc folder's `PS3_GAME\PARAM.SFO` already says version 02.xx, it holds 
 executable, but usually not its data: step 3 is still needed. `GT5-Installer.bat` doesn't do these
 steps yet.
 
+<a id="dlc"></a>
+
+### DLC
+
+GT5's DLC works once it's installed, with update 2.17 (tested on the US release): the Racing Car
+Pack, Car Packs 2 and 3, the 2012 car packs, the Course Pack, Speed Test, Twin Ring Motegi and the
+gift cars. Each DLC item is a small "voucher" file the game unlocks it from; the cars and tracks
+themselves come with the updates. Only DLC you bought unlocks: a voucher opens only with the key of
+its licence.
+
+1. **The vouchers**: install the DLC `.pkg` files in RPCS3 (*File > Install Packages/Raps/Edats*), or
+   use your PS3's hard disk, and copy `dev_hdd0\game\<title ID>\USRDIR\vou` to
+   `GT5\hdd0\game\<title ID>\USRDIR\vou`.
+2. **The licence keys**: for each voucher, the 16-byte key of its licence, saved as
+   `GT5\hdd0\home\00000001\exdata\<content ID>.rifkey`. The content ID is the name of the licence
+   file (`<content ID>.rap`), for example `UP9000-BCUS98114_00-TWINRINGMOTEGI00`. The key comes from your
+   licence; this repository holds no keys and doesn't make it for you.
+3. Start the game. The gift cars arrive in the garage at the first start ("The following Gift Cars have
+   been added to your garage"); the packs are in **Downloadable Content** on the main menu, under
+   Purchased Content, each with *Install*. That screen wants a PSN sign-in: when `play.bat` finds
+   vouchers, it tells the game it's signed in, with a local profile and no connection to anything.
+
+A voucher without its key stays locked, and the game shows nothing for it.
+
 <a id="setup"></a>
 
 ## 🚦 Setup

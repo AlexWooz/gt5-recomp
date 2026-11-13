@@ -9,6 +9,24 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🎁 **DLC works, offline, with your own licences** (US release, update 2.17)
+- The gift cars arrive in the garage, and every pack (Racing Car Pack, Car Packs 2 and 3, the 2012
+  car packs, Course Pack, Speed Test, Twin Ring Motegi) is in Downloadable Content > Purchased
+  Content and installs. What the game needed:
+  - DLC files read the way the PS3 serves them: as stored for a plain open, decrypted for the
+    licensed one. GT5 checks each voucher's header first and threw them all away when it saw the
+    decrypted contents there (`PS3_EDAT_STRICT`, on in `play.bat`).
+  - An answer to the PSN check of what you bought: "not owned", as for an account without
+    purchases, instead of "success" with nothing filled in. The game then takes its DLC from the
+    vouchers, and a voucher opens only with the key of your licence.
+  - A PSN sign-in for the Downloadable Content screen: `play.bat` turns it on only when DLC is
+    installed, with a local profile and no connection to anything (`PS3_NP_SIGNED_IN`).
+  - Licence keys in `hdd0\home\00000001\exdata`, and the decrypted copies out of the
+    vouchers' folder: the game opens every file there.
+- Only DLC you bought unlocks. Tested on new saves: without the licence keys, or without the DLC
+  files, the game shows no purchased content and no gift cars.
+- How to install it: README, [DLC](README.md#dlc). Players without DLC see no change.
+
 🏷️ Released as **v0.1.30**
 
 🏁 **Update 2.17 runs** (from a community pull request by AlexWooz, #23; one re-lift)

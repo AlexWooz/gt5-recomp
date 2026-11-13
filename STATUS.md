@@ -53,6 +53,9 @@ performance matters more than the graphics card.
 - Update 2.17 (the last), new: the US release's 2.17 runs menus, GT Mode and a full 16-car Arcade
   race at 60 fps (found and tested by a contributor), and the European 2.17 reaches a 16-car Arcade
   race too (README, Game updates)
+- DLC, new: with US 2.17, the gift cars arrive in the garage and every pack (Racing Car Pack, Car
+  Packs 2 and 3, the 2012 car packs, Course Pack, Speed Test, Twin Ring Motegi) installs from
+  Downloadable Content, once the DLC and its licence keys are in `GT5\hdd0` (README, DLC)
 - One-click install: `GT5-Installer.bat` (README, Install)
 - Ultrawide monitors (21:9, 32:9), new: the game draws a wider view itself and keeps the HUD and
   menus 16:9 in the middle (checked in 2560×1080, 3440×1440 and 3840×1080 windows, not yet on a real

@@ -15471,7 +15471,7 @@ index bde031ae..0af8e5a7 100644
  
  /* Home for guest-visible structures the RUNTIME injects -- the GCM label window,
 diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
-index f73907c2..25b4f6ad 100644
+index f73907c2..bed0f299 100644
 --- a/runtime/ppu/ppu_fs.cpp
 +++ b/runtime/ppu/ppu_fs.cpp
 @@ -25,6 +25,7 @@
@@ -15505,7 +15505,7 @@ index f73907c2..25b4f6ad 100644
  /* ---- handlers ---- */
  static void cellFsOpen(ppu_context* ctx)
  {
-@@ -268,6 +278,7 @@ static void cellFsOpen(ppu_context* ctx)
+@@ -268,12 +278,17 @@ static void cellFsOpen(ppu_context* ctx)
      guest_strcpy(gpath, (uint32_t)ctx->gpr[3], sizeof gpath);
      uint32_t flags  = (uint32_t)ctx->gpr[4];
      uint32_t fd_ptr = (uint32_t)ctx->gpr[5];
@@ -15513,7 +15513,19 @@ index f73907c2..25b4f6ad 100644
      host_path(hpath, sizeof hpath, gpath);
  
      /* NPDRM: see the note in sys_fs.c -- an EDAT is decrypted once into a cache
-@@ -473,6 +484,7 @@ static inline void fs_prefault(uint32_t buf, uint64_t len)
+-     * file and that is opened in its place. */
++     * file and that is opened in its place. The open's argument (r6, size r7)
++     * decides it under PS3_EDAT_STRICT (edat.h). */
+     { char dec_path[1200];
+-      const char* use = edat_resolve(hpath, dec_path, sizeof dec_path);
++      const uint32_t arg_ea = (uint32_t)ctx->gpr[6], arg_size = (uint32_t)ctx->gpr[7];
++      const uint32_t arg0 = (arg_ea >= 0x10000 && arg_size >= 4) ? vm_read32(arg_ea) : 0;
++      const uint32_t arg1 = (arg_ea >= 0x10000 && arg_size >= 8) ? vm_read32(arg_ea + 4) : 0;
++      const char* use = edat_resolve_open(hpath, dec_path, sizeof dec_path, arg_ea, arg0, arg1, arg_size);
+       if (use != hpath) snprintf(hpath, sizeof hpath, "%s", use); }
+ 
+     /* fopen() mode strings can't express the PS3/POSIX open semantics (e.g.
+@@ -473,6 +488,7 @@ static inline void fs_prefault(uint32_t buf, uint64_t len)
      p[len - 1] = p[len - 1];
  }
  
@@ -15521,7 +15533,7 @@ index f73907c2..25b4f6ad 100644
  static void cellFsRead(ppu_context* ctx)
  {
      int fd          = (int)(uint32_t)ctx->gpr[3];
-@@ -487,6 +499,13 @@ static void cellFsRead(ppu_context* ctx)
+@@ -487,6 +503,13 @@ static void cellFsRead(ppu_context* ctx)
      fs_prefault(buf, nbytes);
      fs_set_dir(fd, f, 1);
      size_t n = fread(vm_base + buf, 1, (size_t)nbytes, f);   /* raw bytes, no swap */
@@ -15535,7 +15547,7 @@ index f73907c2..25b4f6ad 100644
      /* PS3_FSLOG_EOF=<fd>,<bytes>: report end-of-file past <bytes> on one descriptor.
       * The intro cinematic is 28 seconds and this port renders it at a few frames
       * a second, so it cannot be watched to its end -- truncating the stream makes
-@@ -545,6 +564,29 @@ static void cellFsRead(ppu_context* ctx)
+@@ -545,6 +568,29 @@ static void cellFsRead(ppu_context* ctx)
      ctx->gpr[3] = CELL_OK;
  }
  
@@ -15565,7 +15577,7 @@ index f73907c2..25b4f6ad 100644
  static void cellFsWrite(ppu_context* ctx)
  {
      int fd          = (int)(uint32_t)ctx->gpr[3];
-@@ -556,6 +598,7 @@ static void cellFsWrite(ppu_context* ctx)
+@@ -556,6 +602,7 @@ static void cellFsWrite(ppu_context* ctx)
      fs_prefault(buf, nbytes);   /* kernel READS the buffer; same reserved-page trap */
      fs_set_dir(fd, f, 2);
      size_t n = fwrite(vm_base + buf, 1, (size_t)nbytes, f);
@@ -15573,7 +15585,7 @@ index f73907c2..25b4f6ad 100644
      /* DIAGNOSTIC (PS3_FSLOG_BT=1): dump the guest back-chain when the game logs the
       * render-config failure, to locate setScreenRenderTargetInternal & the config obj. */
      if (getenv("PS3_FSLOG_BT") && buf && nbytes > 0 && nbytes < 4096 && vm_base) {
-@@ -671,7 +714,7 @@ static void cellFsStat(ppu_context* ctx)
+@@ -671,7 +718,7 @@ static void cellFsStat(ppu_context* ctx)
      uint32_t sb = (uint32_t)ctx->gpr[4];
      host_path(hpath, sizeof hpath, gpath);
      fs_stat64_t st;
@@ -15582,7 +15594,7 @@ index f73907c2..25b4f6ad 100644
          if (getenv("PS3_FSLOG")) fprintf(stderr, "[fs] stat '%s' -> ENOENT\n", gpath);
          ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_ENOENT; return;
      }
-@@ -854,7 +897,57 @@ static void cellFsMkdir(ppu_context* ctx)
+@@ -854,7 +901,57 @@ static void cellFsMkdir(ppu_context* ctx)
      ctx->gpr[3] = CELL_OK;   /* existing dir is benign for boot */
  }
  static void cellFsRmdir(ppu_context* ctx)  { ctx->gpr[3] = CELL_OK; }
@@ -15641,7 +15653,7 @@ index f73907c2..25b4f6ad 100644
  static void cellFsFsync(ppu_context* ctx)
  {
      int fd = (int)(uint32_t)ctx->gpr[3];
-@@ -1000,6 +1093,9 @@ extern "C" void ppu_fs_register(void)
+@@ -1000,6 +1097,9 @@ extern "C" void ppu_fs_register(void)
      ps3_hle_register_ctx(ps3_compute_nid("cellFsMkdir"),    "cellFsMkdir",    cellFsMkdir);
      ps3_hle_register_ctx(ps3_compute_nid("cellFsRmdir"),    "cellFsRmdir",    cellFsRmdir);
      ps3_hle_register_ctx(ps3_compute_nid("cellFsUnlink"),   "cellFsUnlink",   cellFsUnlink);
@@ -18838,9 +18850,15 @@ diff --git a/tools/spu_program_pipeline.py b/tools/spu_program_pipeline.py
                    inputs=[], programs=[], errors=[], provenance={})
      try:
 diff --git a/runtime/syscalls/sys_fs.c b/runtime/syscalls/sys_fs.c
+index f076ef89..73fd5769 100644
 --- a/runtime/syscalls/sys_fs.c
 +++ b/runtime/syscalls/sys_fs.c
-@@ -9,6 +9,7 @@
+@@ -5,10 +5,12 @@
+ #include "sys_fs.h"
+ #include "../../libs/filesystem/edat.h"
+ #include "../memory/vm.h"
++#include "../ppu/ppu_memory.h"   /* vm_read32: the open argument block */
+ #include <string.h>
  #include <stdio.h>
  #include <stdlib.h>
  #include <errno.h>
@@ -18848,7 +18866,7 @@ diff --git a/runtime/syscalls/sys_fs.c b/runtime/syscalls/sys_fs.c
  #include <sys/types.h>
  #include <sys/stat.h>
  
-@@ -93,9 +94,39 @@
+@@ -93,9 +95,39 @@ static void fs_normalize_sep(char* p) {
   * only weak reference to it: under COFF each one emits its own fallback. */
  extern __attribute__((weak)) const char* cellGame_get_hdd_title_id(void);
  
@@ -18888,6 +18906,20 @@ diff --git a/runtime/syscalls/sys_fs.c b/runtime/syscalls/sys_fs.c
      if (!path || !*path || stat(path, &st) == 0)
          return;
      /* An HDD game (a PSN title, CATEGORY "HG") boots from /dev_hdd0/game/<id>/,
+@@ -353,7 +385,12 @@ int64_t sys_fs_open(ppu_context* ctx)
+      * returns plaintext. Decrypt once into a cache file and open that instead, so
+      * every read/seek/stat path below stays unchanged. (libs/filesystem/edat.c) */
+     { char dec_path[1200];
+-      const char* use = edat_resolve(host_path, dec_path, sizeof dec_path);
++      /* sys_fs_open(path, flags, fd, mode, arg, size): the argument decides it
++       * under PS3_EDAT_STRICT (edat.h). */
++      const uint32_t arg_ea = (uint32_t)ctx->gpr[7], arg_size = (uint32_t)ctx->gpr[8];
++      const uint32_t arg0 = (arg_ea >= 0x10000 && arg_size >= 4) ? vm_read32(arg_ea) : 0;
++      const uint32_t arg1 = (arg_ea >= 0x10000 && arg_size >= 8) ? vm_read32(arg_ea + 4) : 0;
++      const char* use = edat_resolve_open(host_path, dec_path, sizeof dec_path, arg_ea, arg0, arg1, arg_size);
+       if (use != host_path) snprintf(host_path, sizeof host_path, "%s", use); }
+ 
+     /* Find free fd slot */
 diff --git a/libs/codec/ffmpeg_runtime.c b/libs/codec/ffmpeg_runtime.c
 index 4a848e76..876cfb11 100644
 --- a/libs/codec/ffmpeg_runtime.c
@@ -22006,3 +22038,251 @@ index 64ed2451..5596f24d 100644
  def test_const_base_no_table():
      """The SDK memset's jump into its unrolled tail: no table, a constant base.
  
+diff --git a/libs/filesystem/edat.c b/libs/filesystem/edat.c
+index edb4ac52..55bf3c82 100644
+--- a/libs/filesystem/edat.c
++++ b/libs/filesystem/edat.c
+@@ -24,6 +24,9 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <sys/stat.h>
++#ifdef _WIN32
++#include <direct.h>   /* _mkdir */
++#endif
+ 
+ /* ---------------------------------------------------------------------------
+  * AES-128
+@@ -417,8 +420,25 @@ int edat_is_npd(const char* host_path)
+  * the 16 raw bytes of a <file>.rifkey sidecar. This is the buyer's own license
+  * material for one content id -- deriving it from a .rap is deliberately out of
+  * scope here, so nothing in this tree has to carry license-conversion keys. */
+-static int edat_rif_key(const char* in_path, uint8_t out[16])
++static int edat_rif_key(const char* in_path, const char* content_id, uint8_t out[16])
+ {
++    /* Where a PS3 keeps licences: outside the game's folder, per user, by content id.
++     * <PS3_HDD0_ROOT>/home/00000001/exdata/<content id>.rifkey. A sidecar next to the
++     * EDAT works too, but a game that lists its own folder (GT5 reads every file in
++     * USRDIR/vou as a voucher) then sees the key file as well. */
++    const char* root = getenv("PS3_HDD0_ROOT");
++    if (root && *root && content_id && *content_id) {
++        char ex[1100];
++        if ((size_t)snprintf(ex, sizeof ex, "%s/home/00000001/exdata/%s.rifkey",
++                             root, content_id) < sizeof ex) {
++            FILE* f = fopen(ex, "rb");
++            if (f) {
++                size_t n = fread(out, 1, 16, f);
++                fclose(f);
++                if (n == 16) { fprintf(stderr, "[edat] RIF key from %s\n", ex); return 1; }
++            }
++        }
++    }
+     const char* e = getenv("PS3_RIF_KEY");
+     if (e) {
+         int n = 0;
+@@ -464,6 +484,8 @@ int edat_decrypt_file(const char* in_path, const char* out_path)
+ 
+     uint32_t version  = be32(hdr + 0x04);
+     uint32_t license  = be32(hdr + 0x08);
++    char cid[0x31];                              /* content id, NUL-terminated */
++    memcpy(cid, hdr + 0x10, 0x30); cid[0x30] = 0;
+     const uint8_t* digest   = hdr + 0x40;
+     const uint8_t* dev_hash = hdr + 0x60;
+     uint32_t flags      = be32(hdr + 0x80);
+@@ -530,7 +552,7 @@ int edat_decrypt_file(const char* in_path, const char* out_path)
+             else
+                 fprintf(stderr, "[edat] klicensee %s verified against dev_hash\n",
+                         KLIC_CANDIDATES[found - s_guest_klic_n].name);
+-        } else if (edat_rif_key(in_path, key)) {
++        } else if (edat_rif_key(in_path, cid, key)) {
+             have_key = 1;
+             fprintf(stderr, "[edat] license type %u: using the supplied RIF key%s\n",
+                     license, found >= 0 ? "" : " (dev_hash names an unknown klicensee)");
+@@ -668,6 +690,28 @@ int edat_decrypt_file(const char* in_path, const char* out_path)
+     return rc;
+ }
+ 
++const char* edat_resolve_open(const char* host_path, char* buf, size_t cap,
++                              uint32_t arg_ea, uint32_t arg_word0, uint32_t arg_word1,
++                              uint32_t arg_size)
++{
++    static int strict = -1;
++    if (strict < 0) {
++        const char* e = getenv("PS3_EDAT_STRICT");
++        strict = (e && *e && *e != '0') ? 1 : 0;
++    }
++    if (!strict) return edat_resolve(host_path, buf, cap);
++    if (!host_path || !edat_is_npd(host_path)) return host_path;
++    /* The kernel takes an 8-byte argument block on an NPD file as the NPDRM open
++     * (RPCS3's sys_fs_open keys on size == 8 too). GT5's EDATA open passes
++     * [0, 2]; an SDATA open starts 0x18000000. Larger blocks are accepted by
++     * their type word. */
++    const int npdrm = arg_size == 8 || (arg_size > 8 && (arg_word0 == 2u || arg_word0 == 0x18000000u));
++    fprintf(stderr, "[edat] open %s: arg @%08X [%08X %08X] size %u -> %s\n", host_path, arg_ea,
++            arg_word0, arg_word1, arg_size,
++            npdrm ? "plaintext (NPDRM open)" : "as stored (plain open)");
++    return npdrm ? edat_resolve(host_path, buf, cap) : host_path;
++}
++
+ const char* edat_resolve(const char* host_path, char* buf, size_t cap)
+ {
+     static int enabled = -1;
+@@ -677,7 +721,25 @@ const char* edat_resolve(const char* host_path, char* buf, size_t cap)
+     }
+     if (!enabled || !host_path || !edat_is_npd(host_path)) return host_path;
+ 
+-    if ((size_t)snprintf(buf, cap, "%s.dec", host_path) >= cap) return host_path;
++    /* The plaintext cache goes to <PS3_HDD0_ROOT>/edat_cache, named from the source
++     * path, so it never appears in the game's own folder listing (GT5 opens every
++     * file in USRDIR/vou). Without PS3_HDD0_ROOT it stays beside the source. */
++    const char* root = getenv("PS3_HDD0_ROOT");
++    if (root && *root) {
++        char dir[1100];
++        uint64_t h = 1469598103934665603ULL;
++        for (const char* q = host_path; *q; q++) { h ^= (uint8_t)*q; h *= 1099511628211ULL; }
++        const char* base = host_path;
++        for (const char* q = host_path; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
++        if ((size_t)snprintf(dir, sizeof dir, "%s/edat_cache", root) >= sizeof dir) return host_path;
++#ifdef _WIN32
++        _mkdir(dir);
++#else
++        mkdir(dir, 0755);
++#endif
++        if ((size_t)snprintf(buf, cap, "%s/%016llX_%s.dec", dir,
++                             (unsigned long long)h, base) >= cap) return host_path;
++    } else if ((size_t)snprintf(buf, cap, "%s.dec", host_path) >= cap) return host_path;
+ 
+     struct stat ss, ds;
+     if (stat(host_path, &ss) == 0 && stat(buf, &ds) == 0 && ds.st_mtime >= ss.st_mtime)
+diff --git a/libs/network/sceNp.c b/libs/network/sceNp.c
+index 125835bc..85520c55 100644
+--- a/libs/network/sceNp.c
++++ b/libs/network/sceNp.c
+@@ -7,6 +7,7 @@
+ 
+ #include "sceNp.h"
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <stdint.h>
+ #include <time.h>
+@@ -226,6 +227,24 @@ s32 sceNpGetMyLanguages(SceNpMyLanguages* langs)
+ static SceNpManagerCallback s_npmgr_cb = NULL;
+ static void*                s_npmgr_cb_arg = NULL;
+ 
++/* Signed in: to a psnr server, or -- PS3_NP_SIGNED_IN=1 -- to nothing at all.
++ * Some titles gate purely local features behind the sign-in state: GT5's
++ * Downloadable Content screen installs the DLC vouchers already on the hard disk,
++ * yet will not open unless the manager is ONLINE (on RPCS3, RPCN). This mode
++ * reports ONLINE with the local profile and connects nowhere; requests that need
++ * a real server (tickets, the store) fail the way an unreachable one does. */
++static int np_signed_in(void)
++{
++    static int s_flag = -1;
++    if (s_flag < 0) {
++        const char* e = getenv("PS3_NP_SIGNED_IN");
++        s_flag = (e && *e && *e != '0') ? 1 : 0;
++        if (s_flag) printf("[sceNp] PS3_NP_SIGNED_IN: signed in as \"%s\", no network\n",
++                           np_psnr_online_id());
++    }
++    return s_flag || np_psnr_enabled();
++}
++
+ s32 sceNpManagerGetStatus(s32* status)
+ {
+     if (!s_np_initialized)
+@@ -237,7 +256,7 @@ s32 sceNpManagerGetStatus(s32* status)
+      * writes to whatever host address shares that number. Same trap as
+      * cellGcmSys had. Tokyo Jungle calls this during its online init. */
+     /* Signed in when there is a psnr server to be signed in to. */
+-    s32 st = np_psnr_enabled() ? SCE_NP_MANAGER_STATUS_ONLINE : SCE_NP_MANAGER_STATUS_OFFLINE;
++    s32 st = np_signed_in() ? SCE_NP_MANAGER_STATUS_ONLINE : SCE_NP_MANAGER_STATUS_OFFLINE;
+     vm_write32((uint32_t)(uintptr_t)status, (uint32_t)st);
+     { static s32 last = -2;
+       if (st != last) printf("[sceNp] ManagerGetStatus() -> %s\n", st < 0 ? "OFFLINE" : "ONLINE");
+@@ -254,7 +273,7 @@ s32 sceNpManagerRegisterCallback(SceNpManagerCallback callback, void* arg)
+     printf("[sceNp] ManagerRegisterCallback()\n");
+     /* Online: tell the title it is signed in, as the console does once the
+      * manager reaches ONLINE. Delivered on its next cellSysutilCheckCallback. */
+-    if (np_psnr_enabled() && callback) {
++    if (np_signed_in() && callback) {
+         const u64 args[8] = { (u64)(u32)SCE_NP_MANAGER_STATUS_ONLINE, 0,
+                               (u64)(u32)(uintptr_t)arg, 0, 0, 0, 0, 0 };
+         cellSysutilQueueGuestCallbackArgs((u32)(uintptr_t)callback, args);
+@@ -269,6 +288,27 @@ s32 sceNpManagerUnregisterCallback(void)
+     return CELL_OK;
+ }
+ 
++/* Entitlements: what the account bought on the PlayStation Store, which PSN kept on
++ * its servers. There is no store and no server here, so nothing is owned: the
++ * answer is the one PSN gives an account without the purchase. A title's DLC then
++ * comes only from what is installed on the hard disk -- for GT5, its vouchers,
++ * each of which decrypts only with the licence (.rap) of that purchase.
++ * Unimplemented, this call returned success with nothing written, so whatever the
++ * game asked about first looked bought. */
++s32 sceNpManagerGetEntitlementById(const char* entId, void* data)
++{
++    (void)data;
++    if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
++    if (!entId) return SCE_NP_ERROR_INVALID_ARGUMENT;
++    const char* id = GUEST_PTR(entId, const char*);
++    if (!np_signed_in()) {
++        printf("[sceNp] ManagerGetEntitlementById(\"%.32s\") -> OFFLINE\n", id);
++        return SCE_NP_ERROR_OFFLINE;
++    }
++    printf("[sceNp] ManagerGetEntitlementById(\"%.32s\") -> not owned (no store)\n", id);
++    return SCE_NP_ERROR_ID_NOT_FOUND;
++}
++
+ /* Identity getters: reuse the fake-profile implementations (offline-with-account). */
+ s32 sceNpManagerGetNpId(SceNpId* npId)               { return sceNpGetNpId(0, npId); }
+ s32 sceNpManagerGetOnlineId(SceNpOnlineId* onlineId) { return sceNpGetOnlineId(0, onlineId); }
+@@ -312,7 +352,7 @@ s32 sceNpManagerRequestTicket2(u32 npId, u32 version, u32 serviceId, u32 cookie,
+     if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
+     if (!npId || !serviceId || cookieSize > SCE_NP_COOKIE_MAX_SIZE)
+         return SCE_NP_AUTH_EINVALID_ARGUMENT;
+-    if (!np_psnr_enabled()) {
++    if (!np_signed_in()) {
+         printf("[sceNp] ManagerRequestTicket2() -> OFFLINE\n");
+         return SCE_NP_ERROR_OFFLINE;
+     }
+@@ -346,7 +386,7 @@ s32 sceNpManagerGetAccountRegion(u32 countryCode, u32 language)
+ {
+     if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
+     if (!countryCode || !language) return SCE_NP_ERROR_INVALID_ARGUMENT;
+-    if (!np_psnr_enabled()) return SCE_NP_ERROR_OFFLINE;
++    if (!np_signed_in()) return SCE_NP_ERROR_OFFLINE;
+     vm_write8(countryCode + 0, 'u'); vm_write8(countryCode + 1, 's');   /* SceNpCountryCode */
+     vm_write8(countryCode + 2, 0);   vm_write8(countryCode + 3, 0);
+     vm_write32(language, 1);         /* CELL_SYSUTIL_LANG_ENGLISH_US */
+@@ -357,7 +397,7 @@ s32 sceNpManagerGetNetworkTime(u32 pTick)
+ {
+     if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
+     if (!pTick) return SCE_NP_ERROR_INVALID_ARGUMENT;
+-    if (!np_psnr_enabled()) return SCE_NP_ERROR_OFFLINE;
++    if (!np_signed_in()) return SCE_NP_ERROR_OFFLINE;
+     /* CellRtcTick: microseconds since 0001-01-01 00:00 UTC. */
+     const u64 unix_us = (u64)time(NULL) * 1000000ull;
+     vm_write64(pTick, unix_us + 62135596800000000ull);
+diff --git a/libs/filesystem/edat.h b/libs/filesystem/edat.h
+index 6f4fd64d..bc216c03 100644
+--- a/libs/filesystem/edat.h
++++ b/libs/filesystem/edat.h
+@@ -57,6 +57,18 @@ const char* edat_resolve(const char* host_path, char* buf, size_t cap);
+  * duplicate is ignored). */
+ void edat_add_klicensee(const uint8_t klic[16]);
+ 
++/* edat_resolve for an open that carries the guest's open argument. By default it
++ * is edat_resolve: every EDAT opens as plaintext. With PS3_EDAT_STRICT=1 it does
++ * what the PS3 kernel does instead: only an open with an 8-byte NPDRM argument
++ * block (EDATA, as GT5's [0, 2], or SDATA, 0x18000000) gets the plaintext; a plain
++ * open gets the file as stored, NPD header and ciphertext. GT5 relies on that: it
++ * reads each voucher's NPD header with a plain open, checks the content id, and
++ * only then opens it again with an 8-byte argument. arg_word0/1 are the first two
++ * u32 of the argument block at arg_ea (0 when there is none), logged for diagnosis. */
++const char* edat_resolve_open(const char* host_path, char* buf, size_t cap,
++                              uint32_t arg_ea, uint32_t arg_word0, uint32_t arg_word1,
++                              uint32_t arg_size);
++
+ /* Self-check of the AES-128 and AES-CMAC primitives against the FIPS-197 and
+  * RFC 4493 vectors. Returns 0 if both match. Run once on first use: silently
+  * wrong crypto here produces plausible-looking garbage, which is the single most
