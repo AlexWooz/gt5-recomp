@@ -29,12 +29,17 @@ namespace Gt5Launcher
 {
     static class Program
     {
-        [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+        [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
 
         [STAThread]
         static void Main(string[] args)
         {
-            try { SetProcessDPIAware(); } catch { }
+            // The layout is in 100%-scaling pixels. As a DPI-aware program only its text followed the
+            // screen's scaling, so on a 4K screen at 200% the text outgrew its boxes and the window was cut
+            // off (discussion #9). DPI-unaware with GDI scaling instead (-5): Windows draws the whole window
+            // at the screen's scaling and keeps the text sharp (Windows 10 1809 and later; older versions
+            // stretch it, or lack the call and stay unaware, which also fits).
+            try { SetProcessDpiAwarenessContext(new IntPtr(-5)); } catch { }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             if (args.Length >= 2 && args[0] == "--screenshot")

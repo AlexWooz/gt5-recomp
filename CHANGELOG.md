@@ -9,6 +9,16 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.25**
+
+🖥️ **The launcher fits 4K and other high-scaling screens** ([discussion #9](https://github.com/MormonFTP-hub/gt5-recomp/discussions/9))
+- On a 4K screen at 200% the launcher's text grew with the scaling but its boxes didn't. The title, the
+  page menu and the Play button were cut off, and scroll bars appeared.
+- Now Windows scales the whole window and keeps the text sharp (Windows 10 1809 and later). At 100%
+  nothing changes. Checked at 100% only: if it still looks wrong on your screen, a screenshot in #9
+  helps.
+- The game window itself: Display, Window, *Borderless full screen* (or *Maximized*) fills a big screen.
+
 🏷️ Released as **v0.1.24**
 
 🐧 **Linux: a native build** ([#20](https://github.com/MormonFTP-hub/gt5-recomp/issues/20))
