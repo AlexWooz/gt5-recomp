@@ -9,6 +9,32 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+⚡ **Linux: races about 30% faster on a Steam Deck (the CPU and GPU now work at the same time)**
+- The Vulkan renderer waited for the GPU after every batch of draws and at every present, so the
+  walker idled while the GPU drew and the GPU idled while the walker recorded the next batch (a Steam
+  Deck's GPU went from 100% to 0% in turns). Now up to three batches are in flight, each with its own
+  command buffer, fence, descriptor pool, share of the vertex, index, uniform and upload rings and
+  list of objects to destroy; a full batch or a present is submitted and recording carries on. Only
+  what needs the GPU done still waits for it: readbacks, destroying objects, the engine's own wait.
+  `VK_ASYNC_FLUSH=0` brings back a wait after every batch.
+- The present isn't waited on either: the next present finishes it, so the window shows a frame when
+  the next one is presented.
+- 16-car races kept only 8 of the cars' small ambient cube maps, so they evicted each other every
+  frame, and each miss created a texture and decoded the cube again (about 7 a frame). Now 64 are
+  kept: texture creations in a race went from 259 to 2 per 5 s.
+- On a Steam Deck (OLED, SteamOS 3.9), same race: frames ~175-185 ms to ~122-127 ms (about 5.5 to
+  8.3 a second), time waiting for the GPU from ~1.8-2.2 to ~1.4-1.5 s per 5 s; nothing drawn
+  differently. Menus are unchanged: their frames are paced to four vblanks either way.
+
+⚡ **Update 2.17: the sound job gets its fast floating-point setting back**
+- GT5's sound job (the "soc-job" chain, run 125 times a second whatever the frame rate) is built
+  with `SPU_X86_FAST_FLOAT`: its numbers are sound samples, so the exact SPU range and signed-zero
+  handling can go. Update 2.17 replaces that job (`jD58063CD`) with a new version (`jCB9BD024`), and
+  the setting named only the old one, so on 2.17 the heaviest job in a race ran the slower exact
+  path. Both versions get it now, on Windows and Linux.
+- On a Steam Deck in a race: the job's time went from about 390 to about 340 ms a second, its thread
+  from 86% to 82% busy, and frames from about 135-150 to 130-140 ms. Sound unchanged.
+
 🏷️ Released as **v0.1.39**
 
 🚗 **Cockpit view with a game update (2.xx): the windows are clear again** (reported on Discord by
@@ -112,15 +138,6 @@ reported on Discord with update 2.11 and the Master Mod on the US release)
   piled up in a queue, so everything you heard drifted later and later. It now keeps pace with the
   sound device (checked on Android: 187.5 blocks a second, the queue steady at 20 ms).
 - The title screen's white model city is drawn white by GT5 itself (Windows shows it the same).
-
-⚡ **Update 2.17: the sound job gets its fast floating-point setting back**
-- GT5's sound job (the "soc-job" chain, run 125 times a second whatever the frame rate) is built
-  with `SPU_X86_FAST_FLOAT`: its numbers are sound samples, so the exact SPU range and signed-zero
-  handling can go. Update 2.17 replaces that job (`jD58063CD`) with a new version (`jCB9BD024`), and
-  the setting named only the old one, so on 2.17 the heaviest job in a race ran the slower exact
-  path. Both versions get it now, on Windows and Linux.
-- On a Steam Deck in a race: the job's time went from about 390 to about 340 ms a second, its thread
-  from 86% to 82% busy, and frames from about 135-150 to 130-140 ms. Sound unchanged.
 
 🏷️ Released as **v0.1.32**
 
