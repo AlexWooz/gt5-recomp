@@ -9,6 +9,22 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🏁 **Update 2.17 runs** (tested on the US release, BCUS98114)
+- 2.17, the last update, gets through menus, GT Mode and a full 16-car Arcade race at 60 fps. It
+  was built with a newer compiler than the disc, and the lift didn't know two of its patterns:
+  - Switch tables whose address is built from constants (`lis`/`addi`) instead of read from the
+    TOC. Every switch became a call into nowhere, starting with the game's start-up code: a black
+    screen.
+  - A switch table with more than 256 cases was cut at 256 when the index and the loaded entry
+    share a register. The cases past it ran into garbage after the first menus.
+  - The computed goto `version_addrs.py` finds is laid out differently too, and its labels are
+    stored by code rather than copied from a table. It now finds both forms.
+  - Four SPU jobs are new or changed in 2.17; setup finds them in the executable
+    (`13 of 15, plus 3 that only game updates have` is complete for US 2.17).
+- The disc releases lift exactly as before: the same jump tables on US 01.00, and the same
+  `version_addrs.py` output.
+- Set an update up as in README, [Game updates](README.md#game-updates).
+
 🏷️ Released as **v0.1.29**
 
 ⚡ **SPU code runs leaner: SPURS jobs take 20% less CPU, about 7% more frames on 4 cores** (one re-lift)

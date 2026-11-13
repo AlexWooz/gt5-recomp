@@ -46,6 +46,11 @@ JOBS = [
 UPDATED = [
     ("C2A031BC164B4A45", 21952, "c7f26544a13fbe51db2e9f71e56d8c08ea06f0e3", "7ea77243d007ad477175d54ceae94d25297741dc", "650EE1A07AEBB151"),  # 2.01
     ("E3FDDA10963A6130", 22544, "2a759a61e4fa122c5344b18265352c9ac4836e40", "fe409a4e6c7f4e72c21021aaadd47cd0d7a0eefb", "EB79FDFCD7112702"),  # 2.01
+    ("CB9BD0241BB0DE67", 53280, "a3a0364d94ae6bc5a96fc5fd54b803ac72850c11", "7276beb17d4929a04954b77c87f24f07534be190", "D58063CD2A0236B5"),  # 2.17 (US)
+    # New in 2.17, no 01.00 counterpart (the second job table, with the two below it).
+    ("0B07CA3DA8C030C2", 29920, "73d23dc69f344dfc689b779d8217e0bc9f55db21", "d7bc0a42a7418b6f40478a794d40968473901382", None),  # 2.17 (US)
+    ("18DE371921B1A751", 13200, "a4e9776a48878b1eab752497422034a251f27860", "3c24724fb099b4cefc0878905982adf1f8aa3f0b", None),  # 2.17 (US)
+    ("CF6352633FE351E3", 24000, "2ecaeef90de6ee0e0ecba183e65005f3e0c44dd9", "26b9d37ca05af1e4cc50fe4d325e2ecccce445be", None),  # 2.17 (US)
 ]
 
 
@@ -69,7 +74,9 @@ def main():
         (OUT / f"spujob_{fp}_{len(blob)}.bin").write_bytes(blob)
     have = set(found) | {old for fp, *_, old in UPDATED if fp in found}
     missing = [fp for fp, *_ in JOBS if fp not in have]
-    print(f"SPU jobs found in {eboot.name}: {len(JOBS) - len(missing)} of {len(JOBS)}")
+    new = [fp for fp, *_, old in UPDATED if old is None and fp in found]
+    print(f"SPU jobs found in {eboot.name}: {len(JOBS) - len(missing)} of {len(JOBS)}"
+          + (f", plus {len(new)} that only game updates have" if new else ""))
     for fp in missing:
         print(f"  not found: {fp} (or a version of it this script doesn't know yet; the game stalls when it needs it)")
 

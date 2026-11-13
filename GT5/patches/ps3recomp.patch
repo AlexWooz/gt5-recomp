@@ -18638,7 +18638,7 @@ index af16afd8..47d07046 100644
      out_obj = [{"start": s, "end": e} for s, e in funcs]
      if args.out:
 diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
-index a657ba61..cad74784 100644
+index a657ba61..bda578dd 100644
 --- a/tools/ppu_lifter.py
 +++ b/tools/ppu_lifter.py
 @@ -1334,6 +1334,22 @@ class PPULifter:
@@ -18674,7 +18674,120 @@ index a657ba61..cad74784 100644
                          and _reg not in _reg_snap
                          and _is_epilogue_restore(func.body_lines, _i, _reg, _off)
                          and _mem_snap.setdefault(_reg, _off) == _off):
-@@ -5058,6 +5075,11 @@ def main() -> None:
+@@ -4405,6 +4422,46 @@ def _const_base_targets(win, rC, read_u32, text_lo, text_hi, bctr_addr):
+     return None
+ 
+ 
++def _const_value(insns, at, reg, depth=0):
++    """The constant `reg` holds right after instruction `at`, when its definition chain
++    is lis/li/addi/ori from immediates within `insns` (in address order); else None."""
++    def imm(s):
++        try:
++            return int(s.strip(), 0)
++        except ValueError:
++            return None
++    a = [x.strip() for x in at.operands.split(',')]
++    if not a or a[0] != reg or depth > 4:
++        return None
++    m = at.mnemonic
++    if m in ('lis', 'li') and len(a) == 2:
++        v = imm(a[1])
++        if v is None:
++            return None
++        if m == 'lis':
++            v = (v & 0xFFFF) << 16
++            v = v - (1 << 32) if v & 0x80000000 else v
++        return v & 0xFFFFFFFF
++    if m in ('addi', 'ori') and len(a) == 3 and a[1] != 'r0':
++        v = imm(a[2])
++        if v is None:
++            return None
++        src = a[1]
++        prev = None
++        for w in reversed([x for x in insns if x.addr < at.addr]):
++            b = [x.strip() for x in w.operands.split(',')]
++            if b and b[0] == src and not w.mnemonic.startswith(('st', 'lf', 'cmp')):
++                prev = w
++                break
++        if prev is None:
++            return None
++        base = _const_value(insns, prev, src, depth + 1)
++        if base is None:
++            return None
++        return ((base + v) if m == 'addi' else (base | (v & 0xFFFF))) & 0xFFFFFFFF
++    return None
++
++
+ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts=None):
+     """Find `mtctr rX; bctr` switch dispatchers and read their jump tables.
+ 
+@@ -4730,11 +4787,23 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+                         if _resolved or _pass:
+                             break
+                         _scan = _live(_scan_lo(i), i)
++                elif w.mnemonic in ('addi', 'ori', 'lis', 'li'):
++                    # CONSTANT base: `lis r9,hi; addi r9,r9,lo; rldic r11,idx,2,30;
++                    # lwzx r0,r11,r9; extsw; add r0,r0,r9; mtctr; bctr`. The table
++                    # address is built from immediates instead of loaded from the
++                    # TOC (GT5 update 2.17, a newer compiler than its 01.00 disc:
++                    # every switch there had its bctr lifted to an unresolved
++                    # indirect call, starting with the C++ static constructors, and
++                    # the game sat on a black screen). The base is TOC-independent,
++                    # so it is recorded as an absolute address.
++                    _cv = _const_value(win_cand, w, cand)
++                    if _cv is not None and text_lo <= _cv < text_hi + 0x10000000:
++                        disp = _cv; r_base = cand; base_is_ld = 'const'
+                 break                           # first definition of cand wins/loses
+             if disp is not None:
+                 _bases.append((r_base, disp, base_is_ld, disp2, disp2_is_ld))
+         _dbg(all_insns[i].addr, f"bases={_bases} toc={toc}")
+-        if not _bases or not toc:
++        if not _bases or not (toc or any(b[2] == 'const' for b in _bases)):
+             continue
+         toc_candidates = toc if isinstance(toc, (list, tuple)) else [toc]
+         best = []
+@@ -4757,7 +4826,13 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+             # unresolved indirect call (0x422CA0) and stalled the loader.
+             _idx_reg = p[1] if r_base == p[2] else p[2]
+             _raw_idx = _idx_reg
+-            for w in reversed(win):
++            # Only definitions BEFORE the table load: `lwzx r0, r9, r0` reuses
++            # the index register for the entry, and the `add r0, r0, r9` after
++            # it is not the index's definition. Taking it hid the shift from
++            # the raw index, the bound compare was never matched, and a
++            # 310-case table (GT5 2.17 func_00B7288C) was cut at the 256
++            # fallback -- its last 54 cases lifted to unresolved indirect calls.
++            for w in reversed([x for x in win if x.addr < lwzx.addr]):
+                 a = [x.strip() for x in w.operands.split(',')]
+                 if a and a[0] == _idx_reg:
+                     if (w.mnemonic in ('rldic', 'rldicl', 'rldicr', 'rlwinm',
+@@ -4821,8 +4896,9 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+             # with. We don't track per-function TOCs here, so try each candidate
+             # and keep the one whose table decodes to the most in-text case
+             # targets (a wrong TOC reads unrelated data and validates 0 targets).
+-            for cand in toc_candidates:
+-                if not cand:
++            # A constant base needs no TOC: one pass, with the address itself.
++            for cand in ([0] if base_is_ld == 'const' else toc_candidates):
++                if not cand and base_is_ld != 'const':
+                     continue
+                 def _read_ptr(_ea, _is_ld):
+                     # ELFv1 TOC entries are 64-bit; a table address always fits the
+@@ -4833,8 +4909,11 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+                     if read_u32(_ea):
+                         return None
+                     return read_u32((_ea + 4) & 0xFFFFFFFF)
+-                table_base = _read_ptr(cand + disp, base_is_ld)
+-                if table_base is not None and disp2 is not None:
++                if base_is_ld == 'const':
++                    table_base = disp & 0xFFFFFFFF
++                else:
++                    table_base = _read_ptr(cand + disp, base_is_ld)
++                if table_base is not None and disp2 is not None and base_is_ld != 'const':
+                     table_base = _read_ptr(table_base + disp2, disp2_is_ld)
+                 _dbg(all_insns[i].addr, f"r_base={r_base} cand_toc=0x{cand:X} table_base={None if table_base is None else hex(table_base)} count={count} is_offset={is_offset} text=[0x{text_lo:X},0x{text_hi:X})")
+                 if table_base is None:
+@@ -5058,6 +5137,11 @@ def main() -> None:
                               "instead of its literal .lib.stub trampoline, and "
                               "split out as its own 0x20-byte function so direct "
                               "calls to it dispatch to the HLE handler.")
@@ -18686,7 +18799,7 @@ index a657ba61..cad74784 100644
      parser.add_argument("--insn-patches", metavar="FILE", default=None,
                          help="JSON list of instruction patches to lift as "
                               "run-time switches: each {addr, orig, new, guard} "
-@@ -5364,6 +5386,10 @@ def main() -> None:
+@@ -5364,6 +5448,10 @@ def main() -> None:
                  print(f"  TOC candidates: {', '.join(hex(t) for t in toc_candidates)}")
              tables = discover_jump_tables(all_insns, _read_u32, toc_candidates, text_lo, text_hi,
                                            func_starts=sorted(s for s, _ in func_bounds))
@@ -21829,3 +21942,67 @@ diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
 +    else t_job_ctx_busy = 0;
      return 0;
  }
+diff --git a/tools/test_ppu_jumptables.py b/tools/test_ppu_jumptables.py
+index 64ed2451..5596f24d 100644
+--- a/tools/test_ppu_jumptables.py
++++ b/tools/test_ppu_jumptables.py
+@@ -368,6 +368,8 @@ def main() -> int:
+     test_base_before_fallthrough_split()
+     test_const_base_no_table()
+     test_const_base_needs_constant()
++    test_offset_table_constant_base()
++    test_index_register_reused_for_entry()
+     test_multi_toc_prefers_targets_near_the_dispatcher()
+     test_bound_compare_beyond_window()
+     test_spilled_base_reused_as_target()
+@@ -378,6 +380,50 @@ def main() -> int:
+     return 0
+ 
+ 
++def test_offset_table_constant_base():
++    """An offset table whose base is built from immediates, not loaded via r2.
++
++        cmplwi cr7,r4,2 ; lis r9,1 ; slwi r11,r4,2 ; addi r9,r9,0x400 ;
++        lwzx r0,r11,r9 ; extsw r0,r0 ; add r0,r0,r9 ; mtctr r0 ; bctr
++
++    GT5's update 2.17 (a newer compiler than its disc) builds every switch base
++    this way (`lis r9,0xB3; addi r9,r9,0x98C`). Only TOC-loaded bases were
++    accepted, so each one lifted to an unresolved indirect call.
++    """
++    table = 0x10400
++    mem = {table + 0: 0x100, table + 4: 0x200, table + 8: 0x300,
++           table + 12: 0xFFFFFFFF}                   # misaligned target: the table ends
++    w_addi = lambda rt, ra, si: (14 << 26) | (rt << 21) | (ra << 16) | (si & 0xFFFF)
++    w_extsw = lambda ra, rs: (31 << 26) | (rs << 21) | (ra << 16) | (986 << 1)
++    got = discover([w_cmplwi(7, 4, 2), w_addis(9, 0, 1), w_slwi(11, 4, 2),
++                    w_addi(9, 9, 0x400), w_lwzx(0, 11, 9), w_extsw(0, 0),
++                    w_add(0, 0, 9), w_mtctr(0), w_bctr()], mem)
++    check("offset table with a lis/addi constant base", got, [0x10500, 0x10600, 0x10700])
++
++
++def test_index_register_reused_for_entry():
++    """`lwzx r0, r9, r0`: the shifted index and the loaded entry share r0.
++
++        cmplwi cr7,r8,299 ; lis r9,1 ; addi r9,r9,0x400 ; slwi r0,r8,2 ;
++        lwzx r0,r9,r0 ; extsw r0,r0 ; add r0,r0,r9 ; mtctr r0 ; bctr
++
++    The raw-index search took `add r0,r0,r9` (AFTER the load) as r0's definition,
++    never reached the shift, missed the bound compare on r8 and capped the table
++    at 256 entries. GT5 2.17's 310-case func_00B7288C lost its last cases.
++    """
++    table = 0x10400
++    n = 300
++    mem = {table + 4 * k: 0x1000 + 4 * k for k in range(n)}
++    mem[table + 4 * n] = 0xFFFFFFFF                  # misaligned target: the table ends
++    w_addi = lambda rt, ra, si: (14 << 26) | (rt << 21) | (ra << 16) | (si & 0xFFFF)
++    w_extsw = lambda ra, rs: (31 << 26) | (rs << 21) | (ra << 16) | (986 << 1)
++    got = discover([w_cmplwi(7, 8, n - 1), w_addis(9, 0, 1), w_addi(9, 9, 0x400),
++                    w_slwi(0, 8, 2), w_lwzx(0, 9, 0), w_extsw(0, 0),
++                    w_add(0, 0, 9), w_mtctr(0), w_bctr()], mem)
++    check("index register reused for the entry: bound past 256 kept",
++          None if got is None else len(got), n)
++
++
+ def test_const_base_no_table():
+     """The SDK memset's jump into its unrolled tail: no table, a constant base.
+ 
