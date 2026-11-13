@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.27](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.27) | 12 Nov 2026 | B-Spec mode for laptops: watch mode can draw 1 frame in 3 or 4; Steam Deck route in the README and setup.sh |
 | [v0.1.26](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.26) | 12 Nov 2026 | Sound mixer costs about 12% less CPU: faster SPU shufb, job-image lookup cache 8 -> 64 |
 | [v0.1.25](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.25) | 12 Nov 2026 | Launcher fits 4K and other high-scaling screens (#9) |
 | [v0.1.24](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.24) | 12 Nov 2026 | Linux: a native build (setup.sh, GT5/play.sh), new and early |

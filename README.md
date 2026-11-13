@@ -259,7 +259,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Japanese or Asian release (BCJS, BCAS)? | ✅ Hong Kong / Asia (BCAS20108) runs, reported by a player, and its disc 01.00 and update 2.01 race in tests too; Japanese untried, please report |
 | Slow PC or laptop? | 🛠️ Laptops now use their dedicated graphics card. On most PCs the CPU sets the pace (the game's own threads), so the launcher's **Speed: 30 fps** rarely helps: it's for a graphics card at its limit. **On a laptop:** plug it in and set Windows' power mode to *Best performance* (and the maker's performance mode, e.g. in HP Command Center or Lenovo Vantage): a tester's i5-1135G7 ran into its power limit 88% of the time, which held its cores at 2.9 GHz instead of 4.2, while its graphics were only 30% busy. Speed-ups for 4-6 core CPUs are being worked on |
 | Linux? | 🧪 New and early: a [native Linux build](#linux). First test (no graphics card) reached the race start; races on a real GPU untested |
-| Steam Deck, Proton, Wine? | ❓ Not tried yet: the Linux build should suit the Deck. Reports welcome |
+| Steam Deck, Proton, Wine? | ❓ Not tried yet: the Linux build in a distrobox is the route to try ([Steam Deck](#steam-deck)). Reports welcome |
 | Android? | 🛠️ Being worked on |
 | Online? | ❌ No |
 | Is it legal? | ✅ No game files here: you build it from your own disc |
@@ -440,8 +440,8 @@ software Vulkan driver, on a virtual display), so speed and the picture on a rea
 Windows setup generates, checked file by file) and the build. The game boots, does the first-start
 screens and saves them, and reaches the top menu with its 3D scene, GT Mode (My Home), and Arcade
 through track select, car select (the 3D car), colour and the pre-race screen with the 3D track.
-**The race itself stayed black** in that test: not yet known whether that's the software driver or
-the renderer. If you have a Linux PC with a graphics card, please
+**The race itself stayed black** in that test. The same race does draw with this renderer on a real
+graphics card (checked on Windows), so that was the software driver. If you have a Linux PC with a graphics card, please
 [tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml)
 (attach `GT5/logs/play.err`).
 
@@ -511,15 +511,46 @@ only what changed. Your saves (`GT5/gamedata`, `GT5/hdd0`) and game files stay.
 - Ultrawide (21:9, 32:9): the Linux renderer draws 16:9.
 - The Vulkan renderer is younger than the Windows one; picture bugs the Windows build fixed may
   still show here. Please report them with a screenshot.
-- Races: black in the one test so far (see above).
+- Races are drawn squashed into the top half of the picture (seen on Windows and Android with the
+  same renderer); a fix is on the way.
 - Movies and the on-screen keyboard (naming a save, Course Maker) are untried on Linux.
 
-### Steam Deck, Proton and Wine
+<a id="steam-deck"></a>
 
-Not tried yet: neither this Linux build on a Steam Deck nor the Windows build under Proton or Wine.
-The Deck's CPU has AVX2 and its graphics do Vulkan, so the Linux build should be able to run there
-(build it in desktop mode, for example inside a Distrobox container, since SteamOS keeps its system
-read-only). Reports welcome.
+### Steam Deck
+
+**Not tried on a Deck yet**: reports very welcome. The route to try is the Linux build in a
+distrobox. SteamOS keeps its system files read-only, so `setup.sh` can't install the build tools there
+(it says so and stops). Distrobox, part of SteamOS 3.5 and later, gives you an Ubuntu container that
+shares your home folder, screen, sound and graphics. In desktop mode, in Konsole:
+
+```
+distrobox create --name gt5 --image ubuntu:24.04
+distrobox enter gt5
+git clone https://github.com/MormonFTP-hub/gt5-recomp
+cd gt5-recomp
+bash setup.sh --install-deps
+```
+
+(`sudo` inside the box needs no password.) Then copy your files in as above and run `bash setup.sh`
+again, still inside the box. Keep `gt5-recomp` on the internal drive: it needs about 30 GB. The first
+setup is slow on the Deck's 4 cores: expect one to two hours for generating the code and building
+(an estimate; it runs one compile per 2 GB of free memory).
+
+To play from Game Mode: in desktop mode, Steam > *Add a Non-Steam Game*, browse to
+`/usr/bin/distrobox-enter`, and in its properties set the launch options to
+`-n gt5 -- bash /home/deck/gt5-recomp/GT5/play.sh` (setup prints the exact line). Started from
+Steam, the Deck's controls reach the game as a controller; from a terminal they act as mouse and
+keyboard. Leave full screen off in `play.sh`: Game Mode fits the 16:9 window onto the 16:10 screen
+with bars, while full screen would stretch it.
+
+What to expect: GT5's pace is set by the CPU, and the Deck's is in the same class as a laptop i5 that
+raced at 5 to 12 frames per second on Windows. B-Spec races and replays in watch mode
+(`export LD_WATCH=1` in `GT5/settings.sh`) are the realistic use. Suspend and resume are untested:
+quit the game first.
+
+The Windows build under **Proton** is untried too. Direct3D 12 would go through vkd3d-proton; start
+`GT5\play.bat` (it sets the game's switches), not `gt5.exe` on its own.
 
 <a id="requirements"></a>
 

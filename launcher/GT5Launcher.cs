@@ -142,7 +142,12 @@ namespace Gt5Launcher
             { "speed.full", new[] { "Draw every frame (recommended)", "每帧都绘制（推荐）" } },
             { "speed.30", new[] { "30 fps: draw every other frame (only if the graphics card is the limit)", "30 fps：隔帧绘制（仅当显卡是瓶颈时）" } },
             { "watch", new[] { "Watch mode by itself", "自动观看模式" } },
-            { "watch.help", new[] { "Comes on after 10 s without input (B-Spec, replays): draws every other frame and lowers the game's priority. F9 toggles it any time.", "10 秒无操作后自动开启（B-Spec、回放）：隔帧绘制并降低游戏优先级。随时可按 F9 切换。" } },
+            { "watch.help", new[] { "Comes on after 10 s without input (B-Spec, replays): draws fewer frames (see the next setting) and lowers the game's priority. F9 toggles it any time.", "10 秒无操作后自动开启（B-Spec、回放）：减少绘制的帧数（见下一项）并降低游戏优先级。随时可按 F9 切换。" } },
+            { "wdraw", new[] { "Watch mode draws", "观看模式绘制" } },
+            { "wdraw.help", new[] { "B-Spec mode for laptops: while you only watch, fewer frames are drawn and the race keeps full speed, so more of the CPU is left for the game. The window title shows FPS: x (game y); y is how fast the game runs.", "笔记本的 B-Spec 模式：只观看时绘制更少的帧，比赛保持全速，把更多 CPU 留给游戏。窗口标题显示 FPS: x (game y)；y 是游戏实际运行的速度。" } },
+            { "wdraw.2", new[] { "1 frame in 2", "每 2 帧绘制 1 帧" } },
+            { "wdraw.3", new[] { "1 frame in 3 (laptops)", "每 3 帧绘制 1 帧（笔记本）" } },
+            { "wdraw.4", new[] { "1 frame in 4 (weakest PCs)", "每 4 帧绘制 1 帧（最弱的电脑）" } },
             { "spus", new[] { "Extra SPU threads", "额外 SPU 线程" } },
             { "spus.help", new[] { "PC threads for the PS3's co-processors. 2 suits most CPUs; 0-1 on 4-core CPUs.", "用于 PS3 协处理器的 PC 线程。多数 CPU 用 2；4 核 CPU 用 0-1。" } },
             // Controls
@@ -219,7 +224,7 @@ namespace Gt5Launcher
             new[] { "PS3_WHEEL_FFB", "" }, new[] { "PS3_WHEEL_FFB_INVERT", "" }, new[] { "PS3_LANG", "" },
             new[] { "GT5_LAUNCH_WINDOW", "windowed" }, new[] { "GT5_LAUNCHER_LANG", "" },
             new[] { "GT5_LAUNCHER_HIDE", "1" }, new[] { "GT5_LAUNCHER_AUTOCHECK", "1" },
-            new[] { "GT5_SPEED", "" }, new[] { "PS3_SKIP_INTRO", "1" },
+            new[] { "GT5_SPEED", "" }, new[] { "PS3_SKIP_INTRO", "1" }, new[] { "LD_WATCH_DRAW", "" },
         };
         // True when there was no settings.bat yet: the launcher's first start on this install.
         public bool Fresh;
@@ -272,7 +277,7 @@ namespace Gt5Launcher
             if (speed == "30")
             {
                 sb.AppendLine(SpeedMark + " (GT5_SPEED=30): the renderer's own switches. The launcher writes these from Speed; reading stops here.");
-                sb.AppendLine("set \"LD_WATCH=2\""); sb.AppendLine("set \"LD_WATCH_PRIORITY=0\"");
+                sb.AppendLine("set \"LD_WATCH=2\""); sb.AppendLine("set \"LD_WATCH_PRIORITY=0\""); sb.AppendLine("set \"LD_WATCH_DRAW=2\"");
             }
             File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
         }
@@ -607,6 +612,7 @@ namespace Gt5Launcher
             y = AddCombo(p, "window", "window.help", "GT5_LAUNCH_WINDOW", new[] { new Choice("windowed", T.Get("window.windowed")), new Choice("max", T.Get("window.max")), new Choice("borderless", T.Get("window.borderless")) }, y);
             y = AddCombo(p, "size", "size.help", "PS3_WINDOW_SIZE", new[] { new Choice("", T.Get("size.default")), new Choice("1280x720", "1280 x 720"), new Choice("1600x900", "1600 x 900"), new Choice("1920x1080", "1920 x 1080"), new Choice("2560x1440", "2560 x 1440"), new Choice("2560x1080", "2560 x 1080 (21:9)"), new Choice("3440x1440", "3440 x 1440 (21:9)"), new Choice("3840x2160", "3840 x 2160") }, y);
             y = AddCheck(p, "watch", "watch.help", "LD_WATCH", "1", y);
+            y = AddCombo(p, "wdraw", "wdraw.help", "LD_WATCH_DRAW", new[] { new Choice("", T.Get("wdraw.2")), new Choice("3", T.Get("wdraw.3")), new Choice("4", T.Get("wdraw.4")) }, y);
             y = AddCombo(p, "spus", "spus.help", "SPURS_EXTRA_SPUS", new[] { new Choice("0", "0"), new Choice("1", "1"), new Choice("2", "2"), new Choice("3", "3"), new Choice("4", "4") }, y);
             return p;
         }

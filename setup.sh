@@ -41,6 +41,17 @@ have() { command -v "$1" > /dev/null 2>&1; }
 case "$(uname -m)" in x86_64|amd64) ;; *) stop "only x86-64 PCs are supported so far (this is $(uname -m))." ;; esac
 grep -qw avx2 /proc/cpuinfo 2> /dev/null ||
     stop "this CPU has no AVX2. The game code is built for AVX2 CPUs (Intel 2013 Haswell / AMD 2015 and later)."
+# SteamOS (Steam Deck): its system files are read-only and every update resets them, so the build tools
+# can't be installed there. Inside a distrobox (an Ubuntu container) /etc/os-release is Ubuntu's.
+if grep -qs '^ID=steamos' /etc/os-release; then
+    echo "This is SteamOS: its system files are read-only, so build GT5 inside a distrobox (part of SteamOS"
+    echo "3.5 and later). In desktop mode, in Konsole:"
+    echo "  distrobox create --name gt5 --image ubuntu:24.04"
+    echo "  distrobox enter gt5"
+    echo "  cd \"$BASE\" && bash setup.sh --install-deps"
+    echo "README.md, Steam Deck, has the rest (adding the game to Steam)."
+    exit 1
+fi
 echo "== GT5 Recomp setup (Linux) in $BASE"
 echo
 echo "Tools:"
@@ -228,8 +239,8 @@ else
     echo "The game code is already generated and current."
 fi
 
-# Parallel jobs: one per core, but no more than one per 2 GB of memory (the biggest files need that).
-mem_gb=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1048576 ))
+# Parallel jobs: one per core, but no more than one per 2 GB of free memory (the biggest files need that).
+mem_gb=$(( $(awk '/MemAvailable/ {print $2}' /proc/meminfo) / 1048576 ))
 JOBS=$(nproc); [ $((mem_gb / 2)) -lt "$JOBS" ] && JOBS=$((mem_gb / 2)); [ "$JOBS" -lt 1 ] && JOBS=1
 [ -n "${GT5_JOBS:-}" ] && JOBS="$GT5_JOBS"
 BUILD="$GT5/build-linux"
@@ -252,3 +263,8 @@ done
 [ "$built" = 0 ] || stop "the build failed (see above). Please report it with that output: https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml"
 echo
 echo "${G}Done! Play with: bash GT5/play.sh${N}"
+if [ -n "${CONTAINER_ID:-}" ]; then
+    # In a distrobox (the Steam Deck route): how to start it from Steam, where the Deck's controls work.
+    echo "To play from Steam (Game Mode): Add a Non-Steam Game > /usr/bin/distrobox-enter, then set its"
+    echo "launch options to:  -n $CONTAINER_ID -- bash \"$GT5/play.sh\""
+fi

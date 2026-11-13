@@ -9,6 +9,21 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.27**
+
+🏁 **B-Spec mode for laptops: watch mode can draw 1 frame in 3 or 4** (asked for by a laptop tester)
+- Launcher, Display: **Watch mode draws** sets how many frames watch mode draws: 1 in 2 (as before),
+  1 in 3 (laptops), 1 in 4 (the weakest PCs). With **Watch mode by itself** ticked, it comes on after
+  10 s without touching the controls: B-Spec races, replays. F9 still switches it any time. The race
+  keeps full speed; fewer drawn frames leave more of the CPU to the game. The window title shows the
+  game's own rate next to the drawn one.
+- In `play.bat`: `set "LD_WATCH_DRAW=3"`.
+- Speed: 30 fps keeps drawing 1 frame in 2, whatever this is set to.
+
+🎮 **Steam Deck:** the README has a route to try: the Linux build in an Ubuntu distrobox, not tried on
+a Deck so far. On SteamOS, `setup.sh` now explains that route instead of failing, and inside a
+distrobox it prints the line that adds the game to Steam.
+
 🏷️ Released as **v0.1.26**
 
 🔊 **The sound mixer costs about 12% less CPU** (from a laptop tester's HWiNFO log in the Discord)
