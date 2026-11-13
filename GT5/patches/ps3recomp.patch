@@ -17145,10 +17145,39 @@ index 8c4ccaa8..c8423b59 100644
           *
           * A plain PUT is a store by another processor as far as every SPU
 diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
-index f04fda63..7ded9811 100644
 --- a/runtime/spu/spu_helpers.h
 +++ b/runtime/spu/spu_helpers.h
-@@ -1041,6 +1041,7 @@ SPU__NV_INLINE u128 spu_fnms(u128 a, u128 b, u128 c) { return SPU__NV_FMA(a, b,
+@@ -464,13 +464,15 @@
+ #if defined(__SSE4_1__)
+ #include <smmintrin.h>
+ /* pshufb version: one of the hottest SPU ops (~11% of GH3's FMOD mixer task
+- * as the byte loop). SPU byte P lives at host byte SPU_W(P), i.e. the bytes
+- * of each 32-bit word reversed, so swap into SPU order, select, swap back. */
++ * as the byte loop, ~15% of GT5's sound job). SPU byte P lives at host byte
++ * SPU_W(P) = P ^ 3 (the bytes of each 32-bit word reversed). The result byte
++ * at host position h is SPU byte h ^ 3, and its selector is control SPU byte
++ * h ^ 3, i.e. host byte h: so the selection runs in host order as it is, with
++ * the selected SPU index turned into a host index (^ 3). The first version
++ * swapped a, b, c into SPU order and the result back: four shuffles more. */
+ static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
+-    const __m128i sw = _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12);
+     __m128i A, B, C; memcpy(&A, &a, 16); memcpy(&B, &b, 16); memcpy(&C, &c, 16);
+-    A = _mm_shuffle_epi8(A, sw); B = _mm_shuffle_epi8(B, sw); C = _mm_shuffle_epi8(C, sw);
+-    const __m128i idx = _mm_and_si128(C, _mm_set1_epi8(0x0F));
++    const __m128i idx = _mm_xor_si128(_mm_and_si128(C, _mm_set1_epi8(0x0F)), _mm_set1_epi8(3));
+     const __m128i fromb = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8(0x10)), _mm_set1_epi8(0x10));
+     __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx), fromb);
+     /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
+@@ -478,7 +480,7 @@
+     const __m128i mC0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xC0)), _mm_set1_epi8((char)0xC0));
+     const __m128i mE0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xE0)), _mm_set1_epi8((char)0xE0));
+     const __m128i special = _mm_blendv_epi8(mC0, _mm_set1_epi8((char)0x80), mE0);
+-    r = _mm_shuffle_epi8(_mm_blendv_epi8(r, special, m80), sw);
++    r = _mm_blendv_epi8(r, special, m80);
+     u128 out; memcpy(&out, &r, 16); return out;
+ }
+ #elif defined(__ARM_NEON)
+@@ -1041,6 +1043,7 @@
   * product of two 24-bit significands is exact in double, so a compiler contracting a multiply
   * and an add into an FMA cannot change any rounding here. */
  #include <immintrin.h>
@@ -17156,7 +17185,7 @@ index f04fda63..7ded9811 100644
  #define SPU__X8_INLINE static inline __attribute__((always_inline))
  #define SPU__X8_SLOW   static __attribute__((noinline, cold, unused))
  SPU__X8_INLINE __m128i spu__x8_bexp(__m128i x) { return _mm_srli_epi32(_mm_slli_epi32(x, 1), 24); }
-@@ -1105,9 +1106,70 @@ SPU__X8_INLINE u128 spu__x8_fa(u128 a, u128 b, uint32_t negb) {
+@@ -1105,9 +1108,70 @@
      ok = _mm_and_si128(ok, pre);
      return spu__x8_all4(ok) ? spu__x8_st(r) : spu__x8_fa_fix(spu__x8_st(r), ok, a, b, negb);
  }
@@ -17229,7 +17258,7 @@ index f04fda63..7ded9811 100644
      const __m128i x = spu__x8_ld(a), y = spu__x8_ld(b);
      __m128i ok, zm;
      const __m128i r = spu__x8_trunc0(_mm256_mul_pd(spu__x8_wide(x), spu__x8_wide(y)), &ok, &zm, NULL);
-@@ -1126,9 +1188,10 @@ SPU__X8_INLINE u128 spu__x8_fma(u128 a, u128 b, u128 c, uint32_t negp, uint32_t
+@@ -1126,9 +1190,10 @@
      ok = _mm_and_si128(ok, _mm_and_si128(_mm_and_si128(spu__x8_plain0(x), spu__x8_plain0(y)), spu__x8_plain0(z)));
      return spu__x8_all4(ok) ? spu__x8_st(r) : spu__x8_fma_fix(spu__x8_st(r), ok, a, b, c, negp, negc);
  }
@@ -17243,7 +17272,7 @@ index f04fda63..7ded9811 100644
  #else
  static inline u128 spu_fa(u128 a, u128 b) { return spu__fa_s(a, b); }
  static inline u128 spu_fs(u128 a, u128 b) { return spu__fs_s(a, b); }
-@@ -1369,6 +1432,23 @@ static inline void spu__fpcr_put(uint64_t v) { __asm__ volatile("msr fpcr, %0" :
+@@ -1369,6 +1434,23 @@
      if (__builtin_expect(m == 0, 1)) return f##_h_(a, b, c); \
      spu__fpcr_put(0); __asm__ volatile("" : "+m"(a), "+m"(b), "+m"(c)); u128 r = f##_h_(a, b, c); \
      __asm__ volatile("" : "+m"(r)); spu__fpcr_put(m); return r; }
@@ -17308,10 +17337,9 @@ index e9b8f613..21f04864 100644
          if (_g1>0) {
              int inr = (ctx->pc >= 0x26E80u && ctx->pc < 0x26F14u);
 diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
-index 3ce8d0d6..ac7d6771 100644
 --- a/runtime/spu/spu_workload.c
 +++ b/runtime/spu/spu_workload.c
-@@ -269,36 +269,58 @@ static uint64_t spu_workload_content_hash(const uint8_t* p, size_t n)
+@@ -269,36 +269,62 @@
      for (; i < n; ++i) r = (r ^ p[i]) * 0x100000001B3ull;
      return r;
  }
@@ -17320,10 +17348,15 @@ index 3ce8d0d6..ac7d6771 100644
 + * every job start too, eight bytes per step: 4% of GT5's sound-job thread,
 + * which runs short of real time. memcmp is exact and several times faster.
 + * SPU_FP_HASHCHECK=1 restores the content-hash check. */
++/* 64 slots: GT5 has more than 8 job images in use during a race, so with 8 the
++ * round-robin slots kept being replaced, and every miss copied and hashed the
++ * whole image again (3% of the sound-job thread in fingerprinting plus much of
++ * its memcpy, 12 Nov). */
  static uint64_t spu_workload_fingerprint_cached(const uint8_t* image, size_t n)
  {
-     enum { SLOTS = 8 };
+-    enum { SLOTS = 8 };
 -    static struct { const uint8_t* image; size_t n; uint64_t content, fp; } s_fp[SLOTS];
++    enum { SLOTS = 64 };
 +    static struct { const uint8_t* image; size_t n; uint64_t content, fp; uint8_t* copy; } s_fp[SLOTS];
      static unsigned s_next;
 +    static int hashcheck = -1;
@@ -17377,21 +17410,21 @@ index 3ce8d0d6..ac7d6771 100644
      return fp;
  }
  
-@@ -632,6 +654,13 @@ static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
+@@ -630,6 +656,13 @@
+         spu_workload_dispatch_async(vm_base + start_elf[i], (uint32_t)start_sz[i], start_ctx[i]);
+     }
      s_ts_held = 0; ts_unlock();
- }
- 
++}
++
 +/* A task that was created but has no lifted program ends here and now. */
 +void spu_taskset_task_missing(uint32_t taskset_ea, uint32_t task)
 +{
 +    fprintf(stderr, "[taskset] task %u of taskset 0x%08X has no lifted program; ending it\n", task, taskset_ea);
 +    spu_taskset_task_exited(taskset_ea, task);
-+}
-+
+ }
+ 
  /* Start any task that is enabled + ready/pending but not running. The scan
-  * otherwise runs only when a task exits, and a task an SPU creates after the
-  * last exit (Havok's master recreates its workers) was never noticed. */
-@@ -1001,6 +1030,10 @@ static void spu_async_run(spu_async_job* j)
+@@ -1001,6 +1034,10 @@
  #ifdef _WIN32
  static DWORD WINAPI spu_async_thread(LPVOID p) {
      ps3_thread_name("spu job");

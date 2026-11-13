@@ -9,6 +9,21 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 12 Nov 2026
 
+🏷️ Released as **v0.1.26**
+
+🔊 **The sound mixer costs about 12% less CPU** (from a laptop tester's HWiNFO log in the Discord)
+- A tester's i5-1135G7 laptop was at its power limit 88% of the time, with its graphics only 30% busy.
+  On a laptop every busy thread shares one power budget, so CPU work saved anywhere lets the cores
+  that run the game clock higher.
+- GT5's sound runs as an SPU job that mixes in real time, whatever the frame rate, and took about 85%
+  of one core on the tested rig. Now it takes about 75%. Two changes in the SPU emulation make that
+  saving:
+  - The byte-shuffle instruction (`shufb`), one of the most used, does two shuffles instead of six.
+    Checked against the reference version on 200,000 random cases. Every SPU program gains from it.
+  - The lookup that finds the compiled code for each SPU job kept only 8 job images, while GT5 uses
+    more in a race. So it kept re-reading and hashing whole images; it keeps 64 now.
+- Frame rates weren't measured: the test PC's graphics card was busy with another game.
+
 🏷️ Released as **v0.1.25**
 
 🖥️ **The launcher fits 4K and other high-scaling screens** ([discussion #9](https://github.com/MormonFTP-hub/gt5-recomp/discussions/9))
