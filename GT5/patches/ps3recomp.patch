@@ -5147,10 +5147,10 @@ index 00000000..ab065052
 +}
 diff --git a/libs/hardware/wheel_host_win.c b/libs/hardware/wheel_host_win.c
 new file mode 100644
-index 00000000..f6988848
+index 00000000..0278b1e3
 --- /dev/null
 +++ b/libs/hardware/wheel_host_win.c
-@@ -0,0 +1,709 @@
+@@ -0,0 +1,745 @@
 +/*
 + * ps3recomp - the PC steering wheel behind the emulated G27 (see wheel.h)
 + *
@@ -5172,6 +5172,9 @@ index 00000000..f6988848
 + *   PS3_WHEEL_FFB_INVERT 1 = the game's constant forces push the other way.
 + *   PS3_WHEEL_PEDALS     e.g. throttle=Y,brake=RZ,clutch=Z (axes X Y Z RX RY RZ S0 S1);
 + *                        add inv to a pedal (brake=RZinv) if it reads backwards.
++ *                        Throttle and brake on one axis (older wheels: it rests in the
++ *                        middle and there's no brake axis; or throttle=Y,brake=Y) are
++ *                        split where it rests: below is throttle, throttle=Yinv swaps.
 + *   PS3_WHEEL_STEER      steering axis (X).
 + *   PS3_WHEEL_BUTTONS    e.g. cross=1,circle=3,start=10, by the numbers Windows'
 + *                        Game Controllers panel shows (1 = first button).
@@ -5361,6 +5364,10 @@ index 00000000..f6988848
 +static int                   s_axis_present[AX_COUNT];
 +static int                   s_shifter_seen;
 +static ULONGLONG             s_ffb_retry_at;
++/* Throttle and brake on one axis (see pedal()), decided once its rest point is known. */
++static int                   s_split;
++static LONG                  s_split_at;
++static int                   s_split_swap;   /* 1 = above the rest point is the throttle */
 +
 +typedef struct {
 +    GUID inst;
@@ -5403,8 +5410,11 @@ index 00000000..f6988848
 +    } else {
 +        if (driving) c.score += 4;
 +        if (ff) c.score += 1;
-+        if (contains_ci(c.name, "wheel") || contains_ci(c.name, "racing") ||
-+            contains_ci(c.name, "driving force"))
++        /* Some wheels call themselves a joystick and have no force feedback (the
++         * Genius Speed Wheel 3 Vibration): "wheel" in the name is enough. */
++        if (contains_ci(c.name, "wheel") || contains_ci(c.name, "driving force"))
++            c.score += 3;
++        else if (contains_ci(c.name, "racing"))
 +            c.score += 2;
 +        if (c.score < 3) c.score = 0;   /* a pad with rumble is not a wheel */
 +    }
@@ -5495,6 +5505,7 @@ index 00000000..f6988848
 +    for (int p = 0; p < 3; p++)
 +        if (s_map.pedal[p] >= 0 && !s_axis_present[s_map.pedal[p]]) s_map.pedal[p] = AX_NONE;
 +    s_rest_known = 0;
++    s_split = 0;
 +    s_ffb_dirty = 1;
 +    {
 +        const char* e = getenv("PS3_WHEEL_RANGE");
@@ -5529,6 +5540,15 @@ index 00000000..f6988848
 +    const int a = s_map.pedal[p];
 +    if (a < 0) return 0.f;
 +    const LONG v = axis_val(js, a);
++    if (s_split && p < 2) {
++        /* One axis, two pedals: each reads from the rest point to its own end,
++         * past a small dead zone, so an older wheel's jitter at rest is no pedal. */
++        const int below = (p == 0) != s_split_swap;
++        float f = below ? (float)(s_split_at - v) / (float)s_split_at
++                        : (float)(v - s_split_at) / (float)(65535 - s_split_at);
++        f = (f - 0.02f) / 0.98f;
++        return f < 0.f ? 0.f : (f > 1.f ? 1.f : f);
++    }
 +    /* Which end is "released": where the pedal rested when the wheel was
 +     * opened, if that was clearly one end; otherwise the model's default
 +     * (the top, as on Logitech wheels). PS3_WHEEL_PEDALS ...inv flips it. */
@@ -5568,6 +5588,22 @@ index 00000000..f6988848
 +        }
 +        s_rest_known = 1;
 +        fprintf(stderr, "[wheel] axes at rest (0-65535):%s\n", n ? line : " none");
++        /* Older wheels (the Genius Speed Wheel 3, for one) put both pedals on one
++         * axis that rests in the middle, one pedal moving it down and the other up,
++         * with no brake axis. Read as one pedal, resting there would be half
++         * throttle: split it where it rests instead. */
++        const int ta = s_map.pedal[0], ba = s_map.pedal[1];
++        const int mid = ta >= 0 && s_rest[ta] >= 6554 && s_rest[ta] <= 58981;
++        if (ta >= 0 && (ba == ta || (ba == AX_NONE && mid))) {
++            s_split = 1;
++            s_split_at = mid ? s_rest[ta] : 32768;
++            s_split_swap = (s_map.pedal_inv[0] == 2) != (s_map.pedal_inv[1] == 2);
++            s_map.pedal[1] = ta;
++            fprintf(stderr, "[wheel] throttle and brake share the %s axis, split at %ld: throttle %s it, "
++                            "brake %s (PS3_WHEEL_PEDALS=throttle=%s%s swaps them)\n",
++                    k_axis_name[ta], s_split_at, s_split_swap ? "above" : "below",
++                    s_split_swap ? "below" : "above", k_axis_name[ta], s_split_swap ? "" : "inv");
++        }
 +        if (!wheel_trace_on())
 +            fprintf(stderr, "[wheel] if a pedal or button is wrong, PS3_WHEEL_TRACE=1 logs them as they move\n");
 +    }

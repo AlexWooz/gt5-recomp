@@ -209,7 +209,7 @@ To play the previous build right away instead, copy `GT5\build\gt5.previous.exe`
 A DualSense, DualShock 4 or XInput pad works. Without one, the keyboard:
 Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
 
-A steering wheel works too, with force feedback (new and untested on real wheels): see the
+A steering wheel works too, with force feedback (new; one real wheel tried so far): see the
 [FAQ](#faq).
 
 <a id="current-state"></a>
@@ -248,7 +248,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 
 | Question | Short answer |
 |---|---|
-| Steering wheels? | 🧪 Tested on a Genius Speed Wheel 3 Vibration (`0458:3017`, reported by brocolison): attaches as an emulated G27 using `PS3_WHEEL=0458:3017`; Logitech/Thrustmaster/Fanatec auto-detect |
+| Steering wheels? | 🧪 New. First real wheel: a Genius Speed Wheel 3 Vibration (`0458:3017`, tested by brocolison, [#29](https://github.com/MormonFTP-hub/gt5-recomp/pull/29)) attaches as an emulated G27; since 13 Nov it's found by itself and its one-axis pedals work as throttle and brake. Logitech, Thrustmaster and Fanatec wheels are picked up by themselves but still untried: [wheel owners wanted](#faq) |
 | Force feedback? | 🧪 New, with wheel support, also untried on a real wheel |
 | Widescreen (16:9)? | ✅ Yes, GT5 is a 16:9 game |
 | Ultrawide (21:9, 32:9)? | ✅ New: a wider view, with the HUD kept 16:9 in the middle |
@@ -272,7 +272,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 
 **Q: Does it support steering wheels and force feedback?**
 
-**A: Yes, new in v0.1.2, but nobody has tried it on a real wheel yet.** On a PS3, GT5 talks to its
+**A: Yes, new in v0.1.2, and one real wheel has been tried so far.** On a PS3, GT5 talks to its
 Logitech wheels directly over USB, for both steering and force feedback. The port now plays that
 part: your PC wheel appears to the game as a **Logitech G27** (900°, three pedals, paddles and an
 H-shifter), and the game's force-feedback commands (the centring spring, the steering forces in a race)
@@ -280,8 +280,17 @@ are played on your wheel through DirectInput, which Logitech, Thrustmaster, Fana
 support. Plug the wheel in before you start the game; it's picked up by itself, and pads work as before.
 
 What has been checked, without a wheel: the game accepts the emulated G27, a race steers from it, and
-the force-feedback commands the game sends are decoded and logged. What hasn't: the feel on a real
-wheel, including which way the forces push. So **wheel owners are wanted**: please
+the force-feedback commands the game sends are decoded and logged.
+
+The first real wheel (thanks to brocolison, [#29](https://github.com/MormonFTP-hub/gt5-recomp/pull/29)):
+a **Genius Speed Wheel 3 Vibration** attaches as the G27, and the game sends it its wheel commands in a
+race. It has no force feedback, and both pedals sit on one axis. Since 13 Nov the port finds it by
+itself (Windows calls it a joystick, so before that it needed `set "PS3_WHEEL=0458:3017"`) and splits
+that axis where it rests: one way is throttle, the other is brake. If they're the wrong way round:
+`set "PS3_WHEEL_PEDALS=throttle=Yinv"`. Other wheels with pedals on one axis get the same.
+
+What hasn't been checked: force feedback on a real wheel, including which way the forces push. So
+**wheel owners are wanted**: please
 [tell us how it went](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml)
 (or [report a problem](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml)),
 and attach `GT5\logs\play.err`: its `[wheel]` lines say which wheel was found, its axes, and what the
@@ -295,6 +304,7 @@ If something is off, add a line to `play.bat` (next to the other `set` lines):
 | Forces too strong or too weak | `set "PS3_WHEEL_FFB=60"` (percent, 0 = off) |
 | Steering too quick or too slow | set your wheel's rotation to 900° in its software (G HUB, ...), or tell the port what it is: `set "PS3_WHEEL_RANGE=1080"` |
 | A pedal does nothing, or the wrong thing | `set "PS3_WHEEL_TRACE=1"`, press each pedal, and see which axis moves in the `[wheel] axes` lines of `play.err`; then e.g. `set "PS3_WHEEL_PEDALS=throttle=Y,brake=RZ,clutch=Z"` (add `inv` to one that works backwards: `brake=RZinv`) |
+| Throttle and brake swapped on a wheel whose pedals share one axis | `set "PS3_WHEEL_PEDALS=throttle=Yinv"` (`play.err` names the shared axis: `[wheel] throttle and brake share the Y axis`) |
 | A button is wrong | `set "PS3_WHEEL_BUTTONS=cross=1,circle=3,start=10"`, with button numbers as Windows' *Set up USB game controllers* window (`joy.cpl`) shows them; names: cross square circle triangle r1 l1 r2 l2 select start r3 l3 gear1..gear6 gearr plus minus dialcw dialccw |
 | The wrong device is used, or none | `set "PS3_WHEEL=G29"` (part of its name, or its `046d:c24f` VID:PID); `play.err` lists every controller it saw |
 | You don't want it | `set "PS3_WHEEL=off"` |

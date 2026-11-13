@@ -9,6 +9,23 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🏷️ Released as **v0.1.38**
+
+🛞 **The first real steering wheel: a Genius Speed Wheel 3 Vibration** (tested by brocolison,
+[#29](https://github.com/MormonFTP-hub/gt5-recomp/pull/29), whose README line is merged)
+- Their test: with `PS3_WHEEL=0458:3017` the wheel attaches as the emulated G27, and the game sends it
+  its wheel commands in a race.
+- **It's found by itself now.** Windows lists this wheel as a joystick with no force feedback, so the
+  port's wheel check skipped it. A controller with "wheel" in its name now counts as a wheel.
+- **Throttle and brake on one axis.** Its two pedals share one axis that rests in the middle. Read as
+  one pedal, resting there was half throttle, and there was no brake. When the throttle's axis rests in
+  the middle and the wheel has no brake axis (or both are set to the same axis), the port now splits it
+  where it rests: one way is throttle, the other brake, with a small dead zone. `play.err` says so
+  (`[wheel] throttle and brake share the Y axis`); if they're the wrong way round,
+  `set "PS3_WHEEL_PEDALS=throttle=Yinv"`.
+- Not yet driven on that wheel with this change (there's no wheel here): brocolison, a quick race
+  would tell.
+
 🏷️ Released as **v0.1.37**
 
 🧹 **Clear the shader cache from the launcher** (asked for on Discord)

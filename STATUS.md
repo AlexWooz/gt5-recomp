@@ -68,9 +68,12 @@ performance matters more than the graphics card.
   pre-race screen work, the race itself stayed black there. Not yet tried on a real Linux PC with a
   graphics card, a Steam Deck, or under Proton/Wine:
   [tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml).
-- Steering wheels with force feedback: new in v0.1.2 and **not yet tried on a real wheel**. Your PC
-  wheel appears to the game as a Logitech G27; without a wheel it was checked that the game accepts
-  it, a race steers from it, and the game's force-feedback commands arrive. Wheel owners:
+- Steering wheels with force feedback: new in v0.1.2. Your PC wheel appears to the game as a Logitech
+  G27; without a wheel it was checked that the game accepts it, a race steers from it, and the game's
+  force-feedback commands arrive. The first real wheel, a player's Genius Speed Wheel 3 Vibration (no
+  force feedback, both pedals on one axis), attaches and gets the game's commands in a race
+  ([#29](https://github.com/MormonFTP-hub/gt5-recomp/pull/29)); since 13 Nov it's found by itself and
+  its pedal axis splits into throttle and brake. **Force feedback is still untried on a real wheel.** Wheel owners:
   [tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml),
   with `GT5\logs\play.err` attached (settings are in the README's FAQ).
 - **The picture can freeze on one screen at the first start** while the game carries on behind it
@@ -118,7 +121,9 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **13 Nov 2026:** the stutter the first time you see a car or track is about three times shorter: new
+- **13 Nov 2026:** the first real steering wheel tried (a Genius Speed Wheel 3): it's now found by
+  itself, and wheels with both pedals on one axis get throttle and brake (before, resting was half
+  throttle); the stutter the first time you see a car or track is about three times shorter: new
   shaders compile on up to 8 threads (from a community pull request) (v0.1.32); DLC works offline with
   your own licences (v0.1.31); game update 2.17, the last one, runs on the US and European releases (from a
   community pull request; one re-lift) (v0.1.30); SPU code runs leaner: SPURS jobs take 20% less CPU, about 7% more frames on a
