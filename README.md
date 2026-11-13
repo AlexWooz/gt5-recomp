@@ -436,16 +436,8 @@ shared (see below).
 drawing with Vulkan (the renderer of the Android build) instead of Direct3D 12, with SDL2 for the
 window, keyboard, controllers and sound. It isn't Wine or Proton: `gt5` is a Linux program.
 
-**How far it's been tested (12 Nov 2026):** on Ubuntu 24.04 with no graphics card at all (Mesa's
-software Vulkan driver, on a virtual display), so speed and the picture on a real GPU are untested.
-`setup.sh` ran the whole setup from a fresh clone: tools, ps3recomp, the game code (the same code the
-Windows setup generates, checked file by file) and the build. The game boots, does the first-start
-screens and saves them, and reaches the top menu with its 3D scene, GT Mode (My Home), and Arcade
-through track select, car select (the 3D car), colour and the pre-race screen with the 3D track.
-**The race itself stayed black** in that test. The same race does draw with this renderer on a real
-graphics card (checked on Windows), so that was the software driver. If you have a Linux PC with a graphics card, please
-[tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml)
-(attach `GT5/logs/play.err`).
+**Experimental:** setup and menus have been tested on Linux with software rendering; races on a
+real Linux GPU are still untested. See [Linux testing status](#linux-testing-status) below.
 
 ### What you need
 
@@ -454,33 +446,90 @@ graphics card (checked on Windows), so that was the software driver. If you have
 - A Vulkan graphics driver: Mesa (AMD, Intel) or NVIDIA's own.
 - A distribution with FFmpeg 6.1 or newer: Ubuntu 24.04, Linux Mint 22, Debian 13, Fedora 40, Arch,
   or newer.
-- The same game files as on Windows (see [Which copy of GT5](#which-copy-of-gt5)): your disc's
-  `PS3_GAME` folder, its executable decrypted to `EBOOT.elf`, and a `dev_flash` folder.
-  [RPCS3](https://rpcs3.net) for Linux (the AppImage) does both jobs, as on Windows:
-  *Utilities > Decrypt PS3 Binaries* for `EBOOT.BIN`, and *File > Install Firmware* with Sony's
-  `PS3UPDAT.PUP`, after which `dev_flash` is in `~/.config/rpcs3/dev_flash`.
+- Your GT5 disc dump (see [Which copy of GT5](#which-copy-of-gt5)). The steps below prepare the
+  game executable and PS3 firmware.
 
 ### Set it up
 
-```
+After cloning, run all commands from `gt5-recomp`. Replace `/path/to/...` with your own paths.
+
+**1. Install the build dependencies**
+
+```bash
 git clone https://github.com/MormonFTP-hub/gt5-recomp
 cd gt5-recomp
 bash setup.sh --install-deps
 ```
 
-`--install-deps` installs the packages the build needs with your package manager (apt, dnf, pacman
-or zypper; it asks for your password). Without it, `setup.sh` lists what's missing and the one
-command that installs it. Then copy your files in, as on Windows:
+`--install-deps` installs packages using apt, dnf, pacman or zypper and may ask for your password.
+Without it, setup prints the install command. Three `[missing]` game-file entries are normal on
+the first run: the next steps supply them.
 
-| Put this | here |
-|---|---|
-| your disc's `PS3_GAME` folder | `GT5/vfs/PS3_GAME` |
-| the decrypted executable | `GT5/input/EBOOT.elf` |
-| `dev_flash` | `GT5/dev_flash` |
+**2. Get RPCS3**
 
-and run `bash setup.sh` again. It checks everything, says exactly what's still missing, and once all
-is in place it generates the game code from your `EBOOT.elf` and builds `GT5/build-linux/gt5` (20 to
-60 minutes the first time).
+Download and open the Linux AppImage from [RPCS3 downloads](https://rpcs3.net/download).
+RPCS3 is a free PS3 emulator, used here to extract firmware and decrypt the game executable.
+You can close it once those jobs are done.
+
+**3. Prepare the PS3 firmware**
+
+Download `PS3UPDAT.PUP` from [Sony's PS3 system software page](https://www.playstation.com/support/hardware/ps3/system-software/).
+In RPCS3, choose **File > Install Firmware** and select that file. Once installation finishes,
+copy the extracted firmware:
+
+```bash
+mkdir -p GT5/dev_flash
+cp -a ~/.config/rpcs3/dev_flash/. GT5/dev_flash/
+```
+
+If RPCS3 stores `dev_flash` elsewhere, use that location instead. The result must contain
+`GT5/dev_flash/sys`, without an extra `dev_flash` folder inside it.
+
+**4. Copy the game data**
+
+Copy the whole `PS3_GAME` folder from your disc dump:
+
+```bash
+mkdir -p GT5/vfs/PS3_GAME
+cp -a "/path/to/your/disc/PS3_GAME/." GT5/vfs/PS3_GAME/
+```
+
+The result must contain `GT5/vfs/PS3_GAME/USRDIR`, without an extra `PS3_GAME` folder inside it.
+
+**5. Decrypt the game executable**
+
+In RPCS3, choose **Utilities > Decrypt PS3 Binaries** and select your disc dump's
+`PS3_GAME/USRDIR/EBOOT.BIN`. Copy the decrypted output to `GT5/input/EBOOT.elf`:
+
+```bash
+mkdir -p GT5/input
+cp "/path/to/decrypted/EBOOT.elf" GT5/input/EBOOT.elf
+```
+
+Use the file produced by decryption; renaming the encrypted `EBOOT.BIN` does not decrypt it.
+For a game update, follow [Game updates](#game-updates-2xx) to keep the executable and data matched.
+
+**6. Check and build**
+
+Expected layout (other files omitted):
+
+```text
+GT5/dev_flash/sys/
+GT5/input/EBOOT.elf
+GT5/vfs/PS3_GAME/PARAM.SFO
+GT5/vfs/PS3_GAME/USRDIR/GT.VOL
+```
+
+Check the files, then build:
+
+```bash
+bash setup.sh --no-build
+# Once everything is in place:
+bash setup.sh
+```
+
+If the check reports `[missing]`, follow its message and rerun it before building.
+The first build takes about 20 to 60 minutes and produces `GT5/build-linux/gt5`.
 
 ### Play
 
@@ -505,6 +554,19 @@ bash setup.sh
 
 It re-patches ps3recomp, re-generates the game code only when the new version needs it, and rebuilds
 only what changed. Your saves (`GT5/gamedata`, `GT5/hdd0`) and game files stay.
+
+### Linux testing status
+
+**How far it's been tested (12 Nov 2026):** on Ubuntu 24.04 with no graphics card at all (Mesa's
+software Vulkan driver, on a virtual display), so speed and the picture on a real GPU are untested.
+`setup.sh` ran the whole setup from a fresh clone: tools, ps3recomp, the game code (the same code the
+Windows setup generates, checked file by file) and the build. The game boots, does the first-start
+screens and saves them, and reaches the top menu with its 3D scene, GT Mode (My Home), and Arcade
+through track select, car select (the 3D car), colour and the pre-race screen with the 3D track.
+**The race itself stayed black** in that test. The same race does draw with this renderer on a real
+graphics card (checked on Windows), so that was the software driver. If you have a Linux PC with a graphics card, please
+[tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml)
+(attach `GT5/logs/play.err`).
 
 ### Not there yet on Linux
 
@@ -558,13 +620,17 @@ The Windows build under **Proton** is untried too. Direct3D 12 would go through 
 
 ## 🧰 Requirements
 
-- Windows 10 or 11 (x64) and a Direct3D 12 graphics card.
-- Visual Studio 2022 with *Desktop development with C++* and *C++ Clang tools for Windows*
-  (provides clang-cl, CMake and Ninja), or the same tools without Visual Studio (see just below).
+- **Windows:** Windows 10 or 11 (x64) and a Direct3D 12 graphics card. Build with Visual Studio 2022
+  with *Desktop development with C++* and *C++ Clang tools for Windows*, or use the
+  [standalone tools](#no-visual-studio).
+- **Linux (experimental):** an x86-64 distribution with FFmpeg 6.1 or newer (such as Ubuntu 24.04
+  or Linux Mint 22), and a Vulkan-compatible GPU with a Vulkan driver. Follow the
+  [Linux setup](#linux) to install build dependencies and prepare the game.
+- An AVX2-capable CPU and 16 GB of RAM for the first build.
 - Python 3.11 or newer, and Git.
-- About 25 GB free: the game files are about 17 GB, the build a few more.
+- About 25 GB free on Windows or 30 GB on Linux, including about 17 GB of game files.
 - Your own GT5 disc (BCES00569, BCUS98114 or BCAS20108) and the means to dump it, and
-  [RPCS3](https://rpcs3.net) to install PS3 firmware and decrypt the game's executable.
+  [RPCS3](https://rpcs3.net/download) to install PS3 firmware and decrypt the game's executable.
 
 <a id="no-visual-studio"></a>
 
