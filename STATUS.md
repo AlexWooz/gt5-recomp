@@ -104,6 +104,8 @@ performance matters more than the graphics card.
 ## ⚠️ Known issues
 
 - The first visit to a scene stutters while its shaders compile; later visits load them from the cache.
+  New shaders compile on up to 8 threads since 13 Nov, which made those stutters about three times
+  shorter (a race start with about 340 new shaders: 3.4 s instead of 12.2 s).
 - Online features don't work.
 - Some graphics glitches remain. If a track looks wrong, please
   [report it](https://github.com/MormonFTP-hub/gt5-recomp/issues/new/choose) with the track, its time
