@@ -247,7 +247,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 
 | Question | Short answer |
 |---|---|
-| Steering wheels? | 🧪 New, not yet tried on a real wheel: [wheel owners wanted](#faq) |
+| Steering wheels? | 🧪 Tested on a Genius Speed Wheel 3 Vibration (`0458:3017`, reported by brocolison): attaches as an emulated G27 using `PS3_WHEEL=0458:3017`; Logitech/Thrustmaster/Fanatec auto-detect |
 | Force feedback? | 🧪 New, with wheel support, also untried on a real wheel |
 | Widescreen (16:9)? | ✅ Yes, GT5 is a 16:9 game |
 | Ultrawide (21:9, 32:9)? | ✅ New: a wider view, with the HUD kept 16:9 in the middle |
