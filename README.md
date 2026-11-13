@@ -7,6 +7,7 @@
   <img src="https://img.shields.io/badge/Europe_BCES00569-tested-2E8BFF?style=for-the-badge" alt="Europe BCES00569: tested">
   <img src="https://img.shields.io/badge/US_BCUS98114-works_(players)-2E8BFF?style=for-the-badge" alt="US BCUS98114: works, run by players">
   <img src="https://img.shields.io/badge/Windows_x64-Direct3D_12-5CC8FF?style=for-the-badge" alt="Windows x64, Direct3D 12">
+  <img src="https://img.shields.io/badge/Linux_x64-Vulkan_(early)-5CC8FF?style=for-the-badge" alt="Linux x64, Vulkan (early)">
   <img src="https://img.shields.io/badge/license-MIT-E8312F?style=for-the-badge" alt="MIT license">
   <a href="https://discord.gg/9cVPS7r5Ha"><img src="https://img.shields.io/badge/Discord-join_the_Workshop-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord: join the Workshop"></a>
 </p>
@@ -557,6 +558,12 @@ The Windows build under **Proton** is untried too. Direct3D 12 would go through 
 <a id="requirements"></a>
 
 ## 🧰 Requirements
+
+**On Linux** (x86-64, new and early): a graphics driver with Vulkan, your own game files, and about 25 GB
+free. `bash setup.sh --install-deps` installs the build tools (Git, Python, Clang, CMake, Ninja, and the SDL2,
+Vulkan and FFmpeg development files) with apt, dnf, pacman or zypper; everything else is in the [Linux](#linux) section. The list below is for Windows.
+
+**On Windows:**
 
 - Windows 10 or 11 (x64) and a Direct3D 12 graphics card.
 - Visual Studio 2022 with *Desktop development with C++* and *C++ Clang tools for Windows*

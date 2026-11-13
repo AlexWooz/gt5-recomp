@@ -9,7 +9,8 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
-🎁 **DLC works, offline, with your own licences** (US release, update 2.17)
+🎁 **DLC works, offline, with your own licences** (US release, update 2.17; a community pull request by
+AlexWooz, #25)
 - The gift cars arrive in the garage, and every pack (Racing Car Pack, Car Packs 2 and 3, the 2012
   car packs, Course Pack, Speed Test, Twin Ring Motegi) is in Downloadable Content > Purchased
   Content and installs. What the game needed:
@@ -25,7 +26,11 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
     vouchers' folder: the game opens every file there.
 - Only DLC you bought unlocks. Tested on new saves: without the licence keys, or without the DLC
   files, the game shows no purchased content and no gift cars.
-- How to install it: README, [DLC](README.md#dlc). Players without DLC see no change.
+- How to install it: README, [DLC](README.md#dlc). Players without DLC see no change: on the European
+  disc a race runs as before, the game opens no DLC files, and its PSN calls are the same as in v0.1.30.
+
+📖 **README: Linux in Requirements** (asked in #20)
+- Requirements now start with what the Linux build needs, and a Linux badge sits next to the Windows one.
 
 🏷️ Released as **v0.1.30**
 
