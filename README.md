@@ -101,7 +101,8 @@ launcher: every setting in one window, then **Play**. No more editing `play.bat`
 - **Updates:** shows your version and the newest one with what's new, and **Update now** does the
   whole update for you and opens the launcher again.
 - **Help:** **Save logs for a report** puts your logs on the desktop as `.txt` files GitHub accepts,
-  plus the logs folder, the problem form and this FAQ.
+  plus the logs folder, the problem form, this FAQ and **Clear the shader cache** (also
+  `ClearShaders.bat` in the install folder; see the FAQ).
 
 It's built on your PC from [`launcher/GT5Launcher.cs`](launcher/GT5Launcher.cs) with the C# compiler that
 comes with Windows, every time the game is built, so it updates with the game; its picture is the logo
@@ -267,6 +268,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Ready-made download? | ❌ No, but [GT5-Installer.bat](#install) builds it for you |
 | Errors during setup? | 🛠️ Use [GT5-Installer.bat](#install), or run `setup.ps1` (see below) |
 | Black screen, `draws: 0`? | 🛠️ Fixed: update; if it's still black, `GT.VOL` may be missing or in pieces (see below) |
+| Clear or refresh the shaders? | ✅ New: launcher **Help > Clear the shader cache**, or double-click `ClearShaders.bat` (see below) |
 
 **Q: Does it support steering wheels and force feedback?**
 
@@ -429,6 +431,17 @@ line in it starting with `[d3d-fail]` says what failed, and that decides the fix
 it in a `.zip`) and drag it into the issue. The installer's `GT5-Installer.log` attaches as it is. For a
 graphics problem, also say the mode, the track and its time or weather (for example Arcade, Chamonix,
 snow): some problems show on one track and not another.
+
+**Q: How do I clear the shader cache?**
+
+**A: Launcher, Help, Clear the shader cache, or double-click `ClearShaders.bat` in your install
+folder (close the game first).** The game turns each of GT5's shaders into a PC shader the first time
+it's needed and keeps the result in `GT5\scratch\rsx_shader_cache_v2` (on Linux `GT5/shadercache`), so
+the next visit doesn't stutter. Clearing it frees the space (it grows with every car and track you
+see) and gives a fresh start; the first visit to each menu, car and track then stutters again for a
+while. It can't fix or cause a wrong picture: a cached shader is only used for exactly the same
+source, so a game update, a mod or a new version of the port never picks up an old one by mistake.
+Saves, settings and game files are not touched. On Linux, delete `GT5/shadercache` by hand.
 
 **Q: Is this legal? Do I need the game?**
 

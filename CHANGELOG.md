@@ -9,6 +9,21 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🏷️ Released as **v0.1.37**
+
+🧹 **Clear the shader cache from the launcher** (asked for on Discord)
+- Launcher, Help, **Clear the shader cache**, or double-click the new `ClearShaders.bat` in the install
+  folder, with the game closed. It says how many files and how much space first, then deletes the
+  compiled shaders in `GT5\scratch\rsx_shader_cache_v2` (and the Linux build's `GT5/shadercache`) and
+  nothing else: saves, settings and game files stay.
+- The game compiles its shaders again as it needs them, so the first visit to each menu, car and track
+  stutters again for a while, as after a fresh install. Use it to free the space (the cache grows with
+  every car and track you see) or for a fresh start.
+- It doesn't change what's drawn: a cached shader is only ever used for exactly the same source, so a
+  game update, a mod or a new version of the port never picks up an old one.
+- The launcher gets the button when you update (Update rebuilds it). README, FAQ: "How do I clear the
+  shader cache?"
+
 🏷️ Released as **v0.1.36**
 
 🏁 **The GT5 Master Mod runs** (Nenkai's, 1.9.2 on update 2.11, US release; reported on Discord by

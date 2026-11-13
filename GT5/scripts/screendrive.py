@@ -277,7 +277,28 @@ def drive(a):
             press(a.pad, CROSS, 4000)
             pressed_at = now
             race_at = race_at or now
-        if race_at and a.gate and a.capture in ("race", "both") and not captured and now - race_at >= 20:
+        if race_at and a.race_keys:
+            # --race-keys: in the race, press a button (with the accelerator still held) at a set time,
+            # e.g. to change the camera, then go back to holding the accelerator.
+            for n, item in enumerate(a.race_keys.split(",")):
+                secs, _, keys = item.partition(":")
+                if tries.get("race_key%d" % n) or now - race_at < float(secs):
+                    continue
+                tries["race_key%d" % n] = 1
+                mask = CROSS
+                for key in keys.split("+"):
+                    mask |= MASK[key]
+                say("race key %s" % keys)
+                press(a.pad, mask, 6)
+                time.sleep(1.5)
+                press(a.pad, CROSS, 4000)
+                pressed_at = now
+                time.sleep(2.0)
+                shot = newest(a.dir)
+                if shot is not None:
+                    shot.save(os.path.join(a.dir, "race_key%02d_%s.png" % (n, keys)))
+                break
+        if race_at and a.gate and a.capture in ("race", "both") and not captured and now - race_at >= a.capture_at:
             capture("race")
             captured = True
         if race_at and a.prof and not profiled and now - race_at >= 30:
@@ -316,6 +337,9 @@ if __name__ == "__main__":
     p.add_argument("--skip-movie", type=float, default=0, help="press Cross at this many seconds to skip the opening movie; menus are not read before it")
     p.add_argument("--capture", default="", help="car, race or both")
     p.add_argument("--end-after", type=float, default=0, help="stop the game this long after the race starts")
+    p.add_argument("--race-keys", default="", help="in the race, <seconds>:<button>[+<button>] presses with the"
+                   " accelerator held, e.g. 15:select to change the camera; a frame is kept after each")
+    p.add_argument("--capture-at", type=float, default=20, help="seconds into the race for --capture race")
     p.add_argument("--track-keys", default="", help="buttons pressed on the track list before Cross, e.g. up,right,down;"
                    " wait pauses. The first press only wakes the cursor. Tsukuba: wait,wait,up,wait,select,right,cross,wait,wait,select,right,right,right,right")
     p.add_argument("--key-gap", type=float, default=2.5, help="seconds after each --track-keys press")

@@ -189,6 +189,12 @@ namespace Gt5Launcher
             { "help.save", new[] { "Save logs for a report", "保存日志用于报告" } },
             { "help.saved", new[] { "Saved to your desktop as {0}. Attach it to your report (GitHub accepts .txt).", "已保存到桌面：{0}。请附加到报告中（GitHub 接受 .txt）。" } },
             { "help.report", new[] { "Report a problem", "报告问题" } },
+            { "help.shaders", new[] { "Clear the shader cache", "清除着色器缓存" } },
+            { "shaders.ask", new[] { "Delete the shader cache ({0} files, {1:0} MB)?\n\nThe game compiles its shaders again as it needs them, so the first visit to each menu, car and track stutters again for a while, as after a fresh install. Saves, settings and game files are not touched.", "删除着色器缓存（{0} 个文件，{1:0} MB）？\n\n游戏会在需要时重新编译着色器，因此每个菜单、车辆和赛道第一次出现时会再次短暂卡顿，就像刚安装时一样。存档、设置和游戏文件不受影响。" } },
+            { "shaders.empty", new[] { "The shader cache is already empty.", "着色器缓存已经是空的。" } },
+            { "shaders.done", new[] { "Shader cache cleared. The game compiles its shaders again as you play.", "已清除着色器缓存。游戏会在你游玩时重新编译着色器。" } },
+            { "shaders.partly", new[] { "Some files couldn't be deleted: close the game and try again.", "部分文件无法删除：请关闭游戏后重试。" } },
+            { "shaders.running", new[] { "The game is running: close it first.", "游戏正在运行：请先关闭游戏。" } },
             { "help.readme", new[] { "Read the FAQ", "常见问题" } },
             { "help.changes", new[] { "Changelog", "更新日志" } },
             { "help.versions", new[] { "Version history", "版本历史" } },
@@ -724,6 +730,7 @@ namespace Gt5Launcher
                 new[] { "help.save", "save" }, new[] { "help.logs", "logs" }, new[] { "help.report", "https://github.com/MormonFTP-hub/gt5-recomp/issues/new/choose" },
                 new[] { "help.readme", "https://github.com/MormonFTP-hub/gt5-recomp#faq" }, new[] { "help.versions", "https://github.com/MormonFTP-hub/gt5-recomp/blob/main/VERSIONS.md" },
                 new[] { "help.changes", "https://github.com/MormonFTP-hub/gt5-recomp/blob/main/CHANGELOG.md" },
+                new[] { "help.shaders", "shaders" },
             };
             foreach (var l in links)
             {
@@ -742,6 +749,7 @@ namespace Gt5Launcher
             try
             {
                 if (what == "logs") { Directory.CreateDirectory(P.Logs); Process.Start("explorer.exe", "\"" + P.Logs + "\""); return; }
+                if (what == "shaders") { ClearShaderCache(); return; }
                 if (what == "save")
                 {
                     string desk = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
@@ -759,6 +767,32 @@ namespace Gt5Launcher
                 Process.Start(what);
             }
             catch (Exception e) { MessageBox.Show(this, e.Message, "GT5"); }
+        }
+
+        // The compiled-shader cache (ClearShaders.bat does the same): GT5\scratch\rsx_shader_cache_v*, and the Linux
+        // build's GT5\shadercache. It only saves compile time (a shader is reused only for the exact same source), so
+        // clearing it is safe; the game compiles what it needs again.
+        void ClearShaderCache()
+        {
+            if (GameRunning() || running) { MessageBox.Show(this, T.Get("shaders.running"), "GT5"); return; }
+            var dirs = new List<string>();
+            string scratch = Path.Combine(P.Gt5, "scratch");
+            if (Directory.Exists(scratch)) dirs.AddRange(Directory.GetDirectories(scratch, "rsx_shader_cache_v*"));
+            string vk = Path.Combine(P.Gt5, "shadercache");
+            if (Directory.Exists(vk)) dirs.Add(vk);
+            long bytes = 0; int files = 0;
+            foreach (var d in dirs)
+                foreach (var f in Directory.GetFiles(d, "*", SearchOption.AllDirectories))
+                {
+                    files++;
+                    try { bytes += new FileInfo(f).Length; } catch { }
+                }
+            if (files == 0) { MessageBox.Show(this, T.Get("shaders.empty"), "GT5"); return; }
+            if (MessageBox.Show(this, string.Format(T.Get("shaders.ask"), files, bytes / 1048576.0), "GT5",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            int left = 0;
+            foreach (var d in dirs) { try { Directory.Delete(d, true); } catch { left++; } }
+            MessageBox.Show(this, T.Get(left == 0 ? "shaders.done" : "shaders.partly"), "GT5");
         }
 
         // -- version and updates --
