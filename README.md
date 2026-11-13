@@ -524,6 +524,14 @@ Logs go to `GT5/logs` (`play.err` is the one to attach to a report). Settings: t
 `GT5/play.sh` (full screen, resolution, watch mode), or your own `export NAME=value` lines in
 `GT5/settings.sh`, which win and survive updates.
 
+Full screen, kept across updates (thanks, melroy89):
+
+```bash
+echo 'export PS3RECOMP_VK_FULLSCREEN=1' >> GT5/settings.sh
+```
+
+Or just once: `PS3RECOMP_VK_FULLSCREEN=1 bash GT5/play.sh`.
+
 Controls: any controller SDL2 knows (DualSense, DualShock 4, Xbox, 8BitDo, the Steam Deck's own
 controls through Steam Input), or the keyboard as on Windows: Z = Cross, X = Circle, A = Square,
 S = Triangle, Q/W = L1/R1, 1/2 = L2/R2, arrows = D-pad, Enter = Start, Tab = Select, Esc = quit.
@@ -547,7 +555,15 @@ Windows setup generates, checked file by file) and the build. The game boots, do
 screens and saves them, and reaches the top menu with its 3D scene, GT Mode (My Home), and Arcade
 through track select, car select (the 3D car), colour and the pre-race screen with the 3D track.
 **The race itself stayed black** in that test. The same race does draw with this renderer on a real
-graphics card (checked on Windows), so that was the software driver. If you have a Linux PC with a graphics card, please
+graphics card (checked on Windows), so that was the software driver.
+
+**First test on a real graphics card (13 Nov 2026, melroy89, [#20](https://github.com/MormonFTP-hub/gt5-recomp/issues/20)):**
+Linux Mint 22.3, Threadripper 7960X, Radeon RX 7900 XTX. `setup.sh` and the build went through, the
+menus draw correctly, an Xbox controller works out of the box, and there were no crashes or frame drops.
+Still wrong there: races draw in the top half of the picture, the intro's 3D scene has white textures,
+and sound effects play late (see below).
+
+If you have a Linux PC with a graphics card, please
 [tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml)
 (attach `GT5/logs/play.err`).
 
@@ -559,7 +575,9 @@ graphics card (checked on Windows), so that was the software driver. If you have
 - The Vulkan renderer is younger than the Windows one; picture bugs the Windows build fixed may
   still show here. Please report them with a screenshot.
 - Races are drawn squashed into the top half of the picture (seen on Windows and Android with the
-  same renderer); a fix is on the way.
+  same renderer, and on a Radeon RX 7900 XTX under Linux); a fix is on the way.
+- Sound effects (menu clicks, the countdown, engines) can play 30 seconds or more late. Not seen on
+  Windows; being looked into.
 - Movies and the on-screen keyboard (naming a save, Course Maker) are untried on Linux.
 
 <a id="steam-deck"></a>

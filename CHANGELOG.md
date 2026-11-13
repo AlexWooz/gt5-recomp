@@ -9,6 +9,14 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+📖 **README, Linux: the first test on a real graphics card** (melroy89, Radeon RX 7900 XTX, Linux Mint
+22.3, #20)
+- Setup, the build, the menus and an Xbox controller work, with no crashes. Races still draw in the
+  top half of the picture, the intro's 3D scene has white textures, and sound effects play late: all
+  listed under "Not there yet on Linux".
+- How to turn on full screen so it survives updates: `export PS3RECOMP_VK_FULLSCREEN=1` in
+  `GT5/settings.sh`.
+
 📖 **README: the Linux setup in five steps** (a pull request by melroy89, #27)
 - Install the build tools, get the firmware with RPCS3, copy the disc's `PS3_GAME`, decrypt the
   executable, then check and build, each with commands to copy, plus the file layout to expect.
