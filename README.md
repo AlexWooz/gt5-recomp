@@ -558,11 +558,34 @@ The Windows build under **Proton** is untried too. Direct3D 12 would go through 
 
 - Windows 10 or 11 (x64) and a Direct3D 12 graphics card.
 - Visual Studio 2022 with *Desktop development with C++* and *C++ Clang tools for Windows*
-  (provides clang-cl, CMake and Ninja).
+  (provides clang-cl, CMake and Ninja), or the same tools without Visual Studio (see just below).
 - Python 3.11 or newer, and Git.
 - About 25 GB free: the game files are about 17 GB, the build a few more.
 - Your own GT5 disc (BCES00569, BCUS98114 or BCAS20108) and the means to dump it, and
   [RPCS3](https://rpcs3.net) to install PS3 firmware and decrypt the game's executable.
+
+<a id="no-visual-studio"></a>
+
+### No Visual Studio? (less space on C:)
+
+Visual Studio puts several GB on C:. `get-toolchain.ps1` gets the same compiler tools without it, all in
+one folder you choose, on any drive. In the `gt5-recomp` folder, in PowerShell:
+
+```
+powershell -ExecutionPolicy Bypass -File get-toolchain.ps1
+```
+
+- It suggests a `toolchain` folder next to `gt5-recomp`. Type another folder to put it somewhere else,
+  for example on a second drive.
+- It downloads about 1.5 GB and keeps about 1.5 GB: LLVM 19.1.5 (clang-cl), CMake and Ninja from
+  their official GitHub pages, and Microsoft's C++ libraries and Windows SDK, fetched from Microsoft by
+  [mmozeiko's portable-msvc.py](https://gist.github.com/mmozeiko). Every download is checked.
+- Microsoft's part comes under Microsoft's licence. The script shows you the link and only goes on when
+  you type `yes`.
+- No administrator rights, and nothing is installed into Windows. To remove the tools, delete the folder.
+
+Then run `setup.ps1` as usual (it also offers to run `get-toolchain.ps1` when it finds no Visual Studio).
+When there's no Visual Studio, the build uses these tools.
 
 <a id="which-copy-of-gt5"></a>
 

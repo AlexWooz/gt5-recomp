@@ -7,6 +7,43 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 > or repeated frames (fixed on 4 Nov and 9 Nov), so treat them as rough before-and-after comparisons.
 > From 9 Nov on, numbers are the game's own frames.
 
+## 13 Nov 2026
+
+🏷️ Released as **v0.1.28**
+
+🚀 **About 10% faster on small CPUs**
+- Measured on 4 of the test PC's efficient cores, where the CPU is the limit as on a laptop, with
+  nothing else running and five races per build. They averaged 29.6 game frames a second, against 26.9
+  before. The CPU time the game needs per frame fell from about 150 ms to about 135 ms. Single races
+  vary a lot (21-33), so expect the gain on average, not in every race. Fast desktop CPUs, already near
+  the game's 60, change little.
+- **Waits that no longer spin:** GT5's threads wait for SPU results by "yielding" in a loop. On a CPU
+  with few cores that loop spins at full speed, because nothing else is queued on its core, and on a
+  laptop it eats the power the other game threads need. When the game may use 8 logical CPUs or fewer,
+  a thread that keeps yielding now naps 50 microseconds on a high-resolution timer. The same goes for an
+  SPU program re-reading memory while it waits. The idea comes from Hookshot (the Ocarina of Time recomp
+  for Switch 2), which measured the same kind of gain. `PS3_YIELD_NAP=0` turns it off, `=1` turns it on
+  on any CPU.
+- **Four speed-ups from the upstream ps3recomp project (v0.19.0):**
+  - SPU memory reads and writes in one instruction each (#637);
+  - PPU vector multiply-add without a maths-library call per lane (#674);
+  - per-thread caches for function lookups (#634);
+  - lock-line waits that sleep after about 1 ms (#666).
+- For testers: `SPURS_DISPATCH_STATS=1` prints how often each SPU workload runs and how long, every 5 s.
+
+🧰 **Build without Visual Studio** ([#22](https://github.com/MormonFTP-hub/gt5-recomp/issues/22))
+- `get-toolchain.ps1` gets the same compiler tools as Visual Studio, in one folder on any drive you
+  choose: LLVM 19.1.5 (clang-cl), CMake and Ninja from their official GitHub pages, and Microsoft's C++
+  libraries and Windows SDK through mmozeiko's portable-msvc.py.
+- It downloads about 1.5 GB and keeps about 1.5 GB. No administrator rights, nothing installed into
+  Windows, and every download is checked against a pinned hash.
+- Microsoft's part comes under Microsoft's licence: the script shows the link and goes on only when you
+  type `yes`.
+- `setup.ps1` offers it when it finds no Visual Studio. The build uses Visual Studio when it's there,
+  and these tools otherwise.
+- Tested by building the game with Visual Studio hidden. The step that fetches Microsoft's part is
+  the one piece not run here, so please report how it goes.
+
 ## 12 Nov 2026
 
 🏷️ Released as **v0.1.27**

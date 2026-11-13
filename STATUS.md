@@ -77,11 +77,13 @@ performance matters more than the graphics card.
   **If it still happens to you:** attach that run's log to #10: `GT5\logs\play.err`, or
   `GT5\logs\play.prev.err` once you've started the game again (since v0.1.10 each start keeps the
   previous log); a line starting with `[d3d-fail]` says what failed.
-- More speed on 4-6 core CPUs and laptops. Measured on 6 slow cores of the tested rig: races at about
-  22 game frames a second, and the CPU wasn't even full, so it's the game's own threads handing work to
-  each other, not the drawing, that sets the pace there (drawing half the frames gave about 10%). A
-  player's Ryzen 5 3600 showed the same: the launcher's 30 fps setting halved the frames drawn and left
-  the game's speed unchanged, so it's no longer picked by itself. That's what's being looked at next.
+- More speed on 4-6 core CPUs and laptops. On 6 of the tested rig's efficient cores, with nothing else
+  running, races hold 49-55 game frames a second (an earlier "about 22" was measured while another game
+  shared the graphics card). Laptops do much worse: a tester's i5-1135G7 races at about 13, with its CPU
+  at its power limit. The work now is cutting the CPU the game needs per frame (about 100 ms of CPU
+  time per frame today, spread over its threads), and threads that spin while they wait. A player's
+  Ryzen 5 3600 showed that drawing fewer frames doesn't help there: the launcher's 30 fps setting
+  halved the frames drawn and left the game's speed unchanged, so it's no longer picked by itself.
   Laptops now draw on their dedicated graphics card (v0.1.20).
 - Shorter shader-compile stutter the first time a scene is seen
 
@@ -107,6 +109,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
+- **13 Nov 2026:** about 10% faster on small CPUs and laptops: waits that no longer spin a core, plus
+  four speed-ups from the upstream ps3recomp project (v0.1.28).
 - **12 Nov 2026:** a native Linux build, new and early (`setup.sh`, `GT5/play.sh`); the opening movie is skipped, so it can't freeze the first start (v0.1.21);
   laptops draw on their dedicated graphics card, and the launcher has a **Speed**
   setting (30 fps, for a graphics card at its limit) (v0.1.20); a black screen from a split or missing `GT.VOL` is

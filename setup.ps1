@@ -54,8 +54,8 @@ elseif ($pyCmd) {
     Stop-Setup "Python is needed for the tools."
 }
 
-# ---- Visual Studio with the Clang tools (what GT5\scripts\build.cmd needs) -------------------------------
-$vsOk = Test-Path "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-cl.exe"
+# ---- Visual Studio with the Clang tools (what GT5\scripts\build.cmd needs), or get-toolchain.ps1's tools ----
+$vsOk = Test-Path "$env:ProgramFiles\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-cl.exe"
 if (-not $vsOk) {
     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
     if (Test-Path $vswhere) {
@@ -63,8 +63,28 @@ if (-not $vsOk) {
         $vsOk = $vsPath -and (Test-Path (Join-Path $vsPath "VC\Tools\Llvm\x64\bin\clang-cl.exe"))
     }
 }
+# The same tools without Visual Studio, where build.cmd looks: the folder get-toolchain.ps1 recorded, else
+# "toolchain" next to this folder.
+function Find-Toolchain {
+    $rec = Join-Path $base ".gt5\toolchain-path.txt"
+    $cands = @($env:GT5_TOOLCHAIN)
+    if (Test-Path $rec) { $cands += [Console]::OutputEncoding.GetString([IO.File]::ReadAllBytes($rec)).Trim() }
+    $cands += Join-Path (Split-Path $base -Parent) "toolchain"
+    foreach ($c in $cands) { if ($c -and (Test-Path -LiteralPath (Join-Path $c "gt5-toolchain.txt"))) { return $c } }
+}
 if ($vsOk) { Ok "Visual Studio with the C++ Clang tools" }
-else { Todo "Visual Studio 2022 with 'Desktop development with C++' and 'C++ Clang tools for Windows'" "Install the free Community edition (https://visualstudio.microsoft.com), choose that workload and tick the Clang tools under Individual components." }
+else {
+    $tc = Find-Toolchain
+    if (-not $tc) {
+        Write-Host "            Visual Studio with the C++ Clang tools isn't installed. get-toolchain.ps1 can get the same" -ForegroundColor Yellow
+        Write-Host "            compiler tools without it: about 1.5 GB in a folder you choose, on any drive (C: stays free)." -ForegroundColor Yellow
+        $a = Read-Host "            Run get-toolchain.ps1 now? (Y/N)"
+        if ("$a".Trim() -match '^[Yy]') { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $base "get-toolchain.ps1") }
+        $tc = Find-Toolchain
+    }
+    if ($tc) { Ok "Compiler tools from get-toolchain.ps1 (no Visual Studio needed), in $tc" }
+    else { Todo "Visual Studio 2022 with 'Desktop development with C++' and 'C++ Clang tools for Windows'" "Install the free Community edition (https://visualstudio.microsoft.com), choose that workload and tick the Clang tools under Individual components. Not much space on C:? Run get-toolchain.ps1 instead (README.md: No Visual Studio)." }
+}
 
 # ---- ps3recomp, patched for this version (the same step update.ps1 uses) --------------------------------
 $out = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $base "update.ps1") -Here 2>&1
