@@ -9,6 +9,18 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🌗 **Linux: race shadows read on the GPU, and the dark band ahead of the car is gone**
+- GT5 reads its 1024x2048 shadow map as a 16-bit depth texture twice a race frame. The Vulkan
+  renderer could convert depth on the GPU only for the other way GT5 reads depth, so each read
+  waited for the GPU, copied the depth back, converted it on the CPU and uploaded it again. Now a
+  compute pass rounds every depth to 16 bits on the GPU, in command order, exactly as the CPU did
+  (round(d * 65535) in 32-bit integers), into the R16 texture the texture unit samples.
+- The shadow map is drawn in three bands of 682 rows, and only the last band counted as drawn, so
+  the copy through memory carried that band alone; the other two came from stale memory, which
+  showed as a darker band a little ahead of the car. All three bands are read now.
+- On a Steam Deck in a race: time waiting for the GPU from about 1.6-2.1 to 0.7-0.9 s per 5 s, the
+  depth readbacks gone, frames about 113-143 ms.
+
 ⚡ **Linux: races about 30% faster on a Steam Deck (the CPU and GPU now work at the same time)**
 - The Vulkan renderer waited for the GPU after every batch of draws and at every present, so the
   walker idled while the GPU drew and the GPU idled while the walker recorded the next batch (a Steam
