@@ -17382,6 +17382,98 @@ diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
  #elif SPU_LS_FAST
      uint32_t w0 = SPU_BSWAP32(val._u32[0]), w1 = SPU_BSWAP32(val._u32[1]);
      uint32_t w2 = SPU_BSWAP32(val._u32[2]), w3 = SPU_BSWAP32(val._u32[3]);
+@@ -740,6 +764,49 @@
+     }
+ #endif
+     if (__builtin_expect(g_spu_ls_wdiag != 0, 0))
++        spu_ls_write_diag(ctx, lsa, val);
++}
++
++/* The same accesses for lifted code made with spu_lifter.py's register locals (the default):
++ * the local-store base and the two diagnostic gates arrive in the function's own locals, read
++ * once at its entry. spu_ls_read128/write128 reload ctx->ls and the gate words at every access,
++ * because each SPU register write was a store to ctx->gpr[] that might alias them; with the
++ * registers in C locals nothing aliases, and the access is a load, a byte swap and a store. A
++ * diagnostic armed in the middle of a function starts at the next one. */
++#if defined(__clang__) || defined(__GNUC__)
++#  define SPU_LS_INLINE static inline __attribute__((always_inline))
++#else
++#  define SPU_LS_INLINE static __forceinline
++#endif
++SPU_LS_INLINE u128 spu_ls_lq(const spu_context* ctx, const uint8_t* ls, int rdiag, uint32_t lsa)
++{
++    u128 v;
++    if (__builtin_expect(rdiag != 0, 0))
++        spu_ls_read_diag(ctx, lsa);
++    const uint8_t* p = ls + (lsa & (SPU_LS_MASK & ~0xFu));
++#if defined(__ARM_NEON)
++    vst1q_u8(v._u8, vrev32q_u8(vld1q_u8(p)));
++#elif SPU_LS_VEC
++    _mm_storeu_si128((__m128i*)v._u8, spu_ls_bswap_words(_mm_loadu_si128((const __m128i*)p)));
++#else
++    (void)p;
++    v = spu_ls_read128(ctx, lsa);
++#endif
++    return v;
++}
++SPU_LS_INLINE void spu_ls_sq(spu_context* ctx, uint8_t* ls, int wdiag, uint32_t lsa, u128 val)
++{
++    lsa &= SPU_LS_MASK & ~0xFu;
++#if defined(__ARM_NEON)
++    vst1q_u8(ls + lsa, vrev32q_u8(vld1q_u8(val._u8)));
++#elif SPU_LS_VEC
++    _mm_storeu_si128((__m128i*)(ls + lsa), spu_ls_bswap_words(_mm_loadu_si128((const __m128i*)val._u8)));
++#else
++    (void)ls;
++    spu_ls_write128(ctx, lsa, val);
++    return;
++#endif
++    if (__builtin_expect(wdiag != 0, 0))
+         spu_ls_write_diag(ctx, lsa, val);
+ }
+ 
+@@ -1044,6 +1111,41 @@
+     } while (0)
+ #endif
+ 
++/* Lifted functions made with register locals (spu_lifter.py, the default) come in two
++ * forms: NAME_sv, the code, and NAME, a thunk that calls it -- the one registered for
++ * dispatch, stored in g_spu_trampoline_fn and called by the runtime. On 64-bit Windows the
++ * code uses the System V convention: the Windows one makes xmm6-xmm15 callee-saved, so every
++ * lifted function that held SPU registers in more than six vector registers saved and
++ * restored up to ten of them, and most lifted functions are a basic block long. Lifted code
++ * calls and tail-calls the _sv forms directly; the thunk saves the registers once, on entry
++ * from the runtime. Elsewhere SPU_SV is empty and NAME_sv is the platform's own convention. */
++#if defined(_WIN64) && (defined(__clang__) || defined(__GNUC__)) && \
++    (defined(__x86_64__) || defined(_M_X64)) && !defined(SPU_NO_SYSV)
++#  define SPU_SV __attribute__((sysv_abi))
++#else
++#  define SPU_SV
++#endif
++/* Keep each thunk a call, not a second copy of the code. */
++#if defined(__clang__) && __clang_major__ >= 15
++#  define SPU_SV_CALL [[clang::noinline]]
++#else
++#  define SPU_SV_CALL
++#endif
++#ifdef SPU_DIRECT_TAILCALLS
++#define SPU_DIRECT_SV(ctx, PC, FN) do {                                       \
++        const uint32_t _dpc = (uint32_t)(PC);                                 \
++        (ctx)->pc = _dpc;                                                     \
++        if (__builtin_expect(g_spu_direct > 0, 1) && (_dpc & SPU_LS_MASK) &&  \
++            (ctx)->steps && !g_spu_stack_reset_hint[(_dpc >> 2) & 1023u] &&    \
++            !((ctx)->int_enable && ((ctx)->event_status & (ctx)->event_mask))) \
++            __attribute__((musttail)) return FN##_sv(ctx);                    \
++        g_spu_trampoline_fn = FN;                                             \
++        return;                                                               \
++    } while (0)
++#else
++#define SPU_DIRECT_SV(ctx, PC, FN) SPU_DIRECT(ctx, PC, FN)
++#endif
++
+ /* Depth-aware SPU link return (`bi $r0`): host `return` while a matched
+  * brsl/bisl frame is live (host_depth>0); at 0 the frame was destroyed (task
+  * resume / restack unwind) so dispatch to the link register instead -- faithful
 diff --git a/runtime/spu/spu_dma.h b/runtime/spu/spu_dma.h
 --- a/runtime/spu/spu_dma.h
 +++ b/runtime/spu/spu_dma.h
@@ -17442,7 +17534,35 @@ diff --git a/runtime/spu/spu_dma.h b/runtime/spu/spu_dma.h
 diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
 --- a/runtime/spu/spu_helpers.h
 +++ b/runtime/spu/spu_helpers.h
-@@ -464,13 +464,15 @@
+@@ -313,10 +313,23 @@
+ #else
+ static inline u128 spu_xor(u128 a, u128 b) { return spu_xor_ref(a, b); }
+ #endif
+-static inline u128 spu_nand(u128 a, u128 b){ u128 r; r._u64[0]=~(a._u64[0]&b._u64[0]); r._u64[1]=~(a._u64[1]&b._u64[1]); return r; }
+-static inline u128 spu_nor(u128 a, u128 b) { u128 r; r._u64[0]=~(a._u64[0]|b._u64[0]); r._u64[1]=~(a._u64[1]|b._u64[1]); return r; }
+-static inline u128 spu_andc(u128 a, u128 b){ u128 r; r._u64[0]=a._u64[0]&~b._u64[0]; r._u64[1]=a._u64[1]&~b._u64[1]; return r; }
+-static inline u128 spu_orc(u128 a, u128 b) { u128 r; r._u64[0]=a._u64[0]|~b._u64[0]; r._u64[1]=a._u64[1]|~b._u64[1]; return r; }
++static inline u128 spu_nand_ref(u128 a, u128 b){ u128 r; r._u64[0]=~(a._u64[0]&b._u64[0]); r._u64[1]=~(a._u64[1]&b._u64[1]); return r; }
++static inline u128 spu_nor_ref(u128 a, u128 b) { u128 r; r._u64[0]=~(a._u64[0]|b._u64[0]); r._u64[1]=~(a._u64[1]|b._u64[1]); return r; }
++static inline u128 spu_andc_ref(u128 a, u128 b){ u128 r; r._u64[0]=a._u64[0]&~b._u64[0]; r._u64[1]=a._u64[1]&~b._u64[1]; return r; }
++static inline u128 spu_orc_ref(u128 a, u128 b) { u128 r; r._u64[0]=a._u64[0]|~b._u64[0]; r._u64[1]=a._u64[1]|~b._u64[1]; return r; }
++/* The 64-bit halves above made clang split a register into scalar pieces wherever one of
++ * these met a vector op (an andc of two compares cost about ten moves between register files). */
++#if SPU_X86
++static inline u128 spu_nand(u128 a, u128 b) { return spu__xs(_mm_xor_si128(_mm_and_si128(spu__xl(a), spu__xl(b)), _mm_set1_epi32(-1))); }
++static inline u128 spu_nor(u128 a, u128 b)  { return spu__xs(_mm_xor_si128(_mm_or_si128(spu__xl(a), spu__xl(b)), _mm_set1_epi32(-1))); }
++static inline u128 spu_andc(u128 a, u128 b) { return spu__xs(_mm_andnot_si128(spu__xl(b), spu__xl(a))); }
++static inline u128 spu_orc(u128 a, u128 b)  { return spu__xs(_mm_or_si128(spu__xl(a), _mm_xor_si128(spu__xl(b), _mm_set1_epi32(-1)))); }
++#else
++static inline u128 spu_nand(u128 a, u128 b) { return spu_nand_ref(a, b); }
++static inline u128 spu_nor(u128 a, u128 b)  { return spu_nor_ref(a, b); }
++static inline u128 spu_andc(u128 a, u128 b) { return spu_andc_ref(a, b); }
++static inline u128 spu_orc(u128 a, u128 b)  { return spu_orc_ref(a, b); }
++#endif
+ static inline u128 spu_andi_ref(u128 a, int32_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]&(uint32_t)imm; return r; }
+ #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
+ static inline u128 spu_andi(u128 a, int32_t imm) {
+@@ -464,21 +477,25 @@
  #if defined(__SSE4_1__)
  #include <smmintrin.h>
  /* pshufb version: one of the hottest SPU ops (~11% of GH3's FMOD mixer task
@@ -17459,20 +17579,93 @@ diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
      __m128i A, B, C; memcpy(&A, &a, 16); memcpy(&B, &b, 16); memcpy(&C, &c, 16);
 -    A = _mm_shuffle_epi8(A, sw); B = _mm_shuffle_epi8(B, sw); C = _mm_shuffle_epi8(C, sw);
 -    const __m128i idx = _mm_and_si128(C, _mm_set1_epi8(0x0F));
-+    const __m128i idx = _mm_xor_si128(_mm_and_si128(C, _mm_set1_epi8(0x0F)), _mm_set1_epi8(3));
-     const __m128i fromb = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8(0x10)), _mm_set1_epi8(0x10));
-     __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx), fromb);
-     /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
-@@ -478,7 +480,7 @@
-     const __m128i mC0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xC0)), _mm_set1_epi8((char)0xC0));
-     const __m128i mE0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xE0)), _mm_set1_epi8((char)0xE0));
-     const __m128i special = _mm_blendv_epi8(mC0, _mm_set1_epi8((char)0x80), mE0);
+-    const __m128i fromb = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8(0x10)), _mm_set1_epi8(0x10));
+-    __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx), fromb);
+-    /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
+-    const __m128i m80 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0x80)), _mm_set1_epi8((char)0x80));
+-    const __m128i mC0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xC0)), _mm_set1_epi8((char)0xC0));
+-    const __m128i mE0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xE0)), _mm_set1_epi8((char)0xE0));
+-    const __m128i special = _mm_blendv_epi8(mC0, _mm_set1_epi8((char)0x80), mE0);
 -    r = _mm_shuffle_epi8(_mm_blendv_epi8(r, special, m80), sw);
-+    r = _mm_blendv_epi8(r, special, m80);
++    /* pshufb reads bits 0-3 of the index (^ 3: the host byte) and bit 7, which gives 0: so a
++     * special selector (0x80 and up) selects 0 from both, and its value can be ORed in. */
++    const __m128i idx = _mm_xor_si128(C, _mm_set1_epi8(3));
++    __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx),
++                                _mm_slli_epi16(C, 3));                 /* selector bit 4: from b */
++    /* Special selectors by their high nibble: 8-B (10x) -> 0x00, C-D (110) -> 0xFF, E-F (111)
++     * -> 0x80; 0-7 are ordinary selectors and OR in nothing. One lookup where the previous
++     * form took three compares and two more blends. */
++    const __m128i lut = _mm_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
++                                      (char)0xFF, (char)0xFF, (char)0x80, (char)0x80);
++    r = _mm_or_si128(r, _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(C, 4), _mm_set1_epi8(0x0F))));
      u128 out; memcpy(&out, &r, 16); return out;
  }
  #elif defined(__ARM_NEON)
-@@ -1041,6 +1043,7 @@
+@@ -552,13 +569,25 @@
+ #endif
+ 
+ /* ---- shift / rotate immediate (word lanes) ---- */
+-static inline u128 spu_shli(u128 a, int sh)  { u128 r; sh&=0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); return r; }
+-static inline u128 spu_shlhi(u128 a, int sh) { u128 r; sh&=0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); return r; }
++static inline u128 spu_shli_ref(u128 a, int sh)  { u128 r; sh&=0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); return r; }
++static inline u128 spu_shlhi_ref(u128 a, int sh) { u128 r; sh&=0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); return r; }
+ static inline u128 spu_roti_ref(u128 a, int sh)  { u128 r; sh&=31; for(int i=0;i<4;i++) r._u32[i]= sh ? ((a._u32[i]<<sh)|(a._u32[i]>>(32-sh))) : a._u32[i]; return r; }
+ static inline u128 spu_rothi_ref(u128 a, int sh) { u128 r; sh&=15; for(int i=0;i<8;i++) r._u16[i]=(uint16_t)((a._u16[i]<<sh)|(a._u16[i]>>(16-sh))); return r; }
+-static inline u128 spu_rotmi(u128 a, int i7)  { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]>>sh); return r; }
++static inline u128 spu_rotmi_ref(u128 a, int i7)  { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]>>sh); return r; }
+ static inline u128 spu_rotmai_ref(u128 a, int i7) { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._s32[i]=(sh>31)?(a._s32[i]>>31):(a._s32[i]>>sh); return r; }
+-static inline u128 spu_rotmhi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
++static inline u128 spu_rotmhi_ref(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
++/* psll/psrl give 0 for a count past the lane width, as these instructions do. */
++#if SPU_X86
++static inline u128 spu_shli(u128 a, int sh)   { return spu__xs(_mm_sll_epi32(spu__xl(a), _mm_cvtsi32_si128(sh & 0x3F))); }
++static inline u128 spu_shlhi(u128 a, int sh)  { return spu__xs(_mm_sll_epi16(spu__xl(a), _mm_cvtsi32_si128(sh & 0x1F))); }
++static inline u128 spu_rotmi(u128 a, int i7)  { return spu__xs(_mm_srl_epi32(spu__xl(a), _mm_cvtsi32_si128((0 - i7) & 0x3F))); }
++static inline u128 spu_rotmhi(u128 a, int i7) { return spu__xs(_mm_srl_epi16(spu__xl(a), _mm_cvtsi32_si128((0 - i7) & 0x1F))); }
++#else
++static inline u128 spu_shli(u128 a, int sh)   { return spu_shli_ref(a, sh); }
++static inline u128 spu_shlhi(u128 a, int sh)  { return spu_shlhi_ref(a, sh); }
++static inline u128 spu_rotmi(u128 a, int i7)  { return spu_rotmi_ref(a, i7); }
++static inline u128 spu_rotmhi(u128 a, int i7) { return spu_rotmhi_ref(a, i7); }
++#endif
+ static inline u128 spu_shlqbyi_ref(u128 a, int sh) { u128 r=spu_zero(); sh&=0x1F; for(int i=0;i<16;i++){ int s=i+sh; if(s<16) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
+ #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
+ static inline u128 spu_shlqbyi(u128 a, int sh) {
+@@ -588,14 +617,31 @@
+  * word1<<32, but SPU's MS half is word0<<32 | word1), so native shifts on them
+  * corrupt any bits crossing a 32-bit boundary. Assemble the logical hi/lo halves
+  * with _u32[0] as most-significant, shift, then disassemble. */
+-static inline u128 spu_shlqbii(u128 a, int sh) { sh&=7; if(!sh) return a;
++static inline u128 spu_shlqbii_ref(u128 a, int sh) { sh&=7; if(!sh) return a;
+     uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
+     uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh);
+     u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
+-static inline u128 spu_rotqbii(u128 a, int sh) { sh&=7; if(!sh) return a;
++static inline u128 spu_rotqbii_ref(u128 a, int sh) { sh&=7; if(!sh) return a;
+     uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
+     uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh)|(hi>>(64-sh));
+     u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
++/* Word i takes the bits shifted out of its neighbour: word i+1 (word 0 for a rotate) is the
++ * lane above in host order. A count of 32 for the neighbour gives 0, so a shift of 0 is a copy. */
++#if SPU_X86
++static inline u128 spu_shlqbii(u128 a, int sh) {
++    const __m128i A = spu__xl(a);
++    return spu__xs(_mm_or_si128(_mm_sll_epi32(A, _mm_cvtsi32_si128(sh & 7)),
++                                _mm_srl_epi32(_mm_srli_si128(A, 4), _mm_cvtsi32_si128(32 - (sh & 7)))));
++}
++static inline u128 spu_rotqbii(u128 a, int sh) {
++    const __m128i A = spu__xl(a);
++    return spu__xs(_mm_or_si128(_mm_sll_epi32(A, _mm_cvtsi32_si128(sh & 7)),
++                                _mm_srl_epi32(_mm_shuffle_epi32(A, 0x39), _mm_cvtsi32_si128(32 - (sh & 7)))));
++}
++#else
++static inline u128 spu_shlqbii(u128 a, int sh) { return spu_shlqbii_ref(a, sh); }
++static inline u128 spu_rotqbii(u128 a, int sh) { return spu_rotqbii_ref(a, sh); }
++#endif
+ 
+ /* ---- SPU floating point --------------------------------------------------------------
+  * Written from the Cell BE SPU ISA v1.2 (section 9 and the instruction pages).
+@@ -1041,6 +1087,7 @@
   * product of two 24-bit significands is exact in double, so a compiler contracting a multiply
   * and an add into an FMA cannot change any rounding here. */
  #include <immintrin.h>
@@ -17480,7 +17673,7 @@ diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
  #define SPU__X8_INLINE static inline __attribute__((always_inline))
  #define SPU__X8_SLOW   static __attribute__((noinline, cold, unused))
  SPU__X8_INLINE __m128i spu__x8_bexp(__m128i x) { return _mm_srli_epi32(_mm_slli_epi32(x, 1), 24); }
-@@ -1105,9 +1108,70 @@
+@@ -1105,9 +1152,70 @@
      ok = _mm_and_si128(ok, pre);
      return spu__x8_all4(ok) ? spu__x8_st(r) : spu__x8_fa_fix(spu__x8_st(r), ok, a, b, negb);
  }
@@ -17553,7 +17746,7 @@ diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
      const __m128i x = spu__x8_ld(a), y = spu__x8_ld(b);
      __m128i ok, zm;
      const __m128i r = spu__x8_trunc0(_mm256_mul_pd(spu__x8_wide(x), spu__x8_wide(y)), &ok, &zm, NULL);
-@@ -1126,9 +1190,10 @@
+@@ -1126,9 +1234,10 @@
      ok = _mm_and_si128(ok, _mm_and_si128(_mm_and_si128(spu__x8_plain0(x), spu__x8_plain0(y)), spu__x8_plain0(z)));
      return spu__x8_all4(ok) ? spu__x8_st(r) : spu__x8_fma_fix(spu__x8_st(r), ok, a, b, c, negp, negc);
  }
@@ -17567,7 +17760,7 @@ diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
  #else
  static inline u128 spu_fa(u128 a, u128 b) { return spu__fa_s(a, b); }
  static inline u128 spu_fs(u128 a, u128 b) { return spu__fs_s(a, b); }
-@@ -1369,6 +1434,23 @@
+@@ -1369,6 +1478,23 @@
      if (__builtin_expect(m == 0, 1)) return f##_h_(a, b, c); \
      spu__fpcr_put(0); __asm__ volatile("" : "+m"(a), "+m"(b), "+m"(c)); u128 r = f##_h_(a, b, c); \
      __asm__ volatile("" : "+m"(r)); spu__fpcr_put(m); return r; }
@@ -17591,6 +17784,94 @@ diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
  #else
  #define SPU__DP_RN1(f) static inline u128 f(u128 a) { return f##_h_(a); }
  #define SPU__DP_RN2(f) static inline u128 f(u128 a, u128 b) { return f##_h_(a, b); }
+@@ -1765,31 +1891,60 @@
+     u128 r; r._u32[0] = 0x10111213u; r._u32[1] = 0x14151617u; r._u32[2] = 0x18191A1Bu; r._u32[3] = 0x1C1D1E1Fu;
+     return r;
+ }
+-static inline u128 spu_cbd_pos(int pos) {
++static inline u128 spu_cbd_pos_ref(int pos) {
+     u128 r = spu__ctl_base();
+     r._u8[SPU_W(pos & 0xF)] = 0x03;                 /* a's preferred byte = SPU byte 3 */
+     return r;
+ }
+-static inline u128 spu_chd_pos(int pos) {
++static inline u128 spu_chd_pos_ref(int pos) {
+     u128 r = spu__ctl_base();
+     /* SPU bytes p, p+1 (p even) are one host halfword: 0x02 at SPU p, 0x03 at p+1. */
+     r._u16[(((pos & 0xF) & ~1) >> 1) ^ 1] = 0x0203u;
+     return r;
+ }
+-static inline u128 spu_cwd_pos(int pos) {
++static inline u128 spu_cwd_pos_ref(int pos) {
+     u128 r = spu__ctl_base();
+     r._u32[((pos & 0xF) & ~3) >> 2] = 0x00010203u;   /* a SPU bytes 0..3 (preferred word) */
+     return r;
+ }
+-static inline u128 spu_cdd_pos(int pos) {
++static inline u128 spu_cdd_pos_ref(int pos) {
+     u128 r = spu__ctl_base();
+     const int w = ((pos & 0xF) & ~7) >> 2;            /* a SPU bytes 0..7 (preferred dword) */
+     r._u32[w] = 0x00010203u; r._u32[w + 1] = 0x04050607u;
+     return r;
+ }
++/* The forms above write one lane of a 16-byte value at a computed index, through memory: a
++ * narrow store and a wide load of the same bytes, which the CPU cannot forward (a stall of
++ * a dozen cycles each, and cbd/chd/cwd + shufb + stqd is how the SPU stores a scalar). */
++#if SPU_X86
++SPU__XI __m128i spu__xctl_base(void) { return _mm_setr_epi32(0x10111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F); }
++static inline u128 spu_cbd_pos(int pos) {
++    const __m128i m = _mm_cmpeq_epi8(_mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
++                                     _mm_set1_epi8((char)((pos & 0xF) ^ 3)));
++    return spu__xs(_mm_blendv_epi8(spu__xctl_base(), _mm_set1_epi8(0x03), m));
++}
++static inline u128 spu_chd_pos(int pos) {
++    const __m128i m = _mm_cmpeq_epi16(_mm_setr_epi16(0, 1, 2, 3, 4, 5, 6, 7),
++                                      _mm_set1_epi16((short)((((pos & 0xF) & ~1) >> 1) ^ 1)));
++    return spu__xs(_mm_blendv_epi8(spu__xctl_base(), _mm_set1_epi16(0x0203), m));
++}
++static inline u128 spu_cwd_pos(int pos) {
++    const __m128i m = _mm_cmpeq_epi32(_mm_setr_epi32(0, 1, 2, 3), _mm_set1_epi32((pos >> 2) & 3));
++    return spu__xs(_mm_blendv_epi8(spu__xctl_base(), _mm_set1_epi32(0x00010203), m));
++}
++static inline u128 spu_cdd_pos(int pos) {
++    const __m128i m = _mm_cmpeq_epi64(_mm_set_epi64x(1, 0), _mm_set1_epi64x((pos >> 3) & 1));
++    return spu__xs(_mm_blendv_epi8(spu__xctl_base(), _mm_set1_epi64x(0x0405060700010203ll), m));
++}
++#else
++static inline u128 spu_cbd_pos(int pos) { return spu_cbd_pos_ref(pos); }
++static inline u128 spu_chd_pos(int pos) { return spu_chd_pos_ref(pos); }
++static inline u128 spu_cwd_pos(int pos) { return spu_cwd_pos_ref(pos); }
++static inline u128 spu_cdd_pos(int pos) { return spu_cdd_pos_ref(pos); }
++#endif
+ static inline u128 spu_cbd(u128 a, int i7){ return spu_cbd_pos((int)a._u32[0]+i7); }
+ static inline u128 spu_chd(u128 a, int i7){ return spu_chd_pos((int)a._u32[0]+i7); }
+-static inline u128 spu_cwd_ref(u128 a, int i7){ return spu_cwd_pos((int)a._u32[0]+i7); }
++static inline u128 spu_cwd_ref(u128 a, int i7){ return spu_cwd_pos_ref((int)a._u32[0]+i7); }
+ #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
+ static inline u128 spu_cwd(u128 a, int i7) {
+     static const uint32_t base[4] = {0x10111213u, 0x14151617u, 0x18191A1Bu, 0x1C1D1E1Fu}, lane[4] = {0, 1, 2, 3};
+@@ -1844,10 +1999,20 @@
+ #else
+ static inline u128 spu_rotqmbybi(u128 a, u128 b) { return spu_rotqmbybi_ref(a, b); }
+ #endif
+-static inline u128 spu_rotqmbii(u128 a, int i7)  { int sh=(0-i7)&7; if(!sh) return a;
++static inline u128 spu_rotqmbii_ref(u128 a, int i7)  { int sh=(0-i7)&7; if(!sh) return a;
+     uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
+     uint64_t nlo=(lo>>sh)|(hi<<(64-sh)), nhi=(hi>>sh);
+     u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
++#if SPU_X86
++static inline u128 spu_rotqmbii(u128 a, int i7) {
++    const __m128i A = spu__xl(a);
++    const int sh = (0 - i7) & 7;
++    return spu__xs(_mm_or_si128(_mm_srl_epi32(A, _mm_cvtsi32_si128(sh)),
++                                _mm_sll_epi32(_mm_slli_si128(A, 4), _mm_cvtsi32_si128(32 - sh))));
++}
++#else
++static inline u128 spu_rotqmbii(u128 a, int i7) { return spu_rotqmbii_ref(a, i7); }
++#endif
+ static inline u128 spu_rotqmbyi_ref(u128 a, int i7)  { int sh=(0-i7)&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i-sh; if(s>=0) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
+ #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
+ static inline u128 spu_rotqmbyi(u128 a, int i7) {
 diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
 index e9b8f613..21f04864 100644
 --- a/runtime/spu/spu_interp.c
@@ -20883,3 +21164,668 @@ diff --git a/runtime/ppu/ppu_vmx.h b/runtime/ppu/ppu_vmx.h
          if (f != f) v = 0;
          else if (f < 0.0f) { v = 0; *vscr |= VMX_SAT; }
          else if (f >= 4294967296.0f) { v = 0xFFFFFFFFu; *vscr |= VMX_SAT; }
+diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
+--- a/tools/spu_lifter.py
++++ b/tools/spu_lifter.py
+@@ -494,6 +494,139 @@
+ 
+ 
+ 
++_GPR_RE = re.compile(r"ctx->gpr\[(\d+)\]")
++_GPR_SET_RE = re.compile(r"ctx->gpr\[(\d+)\]\s*=(?!=)")
++_MARK_RE = re.compile(r"@(WB|SY|RL)@ ?|(goto loc_[0-9A-F]{8};)")
++
++
++def _localize(lines):
++    """Register locals for one lifted function (SPULifter.reg_locals).
++
++    Every ctx->gpr[N] in the body becomes the local rN. A register is loaded from
++    the context where a basic block first reads it, and lives in its local from
++    there (or from where the block writes it). The context is brought up to date
++    -- the changed registers stored -- where something else may look at it:
++      @WB@  before an exit (SPU_DIRECT, SPU_RET, a trampoline return, a halt): the
++            path ends there, or the exit is conditional and the code after it
++            still has the same registers changed;
++      @SY@  before a call or channel op that always runs: afterwards the context
++            and the locals agree;
++      @RL@  after a call: the callee may have changed any register, so every
++            local is stale and the next read loads it again;
++      goto  a branch to a label: see below.
++    Where branches join (a label some goto names), the label's locals are the
++    registers held in locals on every way in -- falling into it and each goto
++    from above -- and, at a loop head (a label a later goto names), only those
++    the loop uses. A way in stores the changed registers the label does not
++    hold; a branch back to a loop head also loads any the head holds and the
++    branch does not (after a call inside the loop). So a loop keeps its
++    registers in host registers from one pass to the next. A merged chunk's
++    start that no goto names is entered only by falling into it (its other
++    entries are its own function) and joins nothing.
++    Loading every register at function entry instead kept them all live across
++    the block: local-store writes may alias the context, so clang could not move
++    the loads down to their uses, and spilled them to the stack."""
++    used, written, targets_all = set(), set(), set()
++    goto_at = {}
++    for i, ln in enumerate(lines):
++        used.update(int(n) for n in _GPR_RE.findall(ln))
++        written.update(int(n) for n in _GPR_SET_RE.findall(ln))
++        for t in re.findall(r"goto (loc_[0-9A-F]{8});", ln):
++            targets_all.add(t)
++            goto_at.setdefault(t, []).append(i)
++    label_at = {ln[:-1]: i for i, ln in enumerate(lines) if ln.startswith("loc_") and ln.endswith(":")}
++    # Registers a loop uses: every line from its head to the last branch back to it.
++    loop_regs = {}
++    for t, sites in goto_at.items():
++        h = label_at.get(t)
++        back = [s for s in sites if h is not None and s > h]
++        if back:
++            loop_regs[t] = {int(n) for ln in lines[h:max(back) + 1] for n in _GPR_RE.findall(ln)}
++
++    def store(regs):
++        return "".join(f"ctx->gpr[{n}] = r{n}; " for n in sorted(regs))
++
++    def load(regs):
++        return "".join(f"r{n} = ctx->gpr[{n}]; " for n in sorted(regs))
++
++    out = ["    uint8_t* const _ls = ctx->ls; const int _rd = g_spu_ls_rdiag, _wd = g_spu_ls_wdiag;",
++           "    (void)_ls; (void)_rd; (void)_wd;"]
++    regs = sorted(used)
++    for i in range(0, len(regs), 12):
++        out.append("    u128 " + ", ".join(f"r{n}" for n in regs[i:i + 12]) + ";")
++    avail, dirty = set(), set()
++    label_in = {}          # label -> registers in locals at its start
++    fwd = {}               # label -> [(placeholder, avail, dirty)] of the gotos above it
++    edge_code = {}
++    falls = True           # whether the previous line can fall into the next
++    for ln in lines:
++        if ln.startswith("loc_") and ln.endswith(":"):
++            name = ln[:-1]
++            if name in targets_all:
++                ins = [a for (_, a, _) in fwd.get(name, [])]
++                if falls:
++                    ins.append(avail)
++                av = set.intersection(*ins) if ins else set()
++                if name in loop_regs:
++                    av &= loop_regs[name]
++                for key, a, d in fwd.get(name, []):
++                    edge_code[key] = store(d - av)
++                if falls and dirty - av:
++                    out.append("    " + store(dirty - av).rstrip())
++                avail, dirty = set(av), av & written
++                label_in[name] = frozenset(av)
++            out.append(ln)
++            falls = True
++            continue
++        # Registers this line reads (every occurrence that is not an assignment
++        # target), loaded at its start. A read after a reload in the same line
++        # would need a load after the call; the translator never emits one.
++        targets = {m.start() for m in _GPR_SET_RE.finditer(ln)}
++        reads = {int(m.group(1)) for m in _GPR_RE.finditer(ln) if m.start() not in targets}
++        rl = ln.find("@RL@")
++        if rl >= 0 and _GPR_RE.search(ln, rl):
++            raise ValueError("register read after a reload: " + ln)
++        need = sorted(reads - avail)
++        pre = "".join(f"r{n} = ctx->gpr[{n}]; " for n in need)
++        avail |= reads
++        parts = _MARK_RE.split(ln)
++        res = []
++        # split() with two groups gives [text, mark, goto, text, mark, goto, ...]
++        for i in range(0, len(parts), 3):
++            p = parts[i]
++            w = {int(n) for n in _GPR_SET_RE.findall(p)}
++            avail |= w
++            dirty |= w
++            res.append(_GPR_RE.sub(lambda m: "r" + m.group(1), p))
++            if i + 1 >= len(parts):
++                break
++            mark, gto = parts[i + 1], parts[i + 2]
++            if mark == "WB":
++                res.append(store(dirty))
++            elif mark == "SY":
++                res.append(store(dirty))
++                dirty = set()
++            elif mark == "RL":
++                avail, dirty = set(), set()
++            elif gto:
++                tgt = gto[len("goto "):-1]
++                if tgt in label_in:                    # back to a loop head
++                    av = label_in[tgt]
++                    code = store(dirty - av) + load(av - avail)
++                else:                                  # forward: the label decides
++                    code = f"@EDGE{sum(len(v) for v in fwd.values())}@"
++                    fwd.setdefault(tgt, []).append((code, set(avail), set(dirty)))
++                res.append("{ " + code + gto + " }")
++        body = "".join(res)
++        if pre:
++            stripped = body.lstrip()
++            body = body[:len(body) - len(stripped)] + pre + stripped
++        out.append(body)
++        falls = not re.fullmatch(r"\s*goto loc_[0-9A-F]{8};\s*", ln)
++    edge_re = re.compile(r"@EDGE\d+@")
++    return [edge_re.sub(lambda m: edge_code.get(m.group(0), ""), ln) for ln in out]
++
++
+ # lv2 stop-and-signal syscalls that resume at the next instruction (the same
+ # set as find_spu_functions.LV2_RESUMING_STOPS, which decides function extents).
+ LV2_RESUMING_STOPS = {0x100, 0x110, 0x111}
+@@ -529,6 +662,16 @@
+         # compute_link_returns(). Emitted as `return;` so they compose with the
+         # brsl->C-call nesting instead of branching to an unregistered PC.
+         self.link_return: set = set()
++        # Register locals (on from the command line unless --no-reg-locals; off for
++        # callers that build the class themselves): each function keeps the SPU
++        # registers it touches in C locals and the local-store base in `_ls`, and
++        # writes the registers back to ctx->gpr[] only where something else can
++        # see them -- before an exit, a call, a channel op or a stop -- reloading
++        # them after a call. With every result stored to ctx->gpr[] (a union, so
++        # "may alias anything") the compiler kept nothing in registers: each
++        # instruction was a load and a store, and each local-store write forced
++        # ctx->ls and every register read after it to be loaded again.
++        self.reg_locals = False
+ 
+     # ------------------------------------------------------------------ #
+     def lift_function(self, insns: list[SPUInstruction],
+@@ -550,6 +693,7 @@
+         # for its interrupt handler (DMA-list stall-and-notify) never wakes. So
+         # each merged chunk entry hands back to the drain when one is pending.
+         merged_starts = {a for a in getattr(self, "func_starts", ()) if start < a < end}
++        wb = "@WB@ " if self.reg_locals else ""
+         last_insn = None
+         for insn in insns:
+             if insn.addr < start or insn.addr >= end:
+@@ -559,7 +703,7 @@
+             if insn.addr in merged_starts:
+                 func.body_lines.append(
+                     f"    if (ctx->int_enable && (ctx->event_status & ctx->event_mask)) "
+-                    f"{{ ctx->pc = 0x{insn.addr:X}; g_spu_trampoline_fn = "
++                    f"{{ {wb}ctx->pc = 0x{insn.addr:X}; g_spu_trampoline_fn = "
+                     f"{self.prefix}spu_func_{insn.addr:08X}; return; }}")
+             c = self._translate(insn, func)
+             if c:
+@@ -583,7 +727,7 @@
+                          and (last_insn.raw & 0x3FFF) in LV2_RESUMING_STOPS))
+                 and end in getattr(self, "func_starts", set())):
+             func.body_lines.append(
+-                f"    {{ SPU_DIRECT(ctx, 0x{end:X}, {self.prefix}spu_func_{end:08X}); }}")
++                f"    {{ {wb}{self._direct()}(ctx, 0x{end:X}, {self.prefix}spu_func_{end:08X}); }}")
+ 
+         # Infinite no-op self-loop (the SPU `br .` halt idiom): a function whose
+         # whole body is nops + an unconditional branch back into itself does
+@@ -603,6 +747,8 @@
+                     "    spu_halt(ctx); return;",
+                 ]
+ 
++        if self.reg_locals:
++            func.body_lines = _localize(func.body_lines)
+         self.functions.append(func)
+         return func
+ 
+@@ -648,6 +794,15 @@
+         def ra(): return _reg(ops[1])
+         def rb(): return _reg(ops[2])
+         def g(i): return f"ctx->gpr[{i}]"
++        # Register-locals markers, expanded by _localize (empty otherwise):
++        #   WB  before an exit: store the changed registers (the path ends or
++        #       is conditional, so what follows still has them changed);
++        #   SY  before a call or channel op that always runs: store them;
++        #   RL  after a call: load them again (the callee may change any).
++        rlx = self.reg_locals
++        WB = "@WB@ " if rlx else ""
++        SY = "@SY@ " if rlx else ""
++        RL = " @RL@" if rlx else ""
+ 
+         # ---- nop / sync / stop ----
+         if mn in ("nop", "lnop"):
+@@ -670,10 +825,10 @@
+                 # lv2 services these and resumes at the next instruction (the
+                 # reply is read from the inbound mailbox right after the stop).
+                 # spu_stop puts the context back to RUNNING when it serviced it.
+-                return (f"ctx->stop_code = 0x{code:X}u; "
+-                        f"ctx->status = SPU_STATUS_STOPPED_BY_STOP; spu_stop(ctx); "
++                return (f"{SY}ctx->stop_code = 0x{code:X}u; "
++                        f"ctx->status = SPU_STATUS_STOPPED_BY_STOP; spu_stop(ctx);{RL} "
+                         f"if (ctx->status != SPU_STATUS_RUNNING) return;")
+-            return (f"ctx->stop_code = 0x{code:X}u; "
++            return (f"{WB}ctx->stop_code = 0x{code:X}u; "
+                     f"ctx->status = SPU_STATUS_STOPPED_BY_STOP; spu_stop(ctx); return;")
+ 
+         # ---- immediate loaders ----
+@@ -714,14 +869,14 @@
+                 cond = f"(int32_t){pw(ra())} > (int32_t){pw(rb())}"
+             else:  # hlgt
+                 cond = f"{pw(ra())} > {pw(rb())}"
+-            return (f"if ({cond}) {{ extern void spu_halt(spu_context*); "
++            return (f"if ({cond}) {{ {WB}extern void spu_halt(spu_context*); "
+                     f"fprintf(stderr, \"[spu] HALT-ASSERT {mn} pc=0x{addr:05X} "
+                     f"img=%d\\n\", ctx->image_id); "
+                     f"ctx->status = SPU_STATUS_STOPPED_BY_HALT; "
+                     f"spu_halt(ctx); return; }}")
+         if mn == "stopd":
+             # stopd has no code field; the architected stop code it reports is 0x3FFF (RPCS3 STOPD).
+-            return ("ctx->stop_code = 0x3FFFu; "
++            return (f"{WB}ctx->stop_code = 0x3FFFu; "
+                     "ctx->status = SPU_STATUS_STOPPED_BY_STOP; spu_stop(ctx); return;")
+ 
+         # ---- integer arithmetic (register) ----
+@@ -857,33 +1012,42 @@
+             return f"{g(rt())} = spu_{mn}({g(ra())}, {g(rb())}, {g(rt())});"
+ 
+         # ---- quadword loads / stores ----
++        if rlx:
++            def lq(a): return f"spu_ls_lq(ctx, _ls, _rd, {a})"
++            def sq(a, v): return f"spu_ls_sq(ctx, _ls, _wd, {a}, {v});"
++        else:
++            def lq(a): return f"spu_ls_read128(ctx, {a})"
++            def sq(a, v): return f"spu_ls_write128(ctx, {a}, {v});"
+         if mn == "lqd":
+             disp, base = _disp_base(ops[1])
+             if disp is not None:
+-                return f"{g(rt())} = spu_ls_read128(ctx, {g(base)}._u32[0] + {disp});"
++                return f"{g(rt())} = {lq(f'{g(base)}._u32[0] + {disp}')};"
+         if mn == "stqd":
+             disp, base = _disp_base(ops[1])
+             if disp is not None:
+-                return f"spu_ls_write128(ctx, {g(base)}._u32[0] + {disp}, {g(rt())});"
++                return sq(f"{g(base)}._u32[0] + {disp}", g(rt()))
+         if mn in ("lqa", "lqr"):
+-            return f"{g(rt())} = spu_ls_read128(ctx, {_imm(ops[1])});"
++            return f"{g(rt())} = {lq(_imm(ops[1]))};"
+         if mn in ("stqa", "stqr"):
+-            return f"spu_ls_write128(ctx, {_imm(ops[1])}, {g(rt())});"
++            return sq(_imm(ops[1]), g(rt()))
+         if mn == "lqx":
+-            return f"{g(rt())} = spu_ls_read128(ctx, {g(ra())}._u32[0] + {g(rb())}._u32[0]);"
++            return f"{g(rt())} = {lq(f'{g(ra())}._u32[0] + {g(rb())}._u32[0]')};"
+         if mn == "stqx":
+-            return f"spu_ls_write128(ctx, {g(ra())}._u32[0] + {g(rb())}._u32[0], {g(rt())});"
++            return sq(f"{g(ra())}._u32[0] + {g(rb())}._u32[0]", g(rt()))
+ 
+         # ---- channel ops ----
++        # The runtime never changes a register in a channel op, so the registers
++        # are stored before it (its diagnostics and a halt from inside it see
++        # them) and not loaded again after.
+         if mn == "rdch":
+-            return f"{g(rt())} = spu_rdch(ctx, {_chan(ops[1])});"
++            return f"{SY}{g(rt())} = spu_rdch(ctx, {_chan(ops[1])});"
+         if mn == "rchcnt":
+             # CBEA: the count lands in the PREFERRED word, remaining slots ZERO
+             # (splatting it is the spu_link bug class; RPCS3 = v128::from32r).
+-            return f"{g(rt())} = spu_pref_u32(spu_rchcnt(ctx, {_chan(ops[1])}));"
++            return f"{SY}{g(rt())} = spu_pref_u32(spu_rchcnt(ctx, {_chan(ops[1])}));"
+         if mn == "wrch":
+             # operands: channel, $rt
+-            return f"spu_wrch(ctx, {_chan(ops[0])}, {g(_reg(ops[1]))});"
++            return f"{SY}spu_wrch(ctx, {_chan(ops[0])}, {g(_reg(ops[1]))});"
+ 
+         # ---- branches ----
+         if mn in ("br", "bra"):
+@@ -893,7 +1057,7 @@
+             # `goto loc_self` busy-spins the host thread forever; stop the SPU
+             # instead (same halt path the lifter emits for a `stop` instruction).
+             if tgt == addr:
+-                return "ctx->status = SPU_STATUS_STOPPED_BY_HALT; return;"
++                return f"{WB}ctx->status = SPU_STATUS_STOPPED_BY_HALT; return;"
+             return self._uncond_branch(tgt, func)
+         if mn in ("brsl", "brasl"):
+             # The disassembler drops the link register from brsl operands, so
+@@ -910,7 +1074,7 @@
+             # boot in cri_audio_00023C58). Set the link, then stop the SPU (same
+             # halt path the lifter emits for a `stop` instruction).
+             if tgt == addr:
+-                return f"{link} ctx->status = SPU_STATUS_STOPPED_BY_HALT; return;"
++                return f"{link} {WB}ctx->status = SPU_STATUS_STOPPED_BY_HALT; return;"
+             # PC-GETTER IDIOM: `brsl rX, .+4` (target == next instruction) just
+             # loads PC+4 into rX for PC-relative addressing / computed jump tables;
+             # it is NOT a real call. Emitting a host call here imbalances the C
+@@ -927,9 +1091,9 @@
+                 # `bi $r0` returns via host return) + SPU_DRAIN (drains the
+                 # callee's own tail-chains so they don't grow the caller frame)
+                 # + image save/restore (adopt-on-serve cannot leak upward).
+-                return (f"{link} {{ int32_t _si = (int32_t)ctx->image_id; "
+-                        f"ctx->host_depth++; {self.prefix}spu_func_{tgt:08X}(ctx); "
+-                        f"spu_drain_call(ctx, 0x{addr + 4:X}); ctx->host_depth--; spu_img_restore(ctx, _si); }}")
++                return (f"{link} {SY}{{ int32_t _si = (int32_t)ctx->image_id; "
++                        f"ctx->host_depth++; {self.prefix}spu_func_{tgt:08X}{self._sv()}(ctx); "
++                        f"spu_drain_call(ctx, 0x{addr + 4:X}); ctx->host_depth--; spu_img_restore(ctx, _si); }}{RL}")
+             return f"{link} /* TODO spu: brsl unresolved target */;"
+         if mn in _COND_BR:
+             tgt = self._branch_target(insn)
+@@ -943,7 +1107,7 @@
+             # Cross-function conditional branch = conditional tail: a direct
+             # tail call when the drain has nothing to do on this step, else
+             # the trampoline and unwind (SPU_DIRECT, spu_context.h).
+-            return (f"if ({cond}) {{ SPU_DIRECT(ctx, 0x{tgt:X}, "
++            return (f"if ({cond}) {{ {WB}{self._direct()}(ctx, 0x{tgt:X}, "
+                     f"{self.prefix}spu_func_{tgt:08X}); }}")
+         # Interrupt enable/disable bits on the bi family (bie/bid, irete/iretd,
+         # bisle(d)...): bit 0x40000 = E (enable), 0x80000 = D (disable), taking
+@@ -969,14 +1133,14 @@
+                 # publish THAT register as the return PC: SPU_RET publishes r0,
+                 # and spu_drain_call restarts dispatch when pc != return_pc.
+                 if tgt_reg != "0":
+-                    return f"{_ied}SPU_RET_REG(ctx, {tgt_reg});"
+-                return f"{_ied}SPU_RET(ctx);"
++                    return f"{WB}{_ied}SPU_RET_REG(ctx, {tgt_reg});"
++                return f"{WB}{_ied}SPU_RET(ctx);"
+             # Computed indirect tail: set pc + trampoline to the dispatcher, unwind.
+-            return (f"{_ied}ctx->pc = {g(tgt_reg)}._u32[0]; "
++            return (f"{WB}{_ied}ctx->pc = {g(tgt_reg)}._u32[0]; "
+                     f"g_spu_trampoline_fn = spu_indirect_branch; return;")
+         # iret: interrupt return -> branch to the saved interrupt PC (SRR0).
+         if mn == "iret":
+-            return (f"{_ied}ctx->pc = ctx->srr0; "
++            return (f"{WB}{_ied}ctx->pc = ctx->srr0; "
+                     "g_spu_trampoline_fn = spu_indirect_branch; return;")
+         if mn in ("bisl",):
+             # `bisl rt, ra`: rt = link, ra = TARGET. The disassembler emits BOTH
+@@ -992,10 +1156,10 @@
+             # here and its `bi $r0` returns via host return.
+             # read the target BEFORE writing the link: rt may be the same register as ra
+             return (f"{{ uint32_t _tg = {g(tgt_reg)}._u32[0]; {g(link_rt)} = spu_link(0x{(addr + 4) & 0x3FFFC:X}); "
+-                    f"int32_t _si = (int32_t)ctx->image_id; "
++                    f"{SY}int32_t _si = (int32_t)ctx->image_id; "
+                     f"{_ied}ctx->pc = _tg; ctx->host_depth++; "
+                     f"spu_indirect_branch(ctx); spu_drain_call(ctx, 0x{addr + 4:X}); "
+-                    f"ctx->host_depth--; spu_img_restore(ctx, _si); }}")
++                    f"ctx->host_depth--; spu_img_restore(ctx, _si); }}{RL}")
+         # bisled: set link, branch to RA only if an external event is pending.
+         if mn in ("bisled",):
+             link_rt = insn.raw & 0x7F            # rt = link
+@@ -1003,7 +1167,7 @@
+             # read the target before writing the link: rt may alias ra
+             return (f"{{ uint32_t _tg = {g(tgt_reg)}._u32[0]; {g(link_rt)} = spu_link(0x{(addr + 4) & 0x3FFFC:X}); "
+                     f"if ((ctx->event_status & ctx->event_mask) != 0) {{ "
+-                    f"{_ied}ctx->pc = _tg; "
++                    f"{WB}{_ied}ctx->pc = _tg; "
+                     f"g_spu_trampoline_fn = spu_indirect_branch; return; }} }}")
+         # biz/binz/bihz/bihnz: ops[0] = condition reg, ops[1] = target reg.
+         if mn in ("biz", "binz", "bihz", "bihnz"):
+@@ -1017,9 +1181,9 @@
+             if (tgt_reg == "0" and addr not in self.bi_r0_jump) \
+                     or addr in self.link_return:
+                 if tgt_reg != "0":
+-                    return f"if ({cond}) {{ {_ied}SPU_RET_REG(ctx, {tgt_reg}); }}"
+-                return f"if ({cond}) {{ {_ied}SPU_RET(ctx); }}"
+-            return (f"if ({cond}) {{ {_ied}ctx->pc = {g(tgt_reg)}._u32[0]; "
++                    return f"if ({cond}) {{ {WB}{_ied}SPU_RET_REG(ctx, {tgt_reg}); }}"
++                return f"if ({cond}) {{ {WB}{_ied}SPU_RET(ctx); }}"
++            return (f"if ({cond}) {{ {WB}{_ied}ctx->pc = {g(tgt_reg)}._u32[0]; "
+                     f"g_spu_trampoline_fn = spu_indirect_branch; return; }}")
+ 
+         # hint-for-branch: pure performance hint, safe to drop
+@@ -1035,6 +1199,13 @@
+                 f'spu_unsupported(0x{insn.addr:X}, "{mn}");')
+ 
+     # ------------------------------------------------------------------ #
++    def _sv(self) -> str:
++        """Suffix of the form lifted code calls: the System V body (SPU_SV)."""
++        return "_sv" if self.reg_locals else ""
++
++    def _direct(self) -> str:
++        return "SPU_DIRECT_SV" if self.reg_locals else "SPU_DIRECT"
++
+     def _cond(self, mn: str, reg: str) -> str:
+         """Condition expression on preferred slot for conditional branches."""
+         word = f"ctx->gpr[{reg}]._u32[0]"
+@@ -1057,17 +1228,22 @@
+         # drain has nothing to do on this step, else hand the target to the
+         # trampoline and unwind so the enclosing SPU_DRAIN re-enters (no
+         # host-stack growth either way; SPU_DIRECT, spu_context.h).
+-        return (f"{{ SPU_DIRECT(ctx, 0x{tgt:X}, {self.prefix}spu_func_{tgt:08X}); }}")
++        wb = "@WB@ " if self.reg_locals else ""
++        return (f"{{ {wb}{self._direct()}(ctx, 0x{tgt:X}, {self.prefix}spu_func_{tgt:08X}); }}")
+ 
+     # ------------------------------------------------------------------ #
+     def emit_header(self) -> str:
+         lines = [HEADER_PREAMBLE, ""]
+         for f in self.functions:
+             lines.append(f"void {f.name}(spu_context* ctx);")
++            if self.reg_locals:
++                lines.append(f"SPU_SV void {f.name}_sv(spu_context* ctx);")
+         defined = {f.start_addr for f in self.functions}
+         for t in sorted(self.call_targets | self.branch_targets):
+             if t not in defined:
+                 lines.append(f"void {self.prefix}spu_func_{t:08X}(spu_context* ctx); /* external */")
++                if self.reg_locals:
++                    lines.append(f"SPU_SV void {self.prefix}spu_func_{t:08X}_sv(spu_context* ctx);")
+         lines.append("")
+         lines.append("/* Runtime glue (runtime/spu/spu_channels.c) */")
+         lines.append("void spu_register_function(uint32_t addr, void (*fn)(spu_context*));")
+@@ -1081,10 +1257,14 @@
+         lines = [SOURCE_PREAMBLE.format(header_name=header_name), ""]
+         weak = "__attribute__((weak)) " if getattr(self, "weak_emit", False) else ""
+         for f in self.functions:
+-            lines.append(f"void {weak}{f.name}(spu_context* ctx) {{")
++            sv = "_sv" if self.reg_locals else ""
++            cc = "SPU_SV " if self.reg_locals else ""
++            lines.append(f"{cc}void {weak}{f.name}{sv}(spu_context* ctx) {{")
+             for b in f.body_lines:
+                 lines.append(b if b.endswith(":") else f"    {b}")
+             lines.append("}")
++            if self.reg_locals:
++                lines.append(f"void {weak}{f.name}(spu_context* ctx) {{ SPU_SV_CALL {f.name}_sv(ctx); }}")
+             lines.append("")
+ 
+         # Stubs for cross-function branch/call targets the function-boundary
+@@ -1100,10 +1280,14 @@
+             lines.append(" * function detector did not seed (typically conditional")
+             lines.append(" * branches that escape a function's range). */")
+             for t in externs:
+-                lines.append(f"void {self.prefix}spu_func_{t:08X}(spu_context* ctx) {{")
++                sv = "_sv" if self.reg_locals else ""
++                cc = "SPU_SV " if self.reg_locals else ""
++                lines.append(f"{cc}void {self.prefix}spu_func_{t:08X}{sv}(spu_context* ctx) {{")
+                 lines.append(f"    ctx->pc = 0x{t:X}u; "
+                              f"g_spu_trampoline_fn = spu_indirect_branch; return;")
+                 lines.append("}")
++                if self.reg_locals:
++                    lines.append(f"void {self.prefix}spu_func_{t:08X}(spu_context* ctx) {{ SPU_SV_CALL {self.prefix}spu_func_{t:08X}_sv(ctx); }}")
+             lines.append("")
+ 
+         lines.append("/* Function table */")
+@@ -1188,6 +1372,12 @@
+                         "changes speed, not which code can be reached.")
+     p.add_argument("--max-group-insns", type=int, default=4000,
+                    help="Cap on instructions per merged group (keeps clang fast).")
++    p.add_argument("--no-reg-locals", action="store_true",
++                   help="Keep every SPU register in ctx->gpr[] at every instruction "
++                        "(the old output). By default each function holds the "
++                        "registers it uses in C locals and stores them back to the "
++                        "context only before exits, calls, channel ops and stops. "
++                        "--trace implies this.")
+     p.add_argument("--force-indirect", default="",
+                    help="Comma-separated `bi $rN` addresses to emit as GENERIC "
+                         "indirect dispatch, overriding the link-register-return "
+@@ -1311,6 +1501,7 @@
+     insns = disassemble_spu(data, base)
+ 
+     lifter = SPULifter(trace=args.trace, prefix=args.symbol_prefix)
++    lifter.reg_locals = not (args.no_reg_locals or args.trace)
+     lifter.bi_r0_jump = compute_bi_r0_jumps(insns, bounds)
+     if lifter.bi_r0_jump:
+         print(f"  {len(lifter.bi_r0_jump)} `bi $r0` computed-jump site(s) "
+diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
+--- a/runtime/spu/spurs_job.c
++++ b/runtime/spu/spurs_job.c
+@@ -123,8 +123,14 @@
+ static int      s_job_ls_valid;
+ uint32_t        g_spurs_job_ls_handle;   /* set by the chain walker */
+ 
++/* Copying a job's whole store after every job (256 KB, ~1500 jobs/s for an audio chain) costs
++ * every title what only the ones that poll need: the first poll turns the copy on, and gets the
++ * next job's store. */
++static volatile int s_job_ls_wanted;
++
+ const uint8_t* spurs_job_ls_for_handle(uint32_t handle)
+ {
++    s_job_ls_wanted = 1;
+     if (!s_job_ls_valid || !handle || handle != g_spurs_job_ls_handle) return 0;
+     return s_job_ls;
+ }
+@@ -155,6 +161,14 @@
+ SPURS_JOB_TLS uint32_t g_spurs_job_spu_num;
+ void spurs_job_set_spu_num(uint32_t n) { g_spurs_job_spu_num = n; }
+ 
++/* The context a job runs in, one per host thread and reused job after job. Each job used to
++ * get a fresh 256 KB local store from calloc, built there, copied into a stack-local context
++ * that spu_context_init had just zeroed (local store included), and freed: a megabyte of
++ * memory traffic per job. Now the job is built in the context's own store, zeroed once by the
++ * init. A job that starts another on the same thread (none is known to) gets its own. */
++static SPURS_JOB_TLS spu_context* t_job_ctx;
++static SPURS_JOB_TLS int t_job_ctx_busy;
++
+ int spu_run_spurs_job(spu_lifted_entry_fn entry, int image_id,
+                       uint32_t job_ea, uint32_t job_desc_size)
+ {
+@@ -179,8 +193,16 @@
+         return -1;
+     }
+ 
+-    uint8_t* ls = (uint8_t*)calloc(1, SPU_LS_SIZE);
+-    if (!ls) return -1;
++    spu_context* ctx = t_job_ctx_busy ? NULL : t_job_ctx;
++    const int own_ctx = t_job_ctx_busy != 0;
++    if (!ctx) {
++        ctx = (spu_context*)malloc(sizeof(spu_context));
++        if (!ctx) return -1;
++        if (!own_ctx) t_job_ctx = ctx;
++    }
++    if (!own_ctx) t_job_ctx_busy = 1;
++    spu_context_init(ctx, 0);      /* zeroes the local store too */
++    uint8_t* ls = ctx->ls;
+ 
+     /* ---- binary at LS 0 (PIC, so delta 0 keeps the lifted addresses) ---- */
+     memcpy(ls, vm_base + ea_bin, size_bin);
+@@ -298,7 +320,9 @@
+      * its DMA and atomic EAs from these words, so when a job spins on a
+      * lock-line address that is not backed, this is what to read first. */
+     { static int _d = 0;
+-      if (getenv("SPURS_JOB_DESCDUMP") && PS3_LOG_FIRST(_d, 4)) {
++      static int s_dd = -1;   /* getenv takes the CRT environment lock: once, not per job */
++      if (s_dd < 0) s_dd = getenv("SPURS_JOB_DESCDUMP") != NULL;
++      if (s_dd && PS3_LOG_FIRST(_d, 4)) {
+           fprintf(stderr, "[spurs-job] desc @0x%08X (%u bytes):", job_ea, dsz);
+           for (uint32_t o = 0; o < dsz && o < 128; o += 4) {
+               if ((o & 31) == 0) fprintf(stderr, "\n    +%02X:", o);
+@@ -328,7 +352,9 @@
+      * The header's input-DMA-list/io fields are legitimately zero for it. Dump
+      * the user data + that command block so the bail path is attributable. */
+     uint32_t dump_cmd = 0;
+-    if (getenv("SPURS_JOB_DUMP")) {
++    static int s_job_dump = -1;
++    if (s_job_dump < 0) s_job_dump = getenv("SPURS_JOB_DUMP") != NULL;
++    if (s_job_dump) {
+         uint64_t ud  = g64(job_ea + JH_SIZE);        /* desc+0x30 */
+         uint32_t cmd = (uint32_t)ud;                 /* low word = EA */
+         fprintf(stderr, "[spurs-job] job 0x%08X userdata: %016llX %016llX %016llX %016llX\n",
+@@ -363,10 +389,7 @@
+     }
+ 
+     /* ---- enter the job -------------------------------------------------- */
+-    spu_context ctx;
+-    spu_context_init(&ctx, 0);
+-    ctx.image_id = image_id;
+-    memcpy(ctx.ls, ls, SPU_LS_SIZE);
++    ctx->image_id = image_id;
+     /* SPU stack grows down. A function saves its link register in its
+      * caller's frame, at 16($sp), so the entry's first store lands 16 bytes
+      * above $sp. The cache buffers start right at stack_top: with $sp at
+@@ -374,18 +397,18 @@
+      * cacheBuffer[0] (Twisted Metal's Edge jobs read their viewport there and
+      * got width = height = 0). Leave the caller's 32-byte frame inside the
+      * stack. */
+-    ctx.gpr[1]._u32[0] = (stack_top - 32u) & ~15u;
++    ctx->gpr[1]._u32[0] = (stack_top - 32u) & ~15u;
+     /* Link register: where the job returns when it is done. The job manager
+      * would pass an address inside itself; 0 makes the job re-enter its own
+      * entry at LS 0 and run a bogus second lap. */
+-    ctx.gpr[0]._u32[0] = 0x3FF00u;                   /* SPU_JOB_RETURN_LS */
+-    ctx.gpr[3]._u32[0] = ctx_ls;                     /* CellSpursJobContext2* */
+-    ctx.gpr[4]._u32[0] = desc_ls;                    /* CellSpursJob256*      */
++    ctx->gpr[0]._u32[0] = 0x3FF00u;                   /* SPU_JOB_RETURN_LS */
++    ctx->gpr[3]._u32[0] = ctx_ls;                     /* CellSpursJobContext2* */
++    ctx->gpr[4]._u32[0] = desc_ls;                    /* CellSpursJob256*      */
+ 
+     { static int _n = 0;
+       if (PS3_LOG_FIRST(_n, 4))
+           fprintf(stderr, "[spurs-job] ENTER r3=%08X r4=%08X r1=%08X entry-fn image=%d\n",
+-                  ctx.gpr[3]._u32[0], ctx.gpr[4]._u32[0], ctx.gpr[1]._u32[0],
++                  ctx->gpr[3]._u32[0], ctx->gpr[4]._u32[0], ctx->gpr[1]._u32[0],
+                   image_id); }
+     /* NOTE: after its work the job's runtime jumps to LS 0 ("return to the
+      * jm2 kernel" -- real layout has the kernel at 0, jobs above; we load the
+@@ -393,7 +416,7 @@
+      * and trips its parameter guard, which HALTS -- ending the run. So the
+      * HALT-ASSERT heqi 0x1650 seen once per jm2 job is NORMAL COMPLETION
+      * noise, not a failure: the job's real work finished before the jump. */
+-    spu_run_with_halt(entry, &ctx);
++    spu_run_with_halt(entry, ctx);
+ 
+     /* Capture the job's outbound mailbox. These are LS POINTERS TO STRINGS for
+      * the SPU printf service, NOT query results -- value 0x83C0 from the sound
+@@ -401,29 +424,30 @@
+      * comment here claimed they carried the title's bus counts; they do not,
+      * and feeding them into the completion event turned 0x40000000 into a 1 GB
+      * allocation request. Kept because the printf service needs them. */
+-    memcpy(s_job_ls, ctx.ls, SPU_LS_SIZE);   /* keep the store readable */
++    if (s_job_ls_wanted)
++        memcpy(s_job_ls, ctx->ls, SPU_LS_SIZE);   /* keep the store readable */
+     /* TEMP SPURS_JOB_LSWORD=<img>:<lsa>: after a job of that image, print the
+      * LS word at lsa and every other LS offset holding the same value. */
+     { static int img = -2; static uint32_t lsa; static int n = 0;
+       if (img == -2) { const char* e = getenv("SPURS_JOB_LSWORD"); img = -1;
+           if (e) { img = atoi(e); const char* c = strchr(e, ':'); lsa = c ? (uint32_t)strtoul(c + 1, 0, 16) : 0; } }
+       if (img == image_id && n++ < 3) {
+-          const uint8_t* q = ctx.ls + (lsa & 0x3FFFC);
++          const uint8_t* q = ctx->ls + (lsa & 0x3FFFC);
+           uint32_t v = ((uint32_t)q[0] << 24) | ((uint32_t)q[1] << 16) | ((uint32_t)q[2] << 8) | q[3];
+           fprintf(stderr, "[lsword] img=%d job=0x%08X LS[0x%05X]=0x%08X io=0x%05X also at:", image_id, job_ea, lsa, v, io_ls);
+           for (uint32_t o = 0; o + 4 <= SPU_LS_SIZE; o += 4) {
+-              const uint8_t* p = ctx.ls + o;
++              const uint8_t* p = ctx->ls + o;
+               if (o != (lsa & 0x3FFFC) && ((uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]) == v)
+                   fprintf(stderr, " 0x%05X", o);
+           }
+           fprintf(stderr, "\n");
+       } }
+-    s_job_ls_valid = 1;
+-
+-    g_spurs_job_mbox      = spu_channel_has_data(&ctx.ch_out_mbox)
+-                          ? ctx.ch_out_mbox.value : 0;
+-    g_spurs_job_mbox_intr = spu_channel_has_data(&ctx.ch_out_intr_mbox)
+-                          ? ctx.ch_out_intr_mbox.value : 0;
++    s_job_ls_valid = s_job_ls_wanted;
++
++    g_spurs_job_mbox      = spu_channel_has_data(&ctx->ch_out_mbox)
++                          ? ctx->ch_out_mbox.value : 0;
++    g_spurs_job_mbox_intr = spu_channel_has_data(&ctx->ch_out_intr_mbox)
++                          ? ctx->ch_out_intr_mbox.value : 0;
+     g_spurs_job_mbox_valid = g_spurs_job_mbox || g_spurs_job_mbox_intr;
+     { uint32_t _cb = g32(job_ea + 0x4C);
+       g_spurs_job_cmd = _cb ? (g32(_cb) >> 16) : 0; }
+@@ -433,9 +457,9 @@
+           fprintf(stderr, "[spurs-job] job 0x%08X posted mbox=0x%08X intr=0x%08X\n",
+                   job_ea, g_spurs_job_mbox, g_spurs_job_mbox_intr); }
+ 
+-    if (getenv("SPURS_JOB_DUMP")) {
++    if (s_job_dump) {
+         fprintf(stderr, "[spurs-job] job 0x%08X exit: status=0x%X stop=0x%X pc=0x%05X\n",
+-                job_ea, ctx.status, ctx.stop_code, ctx.pc);
++                job_ea, ctx->status, ctx->stop_code, ctx->pc);
+         /* Post-run view of the same command block: the game polls result/status
+          * fields the job writes back -- a before/after diff shows whether the
+          * handler delivered its completion or the PPU waits on stale state. */
+@@ -450,9 +474,10 @@
+         fflush(stderr);
+     }
+ 
+-    spu_mfc_release(&ctx);
+-    spu_coh_unregister(&ctx);   /* stack local: out of the reserver set */
+-    { extern void spu_mfc_release(spu_context*); spu_mfc_release(&ctx); }
+-    free(ls);
++    spu_mfc_release(ctx);
++    spu_coh_unregister(ctx);   /* stack local: out of the reserver set */
++    { extern void spu_mfc_release(spu_context*); spu_mfc_release(ctx); }
++    if (own_ctx) free(ctx);
++    else t_job_ctx_busy = 0;
+     return 0;
+ }

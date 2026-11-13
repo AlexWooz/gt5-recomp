@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.29](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.29) | 13 Nov 2026 | SPU code runs leaner: SPURS jobs take 20% less CPU, about 7% more frames on 4 cores (one re-lift) |
 | [v0.1.28](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.28) | 13 Nov 2026 | About 10% faster on small CPUs (waits that nap instead of spinning, four upstream ps3recomp speed-ups); build without Visual Studio (get-toolchain.ps1, #22) |
 | [v0.1.27](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.27) | 12 Nov 2026 | B-Spec mode for laptops: watch mode can draw 1 frame in 3 or 4; Steam Deck route in the README and setup.sh |
 | [v0.1.26](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.26) | 12 Nov 2026 | Sound mixer costs about 12% less CPU: faster SPU shufb, job-image lookup cache 8 -> 64 |

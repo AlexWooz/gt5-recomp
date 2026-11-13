@@ -81,16 +81,17 @@ if(GT5_MOD_SOURCES)
     target_sources(gt5 PRIVATE ${GT5_MOD_SOURCES})
 endif()
 
-# Scoped so the huge PPU TUs keep their cached compile commands.
+# Scoped so the huge PPU TUs keep their cached compile commands. /GS-: no stack-cookie check in
+# every lifted SPU function (most are a basic block long; their locals hold no guest-sized buffers).
 if(SPU_SOURCES)
     set_source_files_properties(${SPU_SOURCES} PROPERTIES
         INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu"
         COMPILE_DEFINITIONS SPU_USE_DISPATCH_MT
-        COMPILE_OPTIONS "-O2;/w;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1")
+        COMPILE_OPTIONS "-O2;/w;/GS-;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1")
 endif()
 # GT5's sound job: its numbers are samples, and it was about 10% short of real time with a full grid.
 set_source_files_properties("${SPU_DIR}/jobs/jD58063CD/spu_recomp.c" PROPERTIES
-    COMPILE_OPTIONS "-O2;/w;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1;-DSPU_X86_FAST_FLOAT=1")
+    COMPILE_OPTIONS "-O2;/w;/GS-;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1;-DSPU_X86_FAST_FLOAT=1")
 
 target_include_directories(gt5 PRIVATE
     "${RECOMP_DIR}"

@@ -9,6 +9,47 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🏷️ Released as **v0.1.29**
+
+⚡ **SPU code runs leaner: SPURS jobs take 20% less CPU, about 7% more frames on 4 cores** (one re-lift)
+- Measured on 4 of the test PC's efficient cores, where the CPU is the limit as on a laptop, with five
+  races per build taken in turns and timed while the car drives: 20.7 game frames a second on average,
+  against 19.3 before. The CPU time per frame fell from about 208 ms to about 193 ms. The new build was
+  ahead in 4 of the 5 rounds, but single races vary (19.7-22.1 against 17.6-20.7), so the frame-rate
+  gain is about as big as that spread: expect it on average. The CPU saving is clearer: the sound
+  thread needs 65% of a core instead of 74%, and on all cores GT5's SPURS jobs (the sound mixer and
+  the other job-chain work) take 22.2 s of CPU per minute of driving instead of 27.6 s. The SPU worker
+  threads (physics and the other Wws jobs) changed less than one race differs from the next. These
+  races are timed while driving, so their frame rates are lower than v0.1.28's (timed partly after the
+  finish): compare them with each other.
+- **SPU registers stay in CPU registers.** The SPU lifter (`spu_lifter.py`) stored every SPU register
+  to memory after every instruction and read it back for the next, and every local-store write made the
+  compiler load them all again. A lifted function now keeps the registers it uses in local variables
+  and stores them only where something else can look: before a call, a channel operation (DMA,
+  mailbox), a stop or a branch out of the function; a loop inside a function keeps them from one pass
+  to the next. `--no-reg-locals` gives the old output.
+- **No ten-register save on every SPU function:** on Windows the compiler had to save and restore the
+  vector registers xmm6-xmm15 in every lifted function that used them, and most are one basic block
+  long. Lifted functions now call each other with the System V convention, which doesn't keep those
+  registers; a small Windows-convention wrapper saves them once, when the runtime calls in.
+- **Cheaper SPU instructions:** `shufb` handles its special selector bytes with one table lookup
+  instead of three compares and two blends; `cbd`/`chd`/`cwd`/`cdd` and their `x` forms (how SPU code
+  stores a byte, halfword or word) build their masks in registers instead of through memory, which the
+  CPU could not forward (a stall of a dozen cycles each time); `nand`/`nor`/`andc`/`orc`, the immediate
+  shifts and the quadword bit shifts are single vector instructions. Each is checked bit for bit
+  against the old code.
+- **Less copying per SPURS job:** each job got a fresh 256 KB local store from `calloc`, was copied
+  into a context that had just been zeroed and was copied out again afterwards, about 1 MB of memory
+  traffic per job at about 2000 jobs a second. Each job thread now reuses one context and builds the
+  job in it. Lifted SPU code also skips the stack-cookie check (`/GS-`).
+- Tried and dropped: lifting the SPURS jobs in merged pieces (`--merge-chunks`) made the sound mixer
+  slower (1.42 ms a job against 1.06), and lifting the Wws jobs unmerged showed no difference.
+- **Re-lift once:** the lifter changed, so `update.ps1` re-lifts by itself.
+- Checked: a test runs the old and the new lift of the same SPU programs from every entry point on
+  identical random states and compares registers, local store and DMA/channel traffic: no difference in
+  20,316 runs (the sound mixer, a physics job, and the largest Wws job, merged and unmerged). Race sound
+  recorded before and after: the same level and spectrum, no clicks.
+
 🏷️ Released as **v0.1.28**
 
 🚀 **About 10% faster on small CPUs**
