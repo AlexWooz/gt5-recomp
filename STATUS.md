@@ -118,7 +118,9 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **13 Nov 2026:** game update 2.17, the last one, runs on the US and European releases (from a
+- **13 Nov 2026:** the stutter the first time you see a car or track is about three times shorter: new
+  shaders compile on up to 8 threads (from a community pull request) (v0.1.32); DLC works offline with
+  your own licences (v0.1.31); game update 2.17, the last one, runs on the US and European releases (from a
   community pull request; one re-lift) (v0.1.30); SPU code runs leaner: SPURS jobs take 20% less CPU, about 7% more frames on a
   4-core CPU (one re-lift, done by `update.ps1`); about 10% faster on small CPUs and laptops before
   that: waits that no longer spin a core, plus four speed-ups from the upstream ps3recomp project
