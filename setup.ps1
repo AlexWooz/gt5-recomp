@@ -174,21 +174,13 @@ if (-not (Test-Path $elf)) {
 # which call code it doesn't have: the game stops before the main menu with a black screen (13 Nov 2026,
 # US 2.11 with the Master Mod). The update's PARAM.SFO (APP_VER) or EBOOT.BIN in GT5\hdd0\game\<title ID>
 # says an update is installed; the disc version writes neither there.
+# scripts\update_exe.ps1 finds the update's EBOOT.BIN (GT5\hdd0, or RPCS3's dev_hdd0), unlocks it with
+# RPCS3 and swaps it in, keeping the disc's as EBOOT.disc-01.00.elf; the game code is then generated for it.
 if ($elfDisc) {
-    foreach ($gd in @(Get-ChildItem (Join-Path $gt5 "hdd0\game") -Directory -ErrorAction SilentlyContinue)) {
-        $sfo = Read-Sfo (Join-Path $gd.FullName "PARAM.SFO")
-        $ver = if ($sfo -and $sfo["APP_VER"]) { ([string]$sfo["APP_VER"]).Trim() } else { "" }
-        $bin = Join-Path $gd.FullName "USRDIR\EBOOT.BIN"
-        $newer = $ver -and $ver -notmatch '^0?1\.00$'
-        if (-not $newer -and -not (Test-Path $bin)) { continue }
-        $what = if ($newer) { "update $ver" } else { "a game update" }
-        $from = if (Test-Path $bin) { "GT5\hdd0\game\$($gd.Name)\USRDIR\EBOOT.BIN" } else { "dev_hdd0\game\$($gd.Name)\USRDIR\EBOOT.BIN in RPCS3 (or on your PS3)" }
-        Todo "GT5\input\EBOOT.elf from $what" ("GT5\hdd0\game\$($gd.Name) holds $what's data, but GT5\input\EBOOT.elf is still the disc's version 01.00, " +
-            "and that pair stops before the main menu (black screen). Decrypt the update's executable, $from " +
-            "(or the mod's EBOOT.BIN, if a mod comes with one), in RPCS3 with Utilities > Decrypt PS3 Binaries, and save the result as " +
-            "GT5\input\EBOOT.elf. Setup then regenerates the game code for it. To play the disc version instead, move the folder " +
-            "GT5\hdd0\game\$($gd.Name) somewhere else (your saves are in GT5\gamedata, not there).")
-    }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $gt5 "scripts\update_exe.ps1") -Gt5 $gt5
+    if ($LASTEXITCODE -eq 2) { Todo "GT5\input\EBOOT.elf from the game update in GT5\hdd0" "See the lines just above." }
+    elseif ((Get-FileHash $elf -Algorithm SHA1).Hash -ne $sha1) { Ok "GT5\input\EBOOT.elf: switched to the installed update's executable" }
+    $global:LASTEXITCODE = 0
 }
 
 $game = Join-Path $gt5 "vfs\PS3_GAME"

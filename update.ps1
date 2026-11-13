@@ -220,6 +220,12 @@ if (-not (Test-Path (Join-Path $gt5 "input\EBOOT.elf")) -or -not (Test-Path $py)
     exit 0
 }
 
+# ---- A game update installed in GT5\hdd0 needs its executable in GT5\input (scripts\update_exe.ps1) -------
+if (Test-Path (Join-Path $gt5 "scripts\update_exe.ps1")) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $gt5 "scripts\update_exe.ps1") -Gt5 $gt5
+    if ($LASTEXITCODE -eq 2) { Warn "The game update in GT5\hdd0 still needs its executable (see above): until then the game stops before the main menu." }
+}
+
 # ---- Re-lift only when this version changes what the generated code is made from, then build --------------
 Push-Location $gt5
 & $py "scripts\lift_stamp.py" --check

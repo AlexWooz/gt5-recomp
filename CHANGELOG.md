@@ -9,6 +9,22 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🏷️ Released as **v0.1.35**
+
+🛠️ **An installed game update gets its executable by itself** (the fix for the 2.11 black screen below)
+- `setup.ps1` and `Update.bat` now do step 2 of [Game updates](README.md#game-updates) themselves. When
+  `GT5\hdd0` holds an update but `GT5\input\EBOOT.elf` is still a disc's 01.00, they find the update's
+  `EBOOT.BIN` and unlock it with RPCS3 (the same tool and step the installer and README use for the
+  disc's). The result becomes `GT5\input\EBOOT.elf`, the disc's is kept as `EBOOT.disc-01.00.elf`, and the
+  game code is generated again for it.
+- Where it looks: `GT5\hdd0\game\<title ID>\USRDIR\EBOOT.BIN`, then RPCS3's `dev_hdd0` (also where a
+  mod's own `EBOOT.BIN` goes), with RPCS3 found in `GT5_RPCS3`, the installer's `tools\rpcs3`, PATH or the
+  usual folders (Downloads, Games, Program Files...). An `EBOOT.BIN` that's already unlocked is used as
+  it is. If neither turns up, setup stops and says what to do by hand.
+- Tested on this PC with update 2.01's `EBOOT.BIN` from RPCS3 (Hong Kong release): both from `GT5\hdd0`
+  and found through RPCS3's `dev_hdd0`, the result was exactly the known 2.01 executable. A disc-only
+  install is left alone. The script is `GT5\scripts\update_exe.ps1`.
+
 🏷️ Released as **v0.1.34**
 
 🛟 **Setup catches an update installed without its executable** (a black screen before the main menu,
