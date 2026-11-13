@@ -9,6 +9,17 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🏷️ Released as **v0.1.34**
+
+🛟 **Setup catches an update installed without its executable** (a black screen before the main menu,
+reported on Discord with update 2.11 and the Master Mod on the US release)
+- The log showed the disc's version 01.00 executable running against update 2.11's data: GT5 reads
+  updated files from the hard disk whatever its own version, so 01.00 ran 2.11's newer scripts, which
+  call code 01.00 doesn't have, and stopped before the main menu.
+- `setup.ps1` now stops when `GT5\hdd0\game\<title ID>` holds an update (its `PARAM.SFO` says a version
+  newer than 01.00, or its `EBOOT.BIN` is there) while `GT5\input\EBOOT.elf` is still a disc's 01.00, and
+  says which `EBOOT.BIN` to decrypt. README, Game updates: step 2 says why it can't be skipped.
+
 🏷️ Released as **v0.1.33**
 
 🐧 **Linux: races drawn full screen, the right exposure, and sound effects on time** (#20)

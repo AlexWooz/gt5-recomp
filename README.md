@@ -696,6 +696,9 @@ about 2.2 GB of files in `PDIPFS`). The port needs both:
    Either way they're in `dev_hdd0\game\<title ID>\USRDIR` (for example `dev_hdd0\game\BCES00569\USRDIR`).
 2. **The executable**: decrypt that folder's `EBOOT.BIN` (RPCS3, *Utilities > Decrypt PS3 Binaries*) and
    save the result as `GT5\input\EBOOT.elf`. The disc's `PS3_GAME` stays as it is in `GT5\vfs`.
+   **Don't skip this step.** With the update's data but the disc's executable, the game stops before
+   the main menu (a black screen); `setup.ps1` checks for that and says so. A mod that comes with its
+   own `EBOOT.BIN` needs that one decrypted instead.
 3. **The data**: copy everything else in that `USRDIR` folder (`PDIPFS` and the rest, not `EBOOT.BIN`)
    to `GT5\hdd0\game\<title ID>\USRDIR`, keeping the folder names. Without it the game starts, but
    Arcade Mode has no courses to choose.

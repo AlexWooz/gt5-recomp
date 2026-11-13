@@ -23,6 +23,25 @@ function Todo([string]$m, [string]$fix) {
     $script:todo++
 }
 function Stop-Setup([string]$m) { Write-Host ""; Write-Host "setup stopped: $m" -ForegroundColor Red; exit 1 }
+# PARAM.SFO's values by key (APP_VER, TITLE_ID, ...), or $null when it isn't one.
+function Read-Sfo([string]$path) {
+    try { $b = [IO.File]::ReadAllBytes($path) } catch { return $null }
+    if ($b.Length -lt 20 -or $b[1] -ne 0x50 -or $b[2] -ne 0x53 -or $b[3] -ne 0x46) { return $null }
+    $keyT = [BitConverter]::ToUInt32($b, 8); $dataT = [BitConverter]::ToUInt32($b, 12)
+    $n = [BitConverter]::ToUInt32($b, 16); $r = @{}
+    for ($i = 0; $i -lt $n; $i++) {
+        $e = 20 + $i * 16
+        if ($e + 16 -gt $b.Length) { break }
+        $ko = [BitConverter]::ToUInt16($b, $e); $fmt = [BitConverter]::ToUInt16($b, $e + 2)
+        $len = [BitConverter]::ToUInt32($b, $e + 4); $do = [BitConverter]::ToUInt32($b, $e + 12)
+        $k = ""; $p = $keyT + $ko
+        while ($p -lt $b.Length -and $b[$p] -ne 0) { $k += [char]$b[$p]; $p++ }
+        if ($dataT + $do + $len -gt $b.Length) { continue }
+        if ($fmt -eq 0x0404) { $r[$k] = [BitConverter]::ToUInt32($b, $dataT + $do) }
+        else { $r[$k] = [Text.Encoding]::UTF8.GetString($b, $dataT + $do, $len).TrimEnd([char]0) }
+    }
+    return $r
+}
 
 if (-not (Test-Path (Join-Path $gt5 "scripts\relift.ps1"))) {
     Stop-Setup "run this from the gt5-recomp folder (the one with setup.ps1, README.md and the GT5 folder)."
@@ -118,6 +137,7 @@ Write-Host "Your files (see Setup in README.md for where each comes from):"
 foreach ($d in "input", "vfs") { New-Item -ItemType Directory -Force (Join-Path $gt5 $d) | Out-Null }
 
 $elf = Join-Path $gt5 "input\EBOOT.elf"
+$elfDisc = $false   # the disc's own version 01.00 executable (no update)
 if (-not (Test-Path $elf)) {
     if (Test-Path (Join-Path $gt5 "input\EBOOT.BIN")) {
         Todo "GT5\input\EBOOT.elf" "You have EBOOT.BIN there, but the tools need the DECRYPTED file: in RPCS3, Utilities > Decrypt PS3 Binaries, pick EBOOT.BIN, and put the result in GT5\input named EBOOT.elf."
@@ -132,11 +152,11 @@ if (-not (Test-Path $elf)) {
     } elseif (($magic -join ",") -ne "127,69,76,70") {
         Todo "a valid GT5\input\EBOOT.elf" "This file isn't a PS3 executable. Decrypt your disc's PS3_GAME\USRDIR\EBOOT.BIN in RPCS3 and use the result."
     } elseif ($sha1 -eq "1535B865EC7DD58E7704B378B8621532ECF844E1") {
-        Ok "GT5\input\EBOOT.elf: Europe BCES00569, version 01.00 (the tested one)"
+        Ok "GT5\input\EBOOT.elf: Europe BCES00569, version 01.00 (the tested one)"; $elfDisc = $true
     } elseif ($sha1 -eq "40126D2D14B0A95B9601BB11E3A6E778186067AC") {
-        Ok "GT5\input\EBOOT.elf: North America BCUS98114 (players have raced on it)"
+        Ok "GT5\input\EBOOT.elf: North America BCUS98114, version 01.00 (players have raced on it)"; $elfDisc = $true
     } elseif ($sha1 -eq "49A3662D4B541BB4E0C2E72D2602F89FEB710E71") {
-        Ok "GT5\input\EBOOT.elf: Hong Kong / Asia BCAS20108, version 01.00 (tested)"
+        Ok "GT5\input\EBOOT.elf: Hong Kong / Asia BCAS20108, version 01.00 (tested)"; $elfDisc = $true
     } elseif ($sha1 -eq "96DEA35B194AA80E993CAD9EBE42E96072F3A3D5") {
         Ok "GT5\input\EBOOT.elf: Hong Kong / Asia BCAS20108, update 2.01 (tested; needs the update's data in GT5\hdd0, README: Game updates)"
     } elseif ($sha1 -eq "12EF249F9B95591E08251AC85F103B1451DA23BF") {
@@ -146,6 +166,28 @@ if (-not (Test-Path $elf)) {
     } else {
         Ok "GT5\input\EBOOT.elf (SHA-1 $sha1)"
         Write-Host "            Not one tried yet. Another disc version may well work: please report how it goes. One from a game update (2.xx) also needs the update's data in GT5\hdd0 (README: Game updates)." -ForegroundColor Yellow
+    }
+}
+
+# A game update's data in GT5\hdd0 needs the update's executable too. GT5 reads updated files from the
+# hard disk whatever its own version, so the disc's 01.00 executable runs the update's newer scripts,
+# which call code it doesn't have: the game stops before the main menu with a black screen (13 Nov 2026,
+# US 2.11 with the Master Mod). The update's PARAM.SFO (APP_VER) or EBOOT.BIN in GT5\hdd0\game\<title ID>
+# says an update is installed; the disc version writes neither there.
+if ($elfDisc) {
+    foreach ($gd in @(Get-ChildItem (Join-Path $gt5 "hdd0\game") -Directory -ErrorAction SilentlyContinue)) {
+        $sfo = Read-Sfo (Join-Path $gd.FullName "PARAM.SFO")
+        $ver = if ($sfo -and $sfo["APP_VER"]) { ([string]$sfo["APP_VER"]).Trim() } else { "" }
+        $bin = Join-Path $gd.FullName "USRDIR\EBOOT.BIN"
+        $newer = $ver -and $ver -notmatch '^0?1\.00$'
+        if (-not $newer -and -not (Test-Path $bin)) { continue }
+        $what = if ($newer) { "update $ver" } else { "a game update" }
+        $from = if (Test-Path $bin) { "GT5\hdd0\game\$($gd.Name)\USRDIR\EBOOT.BIN" } else { "dev_hdd0\game\$($gd.Name)\USRDIR\EBOOT.BIN in RPCS3 (or on your PS3)" }
+        Todo "GT5\input\EBOOT.elf from $what" ("GT5\hdd0\game\$($gd.Name) holds $what's data, but GT5\input\EBOOT.elf is still the disc's version 01.00, " +
+            "and that pair stops before the main menu (black screen). Decrypt the update's executable, $from " +
+            "(or the mod's EBOOT.BIN, if a mod comes with one), in RPCS3 with Utilities > Decrypt PS3 Binaries, and save the result as " +
+            "GT5\input\EBOOT.elf. Setup then regenerates the game code for it. To play the disc version instead, move the folder " +
+            "GT5\hdd0\game\$($gd.Name) somewhere else (your saves are in GT5\gamedata, not there).")
     }
 }
 
