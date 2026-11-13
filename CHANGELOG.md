@@ -9,6 +9,23 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🏷️ Released as **v0.1.33**
+
+🐧 **Linux: races drawn full screen, the right exposure, and sound effects on time** (#20)
+- Races were squashed into the top half of the picture, with bands of different brightness. GT5 draws
+  a race antialiased into an image twice the size and shrinks it by pixel coordinates; the Linux
+  renderer handed it the whole bigger image. It now gets just the part it reads, as on Windows.
+  Checked at 720p and 1080p: Arcade and B-Spec races fill the screen.
+- Images GT5 reads from partway down a bigger one (how it measures a scene's brightness level by
+  level, and builds the smaller levels of the car reflections) now come from that picture instead of
+  stale memory.
+- Cut-out foliage such as the cherry blossoms in one title scene was drawn as solid grey cards; it is
+  cut out now, as on Windows.
+- Sound effects 30 seconds or more late: the Linux sound mixer ran about 4% fast, and the extra sound
+  piled up in a queue, so everything you heard drifted later and later. It now keeps pace with the
+  sound device (checked on Android: 187.5 blocks a second, the queue steady at 20 ms).
+- The title screen's white model city is drawn white by GT5 itself (Windows shows it the same).
+
 🏷️ Released as **v0.1.32**
 
 ⚡ **First-visit stutter about three times shorter: new shaders compile in parallel** (a community pull

@@ -560,8 +560,9 @@ graphics card (checked on Windows), so that was the software driver.
 **First test on a real graphics card (13 Nov 2026, melroy89, [#20](https://github.com/MormonFTP-hub/gt5-recomp/issues/20)):**
 Linux Mint 22.3, Threadripper 7960X, Radeon RX 7900 XTX. `setup.sh` and the build went through, the
 menus draw correctly, an Xbox controller works out of the box, and there were no crashes or frame drops.
-Still wrong there: races draw in the top half of the picture, the intro's 3D scene has white textures,
-and sound effects play late (see below).
+Still wrong there at first: races drew in the top half of the picture, the intro's 3D scene looked
+white, and sound effects played late. The squashed races and the late sound are fixed since 13 Nov
+(see the changelog); the white city is how GT5 draws that scene.
 
 If you have a Linux PC with a graphics card, please
 [tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml)
@@ -574,10 +575,8 @@ If you have a Linux PC with a graphics card, please
 - Ultrawide (21:9, 32:9): the Linux renderer draws 16:9.
 - The Vulkan renderer is younger than the Windows one; picture bugs the Windows build fixed may
   still show here. Please report them with a screenshot.
-- Races are drawn squashed into the top half of the picture (seen on Windows and Android with the
-  same renderer, and on a Radeon RX 7900 XTX under Linux); a fix is on the way.
-- Sound effects (menu clicks, the countdown, engines) can play 30 seconds or more late. Not seen on
-  Windows; being looked into.
+- The title screen's white model city is meant to be white (the Windows build draws it the same),
+  but its depth-of-field blur and darker roads may still be missing on Linux.
 - Movies and the on-screen keyboard (naming a save, Course Maker) are untried on Linux.
 
 <a id="steam-deck"></a>

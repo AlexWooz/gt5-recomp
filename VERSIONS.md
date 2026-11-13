@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.33](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.33) | 13 Nov 2026 | Linux: races full screen, right exposure, sound effects on time (#20) |
 | [v0.1.32](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.32) | 13 Nov 2026 | First-visit stutter about 3x shorter: new shaders compile in parallel (community pull request #28 by AlexWooz) |
 | [v0.1.31](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.31) | 13 Nov 2026 | DLC works offline with your own licences (community pull request #25 by AlexWooz); README: Linux in Requirements (#20) |
 | [v0.1.30](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.30) | 13 Nov 2026 | Game update 2.17 runs on the US and European releases (community pull request #23 by AlexWooz); README: saves are in GT5\gamedata |
