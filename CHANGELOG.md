@@ -9,6 +9,8 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🏷️ Released as **v0.1.31**
+
 🎁 **DLC works, offline, with your own licences** (US release, update 2.17; a community pull request by
 AlexWooz, #25)
 - The gift cars arrive in the garage, and every pack (Racing Car Pack, Car Packs 2 and 3, the 2012

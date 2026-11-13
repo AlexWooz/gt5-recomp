@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.31](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.31) | 13 Nov 2026 | DLC works offline with your own licences (community pull request #25 by AlexWooz); README: Linux in Requirements (#20) |
 | [v0.1.30](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.30) | 13 Nov 2026 | Game update 2.17 runs on the US and European releases (community pull request #23 by AlexWooz); README: saves are in GT5\gamedata |
 | [v0.1.29](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.29) | 13 Nov 2026 | SPU code runs leaner: SPURS jobs take 20% less CPU, about 7% more frames on 4 cores (one re-lift) |
 | [v0.1.28](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.28) | 13 Nov 2026 | About 10% faster on small CPUs (waits that nap instead of spinning, four upstream ps3recomp speed-ups); build without Visual Studio (get-toolchain.ps1, #22) |
