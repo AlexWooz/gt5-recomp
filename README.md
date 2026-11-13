@@ -815,6 +815,7 @@ so the launcher's settings win. Some useful ones:
 | `GCM_DRAIN_STAT=1` | Timing lines every 5 s in `logs\play.err`. |
 | `PS3_MUTE=1` | No sound. |
 | `RSX_SHADER_CACHE_DIR=<dir>` | Where compiled shaders are cached (default `scratch\rsx_shader_cache_v2`). |
+| `LD_ASYNC_SHADERS=0` | Compile new shaders one at a time on the graphics thread, as before 13 Nov, instead of on up to 8 threads alongside it. |
 | `GT5_MOD_<NAME>=1` | Turns on a game-code mod from `GT5\mods` (see [MODDING.md](MODDING.md)). |
 
 Most speed-ups in the patch can be switched off one by one to rule them out when something looks

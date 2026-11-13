@@ -9,6 +9,23 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+⚡ **First-visit stutter about three times shorter: new shaders compile in parallel**
+- A shader that isn't in the cache took 25-35 ms to compile, one after another on the graphics
+  thread, and a new car or track brings a hundred or more at once. Now they go to up to 8 compile
+  threads, and the graphics thread carries on to the next draws, whose new shaders compile
+  alongside. The command recording waits for a pipeline only when it reaches it, so the GPU gets
+  the same commands in the same order as before.
+- Creating a new render target or depth buffer no longer waits for everything queued to be
+  recorded (and so for every shader still compiling): a new slot's view was never used.
+- Measured from an empty shader cache on the same route (menus, a few cars, a race start):
+  stutter in all 26.6 s instead of 78.4 s; the race start with about 340 new shaders 3.4 s instead
+  of 12.2 s; about 115 new shaders 1.1-1.4 s instead of 4.4 s; 3 freezes over a second instead of 16.
+  No compile or pipeline errors, and nothing drawn differently.
+- Visits after the first are unchanged: their shaders load from the cache, and building the
+  pipelines from cached shaders took about half a millisecond each in a test.
+- `LD_ASYNC_SHADERS=0` compiles one at a time as before. Only with the recording thread (on by
+  default; `LD_RECORD_THREAD=0` turns both off).
+
 📖 **README, Linux: the first test on a real graphics card** (melroy89, Radeon RX 7900 XTX, Linux Mint
 22.3, #20)
 - Setup, the build, the menus and an Xbox controller work, with no crashes. Races still draw in the
