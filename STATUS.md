@@ -50,6 +50,8 @@ performance matters more than the graphics card.
 - Game updates (2.xx), new: the Asian release's update 2.01 boots, loads a long-played career save and
   races in Arcade Mode. It needs the update's data as well as its executable (README, Game updates).
   Frame rates on it aren't measured yet
+- Update 2.17 (the last), new: the US release's 2.17 runs menus, GT Mode and a full 16-car Arcade
+  race at 60 fps (README, Game updates)
 - One-click install: `GT5-Installer.bat` (README, Install)
 - Ultrawide monitors (21:9, 32:9), new: the game draws a wider view itself and keeps the HUD and
   menus 16:9 in the middle (checked in 2560×1080, 3440×1440 and 3840×1080 windows, not yet on a real
@@ -91,8 +93,8 @@ performance matters more than the graphics card.
 ## ❌ Not supported yet
 
 - Ultrawide on releases other than the European disc 01.00: they keep the 16:9 picture for now
-- Game updates other than 2.01 are untried: 2.11 (what the GT5 Master Mod needs), 2.17 (the last one)
-  and other regions' updates. Each can change the game's SPU programs again; setup's
+- Game updates other than 2.01 and US 2.17 are untried: 2.11 (what the GT5 Master Mod needs) and
+  other regions' updates. Each can change the game's SPU programs again; setup's
   `SPU jobs found in EBOOT.elf: N of 15` says whether yours are all known
 
 ## ⚠️ Known issues

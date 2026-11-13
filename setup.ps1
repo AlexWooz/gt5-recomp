@@ -139,6 +139,8 @@ if (-not (Test-Path $elf)) {
         Ok "GT5\input\EBOOT.elf: Hong Kong / Asia BCAS20108, version 01.00 (tested)"
     } elseif ($sha1 -eq "96DEA35B194AA80E993CAD9EBE42E96072F3A3D5") {
         Ok "GT5\input\EBOOT.elf: Hong Kong / Asia BCAS20108, update 2.01 (tested; needs the update's data in GT5\hdd0, README: Game updates)"
+    } elseif ($sha1 -eq "12EF249F9B95591E08251AC85F103B1451DA23BF") {
+        Ok "GT5\input\EBOOT.elf: North America BCUS98114, update 2.17 (tested; needs the update's data in GT5\hdd0, README: Game updates)"
     } else {
         Ok "GT5\input\EBOOT.elf (SHA-1 $sha1)"
         Write-Host "            Not one tried yet. Another disc version may well work: please report how it goes. One from a game update (2.xx) also needs the update's data in GT5\hdd0 (README: Game updates)." -ForegroundColor Yellow
