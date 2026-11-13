@@ -432,22 +432,11 @@ shared (see below).
 
 ## 🐧 Linux
 
-**New and early: a native Linux build** (x86-64). The same recompiled game code, built with Clang,
-drawing with Vulkan (the renderer of the Android build) instead of Direct3D 12, with SDL2 for the
-window, keyboard, controllers and sound. It isn't Wine or Proton: `gt5` is a Linux program.
+A native x86-64 build using Vulkan and SDL2. See [Requirements](#requirements) for hardware and
+build dependencies, and [Which copy of GT5](#which-copy-of-gt5) for supported game releases.
 
-**Experimental:** setup and menus have been tested on Linux with software rendering; races on a
-real Linux GPU are still untested. See [Linux testing status](#linux-testing-status) below.
-
-### What you need
-
-- A 64-bit x86 PC whose CPU has AVX2 (Intel from 2013 / Haswell, AMD Ryzen; the same as the Windows
-  build), 16 GB of memory for the first build, and about 30 GB free.
-- A Vulkan graphics driver: Mesa (AMD, Intel) or NVIDIA's own.
-- A distribution with FFmpeg 6.1 or newer: Ubuntu 24.04, Linux Mint 22, Debian 13, Fedora 40, Arch,
-  or newer.
-- Your GT5 disc dump (see [Which copy of GT5](#which-copy-of-gt5)). The steps below prepare the
-  game executable and PS3 firmware.
+**Experimental:** menus have been tested with software rendering; races on a real Linux GPU are
+still untested. See [Linux testing status](#linux-testing-status).
 
 ### Set it up
 
@@ -465,13 +454,11 @@ bash setup.sh --install-deps
 Without it, setup prints the install command. Three `[missing]` game-file entries are normal on
 the first run: the next steps supply them.
 
-**2. Get RPCS3**
+**2. Prepare the firmware with RPCS3**
 
 Download and open the Linux AppImage from [RPCS3 downloads](https://rpcs3.net/download).
 RPCS3 is a free PS3 emulator, used here to extract firmware and decrypt the game executable.
 You can close it once those jobs are done.
-
-**3. Prepare the PS3 firmware**
 
 Download `PS3UPDAT.PUP` from [Sony's PS3 system software page](https://www.playstation.com/support/hardware/ps3/system-software/).
 In RPCS3, choose **File > Install Firmware** and select that file. Once installation finishes,
@@ -482,10 +469,9 @@ mkdir -p GT5/dev_flash
 cp -a ~/.config/rpcs3/dev_flash/. GT5/dev_flash/
 ```
 
-If RPCS3 stores `dev_flash` elsewhere, use that location instead. The result must contain
-`GT5/dev_flash/sys`, without an extra `dev_flash` folder inside it.
+If RPCS3 stores `dev_flash` elsewhere, use that location instead.
 
-**4. Copy the game data**
+**3. Copy the game data**
 
 Copy the whole `PS3_GAME` folder from your disc dump:
 
@@ -494,9 +480,7 @@ mkdir -p GT5/vfs/PS3_GAME
 cp -a "/path/to/your/disc/PS3_GAME/." GT5/vfs/PS3_GAME/
 ```
 
-The result must contain `GT5/vfs/PS3_GAME/USRDIR`, without an extra `PS3_GAME` folder inside it.
-
-**5. Decrypt the game executable**
+**4. Decrypt the game executable**
 
 In RPCS3, choose **Utilities > Decrypt PS3 Binaries** and select your disc dump's
 `PS3_GAME/USRDIR/EBOOT.BIN`. Copy the decrypted output to `GT5/input/EBOOT.elf`:
@@ -509,9 +493,9 @@ cp "/path/to/decrypted/EBOOT.elf" GT5/input/EBOOT.elf
 Use the file produced by decryption; renaming the encrypted `EBOOT.BIN` does not decrypt it.
 For a game update, follow [Game updates](#game-updates-2xx) to keep the executable and data matched.
 
-**6. Check and build**
+**5. Check and build**
 
-Expected layout (other files omitted):
+Check these paths exist, without an extra `dev_flash` or `PS3_GAME` folder nested inside:
 
 ```text
 GT5/dev_flash/sys/
@@ -520,15 +504,13 @@ GT5/vfs/PS3_GAME/PARAM.SFO
 GT5/vfs/PS3_GAME/USRDIR/GT.VOL
 ```
 
-Check the files, then build:
+Check the files and build only if the check succeeds:
 
 ```bash
-bash setup.sh --no-build
-# Once everything is in place:
-bash setup.sh
+bash setup.sh --no-build && bash setup.sh
 ```
 
-If the check reports `[missing]`, follow its message and rerun it before building.
+If setup reports `[missing]`, follow its message and rerun the command.
 The first build takes about 20 to 60 minutes and produces `GT5/build-linux/gt5`.
 
 ### Play
