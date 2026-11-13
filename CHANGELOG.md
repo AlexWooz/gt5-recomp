@@ -9,9 +9,12 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
-🏁 **Update 2.17 runs** (tested on the US release, BCUS98114)
-- 2.17, the last update, gets through menus, GT Mode and a full 16-car Arcade race at 60 fps. It
-  was built with a newer compiler than the disc, and the lift didn't know two of its patterns:
+🏷️ Released as **v0.1.30**
+
+🏁 **Update 2.17 runs** (from a community pull request by AlexWooz, #23; one re-lift)
+- 2.17, the last update, gets through menus, GT Mode and a full 16-car Arcade race at 60 fps on the
+  US release (BCUS98114), tested by AlexWooz. It was built with a newer compiler than the disc, and the
+  lift didn't know two of its patterns:
   - Switch tables whose address is built from constants (`lis`/`addi`) instead of read from the
     TOC. Every switch became a call into nowhere, starting with the game's start-up code: a black
     screen.
@@ -20,10 +23,22 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
   - The computed goto `version_addrs.py` finds is laid out differently too, and its labels are
     stored by code rather than copied from a table. It now finds both forms.
   - Four SPU jobs are new or changed in 2.17; setup finds them in the executable
-    (`13 of 15, plus 3 that only game updates have` is complete for US 2.17).
-- The disc releases lift exactly as before: the same jump tables on US 01.00, and the same
-  `version_addrs.py` output.
+    (`13 of 15, plus 3 that only game updates have` is complete for 2.17).
+- The second fix reaches the disc too: the European 01.00 executable has one switch with more than 256
+  cases, and its last 35 cases were skipped if the game ever got there (with an `unresolved indirect
+  call` line in the log; none turned up in our play logs). They now run. Every other part of the disc's
+  lift is unchanged, and `version_addrs.py` gives the same results as before on the European and Asian
+  discs and on Asian update 2.01.
+- **The European 2.17 runs too**, which the pull request couldn't test: with these changes its
+  executable gives the same SPU jobs and almost the same lift as the US one (358 switches), and it
+  gets through the update's first-start questions (data install, language, screen size), the opening
+  movie and Arcade Mode into a 16-car race, with no missing SPU job and no unresolved call. Its frame
+  rate isn't measured yet.
 - Set an update up as in README, [Game updates](README.md#game-updates).
+
+📖 **README: saves are in `GT5\gamedata`**
+- The README said `GT5\hdd0`. Anyone moving to a fresh copy by hand should take `GT5\gamedata` (and
+  `GT5\hdd0` if they set up a game update). `update.ps1` never touched either.
 
 🏷️ Released as **v0.1.29**
 

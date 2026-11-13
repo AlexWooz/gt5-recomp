@@ -149,7 +149,7 @@ That one command does everything:
 4. It rebuilds only what changed.
 
 Kept as they are:
-- your saves (`GT5\hdd0`) and game files (`GT5\input`, `GT5\vfs`, `GT5\dev_flash`);
+- your saves (`GT5\gamedata`), a game update's data (`GT5\hdd0`) and game files (`GT5\input`, `GT5\vfs`, `GT5\dev_flash`);
 - the shader cache;
 - edits you made to files such as `play.bat`.
 
@@ -178,7 +178,7 @@ once (about 10 minutes), because older installs have no record of what their cod
 A ZIP download can't update itself. Clone the repository fresh as in [Setup](#setup), step 1. Then
 move these folders over from your old copy and run `update.ps1`:
 - your game files: `GT5\input`, `GT5\vfs`, `GT5\dev_flash`;
-- your saves: `GT5\hdd0`.
+- your saves: `GT5\gamedata` (and `GT5\hdd0`, if you set up a game update).
 
 ### Go back to an older version
 
@@ -252,7 +252,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Ultrawide (21:9, 32:9)? | ✅ New: a wider view, with the HUD kept 16:9 in the middle |
 | Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard |
 | US copy (BCUS98114)? | ✅ Yes, players have raced on it |
-| Version 1.02, or a game update (2.xx)? | 🧪 New: game updates run: 2.17 (the last) tested on the US release, 2.01 on the Asian one ([how to set one up](#game-updates)); 1.02 and 2.11 untried |
+| Version 1.02, or a game update (2.xx)? | 🧪 New: game updates run: 2.17 (the last) tested on the US and European releases, 2.01 on the Asian one ([how to set one up](#game-updates)); 1.02 and 2.11 untried |
 | Settings without editing files? | ✅ New: the [launcher](#launcher) |
 | Full screen? | ✅ New: borderless full screen in the launcher (Alt+Enter is switched off since v0.1.17: it used to freeze the picture) |
 | Higher than 1080p (4K)? | ⚠️ The game's top mode is its 1080p one (races drawn at 1728x972), scaled up to your window; drawing above that isn't there yet |
@@ -353,13 +353,13 @@ and the tools find the few spots that could differ between releases in your own 
 **Q: My copy says version 1.02, or I have a game update (2.xx). Does that work? What about the Master Mod?**
 
 **A: Game updates work now, as far as they've been tried.** 2.17, the last update, runs on the US
-release: menus, GT Mode and a full 16-car Arcade race at 60 fps. The Asian release's 2.01 boots,
+release (menus, GT Mode and a full 16-car Arcade race at 60 fps) and on the European one (its first-start
+questions, the opening movie, Arcade and a 16-car race). The Asian release's 2.01 boots,
 loads a career save and races. An update needs two things from your PS3 (or RPCS3): its executable
-and its data, see [Game updates](#game-updates). 2.11 (the one the GT5 Master Mod needs) and other
-regions' 2.17 haven't been tried yet: each update can change the game's SPU programs again, so please
-report what setup prints (`version_addrs.py`'s lines and `SPU jobs found in EBOOT.elf: N of 15`; US
-2.17 shows 13 of 15 plus 3 of its own, and that is complete).
-Another disc version, like 1.02, hasn't been tried either; the same lines tell us how
+and its data, see [Game updates](#game-updates). 2.11 (the one the GT5 Master Mod needs) and the Asian
+2.17 haven't been tried yet: each update can change the game's SPU programs again, so please
+report what setup prints (`version_addrs.py`'s lines and `SPU jobs found in EBOOT.elf: N of 15`; 2.17
+shows 13 of 15 plus 3 of its own, and that is complete). Another disc version, like 1.02, hasn't been tried either; the same lines tell us how
 close it is. The Master Mod itself (its changed game files) hasn't been tried.
 
 **Q: Does online work?**
@@ -604,6 +604,7 @@ update's data (see [Game updates](#game-updates)).
 | Hong Kong / Asia | **BCAS20108** | tested (and run by a player) | decrypted `EBOOT.elf` `49A3662D4B541BB4E0C2E72D2602F89FEB710E71` |
 | Hong Kong / Asia, update 2.01 | **BCAS20108** | tested: menus, career save, Arcade race | decrypted update `EBOOT.elf` `96DEA35B194AA80E993CAD9EBE42E96072F3A3D5` |
 | North America, update 2.17 | **BCUS98114** | tested: menus, GT Mode, 16-car Arcade race | decrypted update `EBOOT.elf` `12EF249F9B95591E08251AC85F103B1451DA23BF` |
+| Europe, update 2.17 | **BCES00569** | tested: first-start questions, opening movie, 16-car Arcade race | decrypted update `EBOOT.elf` `306F86C62B9F03041C903BE96AC59E5C3F130452` |
 
 Almost everything in the port works for any release, because the recompiled code is generated from
 your own executable. Only three things are tied to where the code sits in one executable: the end of
@@ -679,7 +680,7 @@ in place it builds the game for you. You never need to run the scripts in `GT5\s
 
    When nothing is missing, it generates the game code from your EBOOT.elf (about 10 minutes) and
    builds `gt5.exe` (20 to 50 minutes the first time, depending on your PC).
-5. Play: `GT5\play.bat`. Saves go to `GT5\hdd0`; logs go to `GT5\logs`.
+5. Play: `GT5\play.bat`. Saves go to `GT5\gamedata`; logs go to `GT5\logs`.
 
 If setup stops with an error, post its whole output in the
 [discussions](https://github.com/MormonFTP-hub/gt5-recomp/discussions) or the

@@ -1,6 +1,6 @@
 # 📋 Current state
 
-*Last updated: 12 November 2026*
+*Last updated: 13 November 2026*
 
 ## 🟢 Playable
 
@@ -51,7 +51,8 @@ performance matters more than the graphics card.
   races in Arcade Mode. It needs the update's data as well as its executable (README, Game updates).
   Frame rates on it aren't measured yet
 - Update 2.17 (the last), new: the US release's 2.17 runs menus, GT Mode and a full 16-car Arcade
-  race at 60 fps (README, Game updates)
+  race at 60 fps (found and tested by a contributor), and the European 2.17 reaches a 16-car Arcade
+  race too (README, Game updates)
 - One-click install: `GT5-Installer.bat` (README, Install)
 - Ultrawide monitors (21:9, 32:9), new: the game draws a wider view itself and keeps the HUD and
   menus 16:9 in the middle (checked in 2560×1080, 3440×1440 and 3840×1080 windows, not yet on a real
@@ -93,8 +94,8 @@ performance matters more than the graphics card.
 ## ❌ Not supported yet
 
 - Ultrawide on releases other than the European disc 01.00: they keep the 16:9 picture for now
-- Game updates other than 2.01 and US 2.17 are untried: 2.11 (what the GT5 Master Mod needs) and
-  other regions' updates. Each can change the game's SPU programs again; setup's
+- Game updates other than 2.01 and 2.17 (US, Europe) are untried: 2.11 (what the GT5 Master Mod
+  needs) and other regions' updates. Each can change the game's SPU programs again; setup's
   `SPU jobs found in EBOOT.elf: N of 15` says whether yours are all known
 
 ## ⚠️ Known issues
@@ -112,7 +113,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **13 Nov 2026:** SPU code runs leaner: SPURS jobs take 20% less CPU, about 7% more frames on a
+- **13 Nov 2026:** game update 2.17, the last one, runs on the US and European releases (from a
+  community pull request; one re-lift) (v0.1.30); SPU code runs leaner: SPURS jobs take 20% less CPU, about 7% more frames on a
   4-core CPU (one re-lift, done by `update.ps1`); about 10% faster on small CPUs and laptops before
   that: waits that no longer spin a core, plus four speed-ups from the upstream ps3recomp project
   (v0.1.28).

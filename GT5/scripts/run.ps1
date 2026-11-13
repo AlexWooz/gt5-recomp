@@ -24,7 +24,9 @@ $out = "$root\logs\$Tag.out"; $err = "$root\logs\$Tag.err"
 $t0 = Get-Date
 # GT5_TEST_EXE=<path>: run another build (e.g. one made from the published source) with the same data.
 $exe = if ($env:GT5_TEST_EXE) { $env:GT5_TEST_EXE } else { "$root\build\gt5.exe" }
-$p = Start-Process $exe -ArgumentList "`"$root\input\EBOOT.elf`"" -WorkingDirectory $root `
+# GT5_TEST_ELF=<path>: the EBOOT.elf that build was lifted from (another release or update).
+$elf = if ($env:GT5_TEST_ELF) { $env:GT5_TEST_ELF } else { "$root\input\EBOOT.elf" }
+$p = Start-Process $exe -ArgumentList "`"$elf`"" -WorkingDirectory $root `
     -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err
 $h = $p.Handle  # keeps ExitCode readable after exit
 $peak = 0
