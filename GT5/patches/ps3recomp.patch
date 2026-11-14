@@ -20306,10 +20306,9 @@ index 1c64c5a4..c3484e84 100644
  /* 1 when the translator was built with glslang and spirv-cross, 0 when the
   * stub is in. A backend asks this once and picks its shader path. */
 diff --git a/libs/video/rsx_shader_spirv.cpp b/libs/video/rsx_shader_spirv.cpp
-index 4aa4a176..5aa8f658 100644
 --- a/libs/video/rsx_shader_spirv.cpp
 +++ b/libs/video/rsx_shader_spirv.cpp
-@@ -70,8 +70,9 @@ int translate(const char* hlsl, int stage, std::vector<unsigned int>& spirv,
+@@ -70,8 +70,9 @@
          return -1;
      }
  
@@ -20321,7 +20320,26 @@ index 4aa4a176..5aa8f658 100644
      const EShMessages msgs =
          (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules | EShMsgReadHlsl);
  
-@@ -237,7 +238,8 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
+@@ -121,10 +122,14 @@
+ 
+ const u32 kCacheFormat = 1;
+ const u32 kCacheMagic = 0x56505352u;   /* "RSPV" */
+-/* This file's compile time stands for translate()'s options and the binding
+- * contract in rsx_shader_spirv.h: when either changes, this file is rebuilt,
+- * and the files an older build wrote become misses. */
+-const char kTranslatorBuild[24] = __DATE__ " " __TIME__;
++/* Stands for translate()'s options and preamble and the binding contract in
++ * rsx_shader_spirv.h: bump it when any of them changes, and the files an older
++ * translator wrote become misses. (The HLSL text is the key and glslang's
++ * version is in the header, so a change to either misses by itself.) It was
++ * this file's compile time, so every rebuild -- every update, which re-patches
++ * ps3recomp -- threw the whole cache away and a Steam Deck spent its next races
++ * compiling every shader again. */
++const char kTranslatorBuild[24] = "rsx spirv translator 1";
+ 
+ struct Cache {
+     std::mutex lock;
+@@ -237,7 +242,8 @@
          put_log(log, log_size, "bad arguments", nullptr);
          return -1;
      }

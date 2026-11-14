@@ -9,6 +9,15 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🧊 **Linux: the shader cache survives updates**
+- Each cached shader was stamped with the time its translator was built, and any other stamp counted
+  as stale. Every update re-patches and rebuilds that code, so after every update the whole cache was
+  thrown away and the next races compiled every shader again (on a Steam Deck, close to half the
+  graphics thread for minutes). The stamp is now a version number, raised when the translator's
+  settings change; the shader text and the glslang version still decide a hit as before.
+- Checked on a Steam Deck: after the translator code was rebuilt, the menus wrote 7 shaders instead
+  of all 295 again. Caches written by older builds miss once, the first time.
+
 🌗 **Linux: race shadows read on the GPU, and the dark band ahead of the car is gone**
 - GT5 reads its 1024x2048 shadow map as a 16-bit depth texture twice a race frame. The Vulkan
   renderer could convert depth on the GPU only for the other way GT5 reads depth, so each read
