@@ -9,6 +9,15 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🪟 **Linux: a present no longer waits for the frame to be drawn**
+- Each frame is copied into the window, and that copy shared the present's command buffer, so it was
+  waited on at once; it sits in the GPU queue behind the frame being drawn, so every present waited
+  for the whole frame's GPU work: about 11 ms of the graphics thread per frame on a Steam Deck. The
+  window copy now has three command buffers, fences and acquire semaphores of its own, and one is
+  waited on only when its turn comes round again, three presents later.
+- On a Steam Deck in the main menu: a present 11 ms to 0.4 ms, the median frame 62-64 to 53-58 ms
+  (the menu is still paced to three or four vblanks).
+
 ⚡ **Game code: vector multiply-adds four lanes at a time (Windows and Linux)**
 - The PS3's vector multiply-add (vmaddfp) and negated multiply-subtract (vnmsubfp) were done one lane
   at a time, with several checks per lane, and without the CPU's fused multiply-add: about a tenth
