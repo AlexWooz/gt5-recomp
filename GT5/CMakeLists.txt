@@ -126,8 +126,10 @@ target_compile_definitions(gt5 PRIVATE _CRT_SECURE_NO_WARNINGS)
 # the last -O on the line wins, so this overrides Release's /O2 for them alone.
 # -O2 with this CPU's instructions (2026-11-05): the largest chunk builds in 71 s against 67 s at -O1, under 1 GB.
 # MOVBE folds the byte swap of every big-endian guest load and store into the access itself.
-# No FMA contraction, so floating-point results match the -O1 build.
-set_source_files_properties(${RECOMP_SOURCES} PROPERTIES COMPILE_OPTIONS "/w;/bigobj;-O2;-mavx2;-mbmi;-mbmi2;-mmovbe;-mlzcnt;-mpopcnt;-ffp-contract=off")
+# No FMA contraction, so floating-point results match the -O1 build. -mfma lets ppu_vmx.h do
+# vmaddfp/vnmsubfp four lanes at once with the same results (every AVX2 CPU has FMA; contraction
+# stays off, so nothing else changes).
+set_source_files_properties(${RECOMP_SOURCES} PROPERTIES COMPILE_OPTIONS "/w;/bigobj;-O2;-mavx2;-mfma;-mbmi;-mbmi2;-mmovbe;-mlzcnt;-mpopcnt;-ffp-contract=off")
 
 # Keep symbols so crash RVAs can be symbolized.
 target_compile_options(gt5 PRIVATE /Z7)

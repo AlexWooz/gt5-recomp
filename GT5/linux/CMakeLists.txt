@@ -128,9 +128,10 @@ target_compile_options(gt5 PRIVATE -fno-strict-aliasing -fwrapv -Wno-everything)
 # The same code generation as the Windows build, so both run the game the same way: the lifted PPU
 # code at -O2 with the instructions every AVX2 CPU has (MOVBE folds the byte swap of each big-endian
 # guest access into the access), SPU code with AVX2/FMA and the PS3's round-toward-zero floats. No
-# FMA contraction anywhere: floating-point results match the Windows build's.
+# FMA contraction anywhere: floating-point results match the Windows build's. -mfma lets ppu_vmx.h
+# do vmaddfp/vnmsubfp four lanes at once with the same results (contraction stays off).
 set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
-    COMPILE_OPTIONS "-O2;-w;-mavx2;-mbmi;-mbmi2;-mmovbe;-mlzcnt;-mpopcnt;-ffp-contract=off")
+    COMPILE_OPTIONS "-O2;-w;-mavx2;-mfma;-mbmi;-mbmi2;-mmovbe;-mlzcnt;-mpopcnt;-ffp-contract=off")
 if(SPU_SOURCES)
     set_source_files_properties(${SPU_SOURCES} PROPERTIES
         INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu"

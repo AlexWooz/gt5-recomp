@@ -22280,7 +22280,18 @@ index 11a74804..38447ab5 100644
 diff --git a/runtime/ppu/ppu_vmx.h b/runtime/ppu/ppu_vmx.h
 --- a/runtime/ppu/ppu_vmx.h
 +++ b/runtime/ppu/ppu_vmx.h
-@@ -275,16 +275,37 @@
+@@ -18,6 +18,10 @@
+ #include <stdint.h>
+ #include <string.h>
+ #include <math.h>
++#if defined(__FMA__) && (defined(__x86_64__) || defined(_M_X64))
++#include <immintrin.h>
++#define VMX_SIMD_FMA 1
++#endif
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -275,16 +279,80 @@
  VMX_FBIN(vmx_vmaxfp, vmx_maxf(vmx_f(x), vmx_f(y)), 0)
  VMX_FBIN(vmx_vminfp, vmx_minf(vmx_f(x), vmx_f(y)), 0)
  
@@ -22305,6 +22316,48 @@ diff --git a/runtime/ppu/ppu_vmx.h b/runtime/ppu/ppu_vmx.h
 +    return fmaf(x, z, y);
 +#endif
 +}
++#if VMX_SIMD_FMA
++/* vmaddfp and vnmsubfp, four lanes at once, bit for bit what the per-lane code below gives: each
++ * lane's flush, fused multiply-add (correctly rounded, as fmaf), default-NaN fix and result flush.
++ * Per lane they were most of a GT5 game thread's vector maths on a Steam Deck (about a tenth of
++ * the thread). Needs FMA (the build's AVX2 CPUs have it); the per-lane forms stay for the rest. */
++VMX_INL __m128 vmx_ld4(const void* p) {
++    const __m128i bs = _mm_setr_epi8(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
++    return _mm_castsi128_ps(_mm_shuffle_epi8(_mm_loadu_si128((const __m128i*)p), bs));
++}
++VMX_INL void vmx_st4(void* p, __m128 v) {
++    const __m128i bs = _mm_setr_epi8(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
++    _mm_storeu_si128((__m128i*)p, _mm_shuffle_epi8(_mm_castps_si128(v), bs));
++}
++/* vmx_flush per lane: a denormal (exponent 0) becomes zero of its sign. */
++VMX_INL __m128 vmx_flush4(__m128 v) {
++    const __m128i x = _mm_castps_si128(v);
++    const __m128i den = _mm_cmpeq_epi32(_mm_and_si128(x, _mm_set1_epi32(0x7F800000)), _mm_setzero_si128());
++    return _mm_castsi128_ps(_mm_blendv_epi8(x, _mm_and_si128(x, _mm_set1_epi32((int)0x80000000u)), den));
++}
++/* vmx_fix per lane: any NaN becomes the default QNaN. */
++VMX_INL __m128 vmx_fix4(__m128 v) {
++    return _mm_blendv_ps(v, _mm_castsi128_ps(_mm_set1_epi32(0x7FC00000)), _mm_cmpunord_ps(v, v));
++}
++VMX_INL void vmx_vmaddfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) {
++    __m128 x = vmx_ld4(a_), y = vmx_ld4(b_), z = vmx_ld4(c_);
++    const int nj = (vscr & VMX_NJ) != 0;
++    if (nj) { x = vmx_flush4(x); y = vmx_flush4(y); z = vmx_flush4(z); }
++    __m128 r = vmx_fix4(_mm_fmadd_ps(x, z, y));
++    if (nj) r = vmx_flush4(r);
++    vmx_st4(d_, r);
++}
++/* -(x*z - y), as the per-lane form: a fused multiply-subtract negated (not x*-z + y, whose zero
++ * results have the other sign). */
++VMX_INL void vmx_vnmsubfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) {
++    __m128 x = vmx_ld4(a_), y = vmx_ld4(b_), z = vmx_ld4(c_);
++    const int nj = (vscr & VMX_NJ) != 0;
++    if (nj) { x = vmx_flush4(x); y = vmx_flush4(y); z = vmx_flush4(z); }
++    __m128 r = vmx_fix4(_mm_xor_ps(_mm_fmsub_ps(x, z, y), _mm_castsi128_ps(_mm_set1_epi32((int)0x80000000u))));
++    if (nj) r = vmx_flush4(r);
++    vmx_st4(d_, r);
++}
++#else
  VMX_INL void vmx_vmaddfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) { VMX_ARGS_PREP; const uint8_t* c = (const uint8_t*)c_;
      for (int i = 0; i < 4; i++) {
          float x = vmx_f(vmx_flush(vmx_w(a, i), vscr)), y = vmx_f(vmx_flush(vmx_w(b, i), vscr)),
@@ -22317,10 +22370,11 @@ diff --git a/runtime/ppu/ppu_vmx.h b/runtime/ppu/ppu_vmx.h
                z = vmx_f(vmx_flush(vmx_w(c, i), vscr));
 -        vmx_sw(r, i, vmx_flush(vmx_fix(vmx_u(-fmaf(x, z, -y))), vscr)); } VMX_OUT; }
 +        vmx_sw(r, i, vmx_flush(vmx_fix(vmx_u(-vmx_fmaf(x, z, -y))), vscr)); } VMX_OUT; }
++#endif
  
  #define VMX_FUN(name, expr, flush_in, nanmode) \
  VMX_INL void name(VMX_D, VMX_B, uint32_t vscr) { const uint8_t* b = (const uint8_t*)b_; uint8_t r[16]; \
-@@ -300,20 +321,25 @@
+@@ -300,20 +368,25 @@
  VMX_FUN(vmx_vrfip, ceilf(f), 1, 2)
  VMX_FUN(vmx_vrfim, floorf(f), 1, 2)
  

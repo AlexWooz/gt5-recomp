@@ -9,6 +9,17 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+⚡ **Game code: vector multiply-adds four lanes at a time (Windows and Linux)**
+- The PS3's vector multiply-add (vmaddfp) and negated multiply-subtract (vnmsubfp) were done one lane
+  at a time, with several checks per lane, and without the CPU's fused multiply-add: about a tenth
+  of a busy GT5 game thread. Now all four lanes go at once with one fused multiply-add, the same
+  flush and NaN rules applied to the four together. The results are bit for bit the same: checked on
+  4 million inputs per operation (random values, zeros, denormals, infinities, NaNs, rounding
+  midpoints, both flush modes) against the per-lane code.
+- The recompiled game code is built with FMA for it (every AVX2 CPU has FMA). Floating-point
+  contraction stays off, so no other result changes.
+- On a Steam Deck in a race: the game thread from about 69% to 62% busy.
+
 🧮 **Linux: texture binding no longer re-hashes every car's cube map at every draw**
 - Each car's small ambient cube map was checked for changes at every draw that bound it, by hashing
   its six faces byte by byte: in a race on a Steam Deck, about 87% of the time spent binding
