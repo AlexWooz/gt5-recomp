@@ -9,6 +9,18 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 14 Nov 2026
 
+🐧 **Linux: the command-buffer walker sleeps and is woken, as on Windows** (Steam Deck)
+- On a CPU of 8 logical CPUs or fewer, v0.1.41's sleep-after-spin now works on Linux too: the walker
+  spins 20 us, then waits on the kick event, which an SPU job writing the word it is parked on sets.
+  Before, `ps3_host_sleep_on` was a `sched_yield` there. The Linux event shim gained a wait with a
+  microsecond timeout for it. `PS3_SPIN_SLEEP`, `PS3_YIELD_NAP` and `GCM_WALK_SLEEP` work as on
+  Windows; with the sleep off, Linux keeps its 50 us nap (`GCM_FIFO_NAP`).
+- `PS3_AB_PERIOD` now works with the Vulkan renderer: its `[ab]` lines are logged once a game frame
+  there, and report CPU use on Linux (from `getrusage`).
+- Steam Deck, one replay, 17 ten-second segments: 5.7 frames a second with the sleep, 5.2 with the
+  nap, at the same 4.5 cores busy. Within the noise of the replay, so no loss, and the same code path
+  as Windows.
+
 🏷️ Released as **v0.1.45**
 
 📦 **Install game updates and DLC from their .pkg files** (asked for by Keduboneur78 on Discord: "just
