@@ -21105,7 +21105,52 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  }
  
  static u32 vk_eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
-@@ -2371,6 +2717,7 @@
+@@ -2333,13 +2679,21 @@
+     }
+     o->kind = VK_ENG_COLOR; o->fmt = vf; o->bpp = bpp; o->w = w; o->h = h;
+     /* UNDEFINED -> GENERAL, then the guest's own bytes when the engine could
+-     * resolve them, else transparent black so the contents are defined. */
+-    if (vk_begin()) { vk_eng_release(user, hd); return 0; }
++     * resolve them, else transparent black so the contents are defined.
++     * With batching, recorded into the open batch: the image is new, so only the draws after it
++     * use it, and they come after it in the batch. A submission and a wait of its own, after
++     * flushing the batch, were two GPU waits per new target -- GT5's main menu makes about two
++     * a frame, on a Steam Deck about 14 ms of each frame's walker. */
++    const int batch = vk_eb_active();
++    if (!(batch && s_eb_pending) && vk_begin()) { vk_eng_release(user, hd); return 0; }
+     vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
+     VkClearColorValue zero = { .float32 = { 0.0f, 0.0f, 0.0f, 0.0f } };
+     VkImageSubresourceRange r = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+     pvkCmdClearColorImage(s_vk.cmd, o->im.img, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &r);
+-    if (vk_submit_and_wait()) { vk_eng_release(user, hd); return 0; }
++    vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
++    if (batch) {
++        if (++s_eb_pending >= vk_eb_max()) vk_eng_kick();
++    } else if (vk_submit_and_wait()) { vk_eng_release(user, hd); return 0; }
+     if (seed && seed_row_bytes)
+         vk_eng_upload(o->im.img, 0, 0, w, h, bpp, seed, seed_row_bytes);
+     return hd;
+@@ -2359,18 +2713,24 @@
+         vk_destroy_image(&o->im); return 0;
+     }
+     o->kind = VK_ENG_DEPTH; o->fmt = s_vk.depth_format; o->w = w; o->h = h;
+-    /* Far plane, for the reason the display depth starts there. */
+-    if (vk_begin()) { vk_eng_release(user, hd); return 0; }
++    /* Far plane, for the reason the display depth starts there. In the open batch when there
++     * is one, as a new colour target is (vk_eng_color_target_create). */
++    const int batch = vk_eb_active();
++    if (!(batch && s_eb_pending) && vk_begin()) { vk_eng_release(user, hd); return 0; }
+     vk_barrier_image(o->im.img, s_vk.depth_aspect, VK_IMAGE_LAYOUT_UNDEFINED);
+     VkClearDepthStencilValue far_plane = { 1.0f, 0 };
+     VkImageSubresourceRange r = { s_vk.depth_aspect, 0, 1, 0, 1 };
+     pvkCmdClearDepthStencilImage(s_vk.cmd, o->im.img, VK_IMAGE_LAYOUT_GENERAL, &far_plane, 1, &r);
+-    if (vk_submit_and_wait()) { vk_eng_release(user, hd); return 0; }
++    vk_barrier_image(o->im.img, s_vk.depth_aspect, VK_IMAGE_LAYOUT_GENERAL);
++    if (batch) {
++        if (++s_eb_pending >= vk_eb_max()) vk_eng_kick();
++    } else if (vk_submit_and_wait()) { vk_eng_release(user, hd); return 0; }
+     return hd;
+ }
  
  static void vk_eng_bind_targets(void* user, const u32* surfaces, u32 count, u32 depth)
  {
@@ -21113,7 +21158,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      (void)user;
      if (count > RSX_BE_MAX_COLOR_TARGETS) count = RSX_BE_MAX_COLOR_TARGETS;
      for (u32 i = 0; i < RSX_BE_MAX_COLOR_TARGETS; i++)
-@@ -2419,29 +2766,141 @@
+@@ -2419,29 +2779,141 @@
      else vk_submit_and_wait();
  }
  
@@ -21258,7 +21303,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
                                                                          : VK_FILTER_LINEAR);
          }
          vk_present_record_end(cb);
-@@ -2466,6 +2925,7 @@
+@@ -2466,6 +2938,7 @@
  static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
                              void* out, u32 out_pitch)
  {
@@ -21266,7 +21311,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      (void)user;
      vk_eng_obj* o = vk_eng_get(surface, VK_ENG_COLOR);
      if (!o || !out || !out_pitch || !w || !h || x + w > o->w || y + h > o->h) return;
-@@ -2501,16 +2961,96 @@
+@@ -2501,16 +2974,96 @@
   * becomes the image view's component mapping. A cube map (faces == 6) is a
   * six-layer cube-compatible image, each face uploaded into its layer, sampled
   * through a CUBE view; the pipelines that sample one use the split set layout
@@ -21368,7 +21413,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          return 0;
      const int cube = (faces == 6);
      if ((faces != 1 && !cube) || (cube && w != h)) return 0;   /* cube faces are square */
-@@ -2538,7 +3078,7 @@
+@@ -2538,7 +3091,7 @@
          vk_eng_make_view(o->im.img, vf, mips, vk_remap(remap, rsx_fmt), cube, &o->im.view))
          goto fail;
      o->kind = VK_ENG_TEXTURE; o->fmt = vf; o->w = w; o->h = h; o->cube = (u8)cube; o->mips = mips;
@@ -21377,7 +21422,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      /* UNDEFINED -> GENERAL for every level and face before the uploads arrive. */
      if (vk_begin()) goto fail;
      vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
-@@ -2553,9 +3093,18 @@
+@@ -2553,9 +3106,18 @@
  static void vk_eng_texture_upload(void* user, u32 texture, u32 face, u32 mip, u32 w, u32 h,
                                    const void* src, u32 row_bytes, u32 rows)
  {
@@ -21396,7 +21441,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      /* A BC row is a row of 4x4 blocks; the engine's `rows` already counts them. */
      const size_t tight = o->block ? (size_t)((w + 3u) / 4u) * o->block : (size_t)w * o->bpp;
      vk_eng_upload_rows(o->im.img, face, mip, w, h, tight, rows, src, row_bytes);
-@@ -2622,8 +3171,171 @@
+@@ -2622,8 +3184,171 @@
      vk_destroy_buffer(&s_snap_st);
  }
  
@@ -21568,7 +21613,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      (void)user;
      const vk_eng_obj* t = vk_eng_get(surface, VK_ENG_COLOR);
      if (!t || t->snapshot) return 0;
-@@ -2676,6 +3388,7 @@
+@@ -2676,6 +3401,7 @@
   * invalidates and asks again; it goes when the depth target goes. */
  static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
  {
@@ -21576,7 +21621,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      vk_eng_obj* z = vk_eng_get(depth, VK_ENG_DEPTH);
      if (!z) return 0;
      if (s_vk.depth_format != VK_FORMAT_D32_SFLOAT &&
-@@ -2746,17 +3459,276 @@
+@@ -2746,17 +3472,276 @@
          pvkCmdCopyBufferToImage(s_vk.cmd, st.buf, t->im.img, VK_IMAGE_LAYOUT_GENERAL, 1, &in);
          if (batch) {
              vk_barrier_image(t->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
@@ -21854,16 +21899,26 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      (void)user;
      vk_eng_obj* z = vk_eng_get(depth, VK_ENG_DEPTH);
      if (!z || !out || !w || !h || x + w > z->w || y + h > z->h ||
-@@ -2860,7 +3832,7 @@
+@@ -2860,7 +3845,17 @@
  
  static void vk_eng_drop_framebuffers(void)
  {
 -    if (s_eb_pending) vk_eng_flush();
++    /* A batch still recording or in flight may use them: they go to the grave with it and are
++     * destroyed when it is done, as a released image is. Waiting for every batch here instead was
++     * nearly all of a Steam Deck's GPU waits in GT5's main menu, which releases and recreates a
++     * target or two each frame (about 1.1 s in 5 s). With no room in the grave, wait as before. */
++    if ((s_eb_pending || vk_any_busy()) && s_grave_fb_n + s_e2.fb_count <= VK_GRAVE_MAX) {
++        for (u32 i = 0; i < s_e2.fb_count; i++)
++            if (s_e2.fb[i].fb) s_grave_fb[s_grave_fb_n++] = s_e2.fb[i].fb;
++        s_e2.fb_count = 0;
++        return;
++    }
 +    vk_eng_flush();
      for (u32 i = 0; i < s_e2.fb_count; i++)
          if (s_e2.fb[i].fb) pvkDestroyFramebuffer(s_vk.device, s_e2.fb[i].fb, NULL);
      s_e2.fb_count = 0;
-@@ -3070,7 +4042,7 @@
+@@ -3070,7 +4065,7 @@
  static void vk_eng_pipeline_release(void* user, u32 pipeline)
  {
      (void)user;
@@ -21872,7 +21927,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      if (!pipeline || pipeline > VK_ENG_MAX_PIPE || !s_epipe[pipeline - 1].used) return;
      vk_eng_pipe* P = &s_epipe[pipeline - 1];
      for (u32 t = 0; t < VK_ENG_TOPOLOGIES; t++)
-@@ -3125,6 +4097,7 @@
+@@ -3125,6 +4120,7 @@
                                                                             : VK_CULL_MODE_BACK_BIT,
          .frontFace = (rs->front_face == 0x0901u) ? VK_FRONT_FACE_COUNTER_CLOCKWISE
                                                   : VK_FRONT_FACE_CLOCKWISE,
@@ -21880,7 +21935,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          .lineWidth = 1.0f };
      VkPipelineMultisampleStateCreateInfo ms = {
          .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-@@ -3266,6 +4239,7 @@
+@@ -3266,6 +4262,7 @@
  static void vk_eng_bind_textures(void* user, const u32* textures,
                                   const rsx_be_sampler_desc* samplers, u32 mask)
  {
@@ -21888,7 +21943,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      (void)user;
      for (u32 u = 0; u < RSX_BE_MAX_TEXTURES; u++) {
          const int on = (mask >> u) & 1u;
-@@ -3410,11 +4384,13 @@
+@@ -3410,11 +4407,13 @@
  {
      if (!vk_eng_get(s_e2.dummy_cube, VK_ENG_TEXTURE)) {
          static const u8 magenta[4] = { 0xFF, 0x00, 0xFF, 0xFF };
@@ -21903,7 +21958,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      }
      return s_eobj[s_e2.dummy_cube].im.view;
  }
-@@ -3481,6 +4457,24 @@
+@@ -3481,6 +4480,24 @@
      }
      VK_LOG("draw batching: on (up to %u draws per submission)\n", s_eb.max_draws);
      s_eb.on = 1;
@@ -21928,7 +21983,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      return 1;
  }
  
-@@ -3488,7 +4482,16 @@
+@@ -3488,7 +4505,16 @@
   * decides again. Also frees what a failed vk_eb_on had already created. */
  static void vk_eb_release(void)
  {
@@ -21946,7 +22001,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      vk_destroy_buffer(&s_eb.vb);
      vk_destroy_buffer(&s_eb.ib);
      vk_destroy_buffer(&s_eb.ub);
-@@ -3500,9 +4503,11 @@
+@@ -3500,9 +4526,11 @@
  
  static int vk_eb_active(void) { return s_eb.on == 1; }
  static u32 vk_eb_max(void) { return s_eb.max_draws; }
@@ -21959,7 +22014,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  
  /* A texture upload as one more batched operation: rows staged in the ring, the
   * copy recorded behind a full memory barrier (earlier draws of the batch may
-@@ -3514,11 +4519,11 @@
+@@ -3514,11 +4542,11 @@
  {
      if (!vk_eb_active()) return -2;
      const VkDeviceSize bytes = (VkDeviceSize)tight * rows;
@@ -21975,7 +22030,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          if (off == (VkDeviceSize)-1) return -2;
      }
      for (u32 y = 0; y < rows; y++)
-@@ -3528,15 +4533,103 @@
+@@ -3528,15 +4556,108 @@
      region->bufferOffset = off;
      pvkCmdCopyBufferToImage(s_vk.cmd, s_eb.sb.buf, img, VK_IMAGE_LAYOUT_GENERAL, 1, region);
      vk_barrier_image(img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
@@ -22052,9 +22107,14 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +        vk_grave_drain();
 +    } else {
 +        s->busy = 1;
-+        /* What was released while this batch was recorded goes with it. */
-+        for (u32 k = 0; k < s_grave_n && s->grave_n < VK_GRAVE_MAX; k++) s->grave[s->grave_n++] = s_grave[k];
-+        for (u32 k = 0; k < s_grave_fb_n && s->grave_fb_n < VK_GRAVE_MAX; k++) s->grave_fb[s->grave_fb_n++] = s_grave_fb[k];
++        /* What was released while this batch was recorded goes with it. When it does not fit in
++         * the slot's graves (rare), the batch is waited on now and they go at once. */
++        if (s->grave_n + s_grave_n > VK_GRAVE_MAX || s->grave_fb_n + s_grave_fb_n > VK_GRAVE_MAX) {
++            pvkWaitForFences(s_vk.device, 1, &s->fence, VK_TRUE, UINT64_MAX);
++            vk_grave_drain();
++        }
++        for (u32 k = 0; k < s_grave_n; k++) s->grave[s->grave_n++] = s_grave[k];
++        for (u32 k = 0; k < s_grave_fb_n; k++) s->grave_fb[s->grave_fb_n++] = s_grave_fb[k];
 +        s_grave_n = 0; s_grave_fb_n = 0;
 +    }
 +    if ((++s_eb.flushes & 0x3FFFu) == 0)
@@ -22083,7 +22143,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      s_eb.vb_head = s_eb.ib_head = s_eb.ub_head = s_eb.sb_head = 0;
      if (s_eb.sets) { pvkResetDescriptorPool(s_vk.device, s_eb.pool, 0); s_eb.sets = 0; }
      if ((++s_eb.flushes & 0x3FFFu) == 0)
-@@ -3579,6 +4672,23 @@
+@@ -3579,6 +4700,23 @@
          const int cube = (P->cube_mask >> u) & 1u;
          VkImageView v = ((s_e2.tex_mask >> u) & 1u) ? vk_eng_sample_view(s_e2.tex[u], cube)
                                                       : VK_NULL_HANDLE;
@@ -22107,7 +22167,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          VkSampler smp = v ? vk_eng_sampler(&s_e2.samp[u]) : s_vk.sampler;
          ii[u] = (VkDescriptorImageInfo){ VK_NULL_HANDLE,
                                           v ? v : (cube ? dummy_cube : s_vk.dummy.view),
-@@ -3610,14 +4720,24 @@
+@@ -3610,14 +4748,24 @@
      return set;
  }
  
@@ -22135,7 +22195,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  
      /* Targets: every member of a set is target A's size (engine contract). */
      const u32 n = s_eng_bound.nrt;
-@@ -3636,13 +4756,14 @@
+@@ -3636,13 +4784,14 @@
      const u32 w = rt0->w, h = rt0->h;
      vk_eng_obj* zo = vk_eng_get(s_eng_bound.depth, VK_ENG_DEPTH);
      VkImageView dview = (zo && zo->w >= w && zo->h >= h) ? zo->im.view : vk_eng_scratch_depth(w, h);
@@ -22151,7 +22211,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  
      const VkDeviceSize vbytes = (VkDeviceSize)vertex_count * stride;
      const VkDeviceSize ibytes = (indices && index_count) ? (VkDeviceSize)index_count * 4u : 0;
-@@ -3650,22 +4771,24 @@
+@@ -3650,22 +4799,24 @@
      VkDeviceSize voff = 0, ioff = 0;
      VkDescriptorSet set = VK_NULL_HANDLE;
      const u32 vsb = s_e2.vs_bytes ? s_e2.vs_bytes : 16u, psb = s_e2.ps_bytes ? s_e2.ps_bytes : 16u;
@@ -22182,7 +22242,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
                                                      .pSetLayouts = &lay };
                  if (pvkAllocateDescriptorSets(s_vk.device, &dai, &set) == VK_SUCCESS) {
                      s_eb.sets++;
-@@ -3678,7 +4801,7 @@
+@@ -3678,7 +4829,7 @@
                  set = VK_NULL_HANDLE;
              }
              if (tries || !s_eb_pending) { batched = 0; break; }
@@ -22191,7 +22251,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          }
          if (batched && !set) batched = 0;
      }
-@@ -3687,9 +4810,13 @@
+@@ -3687,9 +4838,13 @@
          if (ibytes) memcpy((u8*)s_eb.ib.ptr + ioff, indices, (size_t)ibytes);
          vbuf = s_eb.vb.buf; ibuf = s_eb.ib.buf;
          if (!s_eb_pending && vk_begin()) return;
@@ -22208,7 +22268,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      } else {
          if (s_eb_pending) vk_eng_flush();
          if (vk_ensure_vertex_buffer(vbytes)) return;
-@@ -3706,14 +4833,17 @@
+@@ -3706,14 +4861,17 @@
          if (!set) return;
          if (vk_begin()) return;
      }
@@ -22234,7 +22294,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      pvkCmdBindPipeline(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
      VkViewport vp = { 0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f };
      if (s_e2.have_vp && s_e2.vp[2] > 0.0f && s_e2.vp[3] > 0.0f) {
-@@ -3743,10 +4873,9 @@
+@@ -3743,10 +4901,9 @@
      } else {
          pvkCmdDraw(s_vk.cmd, vertex_count, 1, 0, 0);
      }
@@ -22248,7 +22308,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  }
  
  static const rsx_draw_backend s_vk_engine_backend = {
-@@ -3763,6 +4892,12 @@
+@@ -3763,6 +4920,12 @@
      .depth_target_create  = vk_eng_depth_target_create,
      .depth_target_release = vk_eng_release,
      .depth_snapshot       = vk_eng_depth_snapshot,
@@ -22261,7 +22321,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      .color_snapshot       = vk_eng_color_snapshot,
      .pipeline_create      = vk_eng_pipeline_create,
      .pipeline_release     = vk_eng_pipeline_release,
-@@ -3817,6 +4952,13 @@
+@@ -3817,6 +4980,13 @@
        s_vk.dump_every = (e && atoi(e) > 0) ? (u32)atoi(e) : 1; }
  
      vk_window_open(title);           /* no-op unless PS3RECOMP_VK_WINDOW is set */
@@ -22275,7 +22335,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      if (vk_load_library()) return -1;
  
      VkApplicationInfo app = { .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-@@ -3862,15 +5004,34 @@
+@@ -3862,15 +5032,34 @@
      VkPhysicalDeviceFeatures have, want;
      memset(&want, 0, sizeof want);
      pvkGetPhysicalDeviceFeatures(s_vk.phys, &have);
@@ -22311,7 +22371,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      /* Per-target colour mask and blend enable (an MRT set's targets B..D
       * have their own); without it every target takes target A's. */
      want.independentBlend = have.independentBlend;
-@@ -4014,6 +5175,7 @@
+@@ -4014,6 +5203,7 @@
          if (s_vk.pool)  pvkDestroyCommandPool(s_vk.device, s_vk.pool, NULL);
          if (s_vk.present_fence) pvkDestroyFence(s_vk.device, s_vk.present_fence, NULL);
          if (s_vk.window_fence)  pvkDestroyFence(s_vk.device, s_vk.window_fence, NULL);
@@ -22319,7 +22379,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          if (s_vk.present_pool)  pvkDestroyCommandPool(s_vk.device, s_vk.present_pool, NULL);
          pvkDestroyDevice(s_vk.device, NULL);
      }
-@@ -4027,7 +5189,14 @@
+@@ -4027,7 +5217,14 @@
  
  int rsx_vulkan_backend_pump_messages(void)
  {
@@ -22334,7 +22394,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      int quit = 0;
      SDL_Event e;
      while (SDL_PollEvent(&e)) {
-@@ -4040,7 +5209,10 @@
+@@ -4040,7 +5237,10 @@
  void rsx_vulkan_backend_present(void)
  {
      rsx_vulkan_backend_present_begin();
@@ -22346,7 +22406,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  }
  
  void rsx_vulkan_backend_present_begin(void)
-@@ -4054,6 +5226,7 @@
+@@ -4054,6 +5254,7 @@
  
  void rsx_vulkan_backend_present_finish(void)
  {
@@ -22354,7 +22414,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      if (!s_vk.device) return;
      pthread_mutex_lock(&s_vk.present_mu);
      vk_present_complete_locked();
-@@ -4083,4 +5256,4 @@
+@@ -4083,4 +5284,4 @@
      return s_vk.eng_active && s_vk.depth_bounds_ok;
  }
  

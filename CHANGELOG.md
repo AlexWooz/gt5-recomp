@@ -9,6 +9,18 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+📺 **Linux: the main menu at about 25-30 fps on a Steam Deck (was about 17)**
+- With the waits above gone, the menu's GPU waits came from two places, both every frame: each new
+  render target was cleared in a submission of its own, waited on after first waiting for the open
+  batch, and each released target made the renderer wait for every batch before it destroyed its
+  cached framebuffers. GT5's menu releases and recreates a target or two a frame.
+- A new colour or depth target is now cleared in the open batch, before the draws that use it, and
+  framebuffers go to the same deferred list as released images, destroyed once the batches that may
+  use them are done. (When a batch's list has no room left, that batch is waited on and they go at
+  once, where before the extra entries were dropped.)
+- On a Steam Deck in the main menu: time waiting for the GPU from about 1.2 s to 0.01 s per 5 s, the
+  median frame from 53-58 to 35-36 ms, about 25-27 frames a second, most of them at two vblanks.
+
 🪟 **Linux: a present no longer waits for the frame to be drawn**
 - Each frame is copied into the window, and that copy shared the present's command buffer, so it was
   waited on at once; it sits in the GPU queue behind the frame being drawn, so every present waited
