@@ -9,6 +9,18 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+⚡ **Linux on small CPUs: the graphics thread naps instead of spinning while it waits for SPU work**
+- GT5's SPU jobs fill gaps in the graphics command stream, and the graphics thread waits at each gap
+  (on a Steam Deck about 1,000-1,400 times a second in a race). It watches the gap so it carries on
+  the moment it is filled, yielding between looks; on Linux that yield returns at once when nothing
+  else is queued on the core, so the wait was a spin, about a fifth of the thread's time, on cores
+  the SPU threads filling the gaps could have used.
+- With 8 logical CPUs or fewer it now watches for the first 30 us, then naps 50 us between looks: a
+  short wait still ends at once, a longer one at most 50 us late. `GCM_FIFO_NAP=0` spins as before,
+  `=1` naps on any CPU.
+- On a Steam Deck over the same ~70 s of a race: the graphics thread 70% to 56% busy, frames about
+  135 to 110 ms on average (82-100 ms on the faster stretches).
+
 🧊 **Linux: the shader cache survives updates**
 - Each cached shader was stamped with the time its translator was built, and any other stamp counted
   as stale. Every update re-patches and rebuilds that code, so after every update the whole cache was

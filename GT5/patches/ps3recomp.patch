@@ -7892,10 +7892,11 @@ index 30290c73..57780fcf 100644
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
-@@ -103,6 +103,18 @@
+@@ -102,6 +102,18 @@
+ u32 cellGcm_flip_request_count(void)
  {
      return s_flip_request_count;
- }
++}
 +/* Flips that put a new frame on the display: the ones that set s_flip_pending (a FIFO flip
 + * marker reached, a direct flip). The request count also moves on cellGcmSetPrepareFlip, which
 + * GT5 calls early in every frame, and the present thread's fallback took that for a flip: it
@@ -7907,10 +7908,9 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
 +    static int on_prepare = -1;
 +    if (on_prepare < 0) on_prepare = getenv("GCM_PRESENT_ON_PREPARE") ? 1 : 0;
 +    return on_prepare ? s_flip_request_count : s_flip_present_count;
-+}
+ }
  static u32  s_debug_level = CELL_GCM_DEBUG_LEVEL0;
  
- /* Display buffers */
 @@ -135,10 +147,18 @@
   * second to build its next frame here, then queues the flip, and a beat in
   * between that reported a flip made it take the new one for done. It then
@@ -7969,20 +7969,20 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
      if (rsx_draw_engine_enabled())
          rsx_draw_engine_note_flip(bufferId);
  }
-@@ -382,6 +430,13 @@
+@@ -381,6 +429,13 @@
+  * every FIFO-space / cellGcmFinish wait would hang. Placed just past the 256
   * label slots (0x03000000..0x03001000). Fields are big-endian (vm_write32). */
  #define GCM_CONTROL_GUEST_ADDR (VM_HLE_INJECT_BASE + 0x2000u)
- 
++
 +/* For timed waits on the RSX (runtime/syscalls/sys_cond.c): put, then get. */
 +static int gcm_rsx_behind(void)
 +{
 +    return vm_read32(GCM_CONTROL_GUEST_ADDR) != vm_read32(GCM_CONTROL_GUEST_ADDR + 4);
 +}
 +extern int (*g_sys_cond_rsx_behind)(void);
-+
+ 
  /* Synthetic guest code EA for the FIFO command-buffer-full callback. The title's
   * inline gcmReserve calls context->callback(context, count) when `current` nears
-  * `end`; we point the context's callback OPD at this EA and register it in the
 @@ -597,6 +652,7 @@
  {
      if (cmdSize < 0x10000)
@@ -8168,12 +8168,10 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
  {
      u32 out_w = s_nv3089.out_sz & 0xFFFF, out_h = s_nv3089.out_sz >> 16;
      u32 out_x = s_nv3089.out_pt & 0xFFFF, out_y = s_nv3089.out_pt >> 16;
-@@ -1318,6 +1454,138 @@
-       if (cap && _n < cap) { _n++;
-         printf("[NV3089] %ux%u fmt=0x%X src=0x%08X(pitch %u) -> dst=0x%08X(pitch %u) at %u,%u\n",
+@@ -1320,6 +1456,138 @@
                 out_w, out_h, f, src, in_pitch, dst, dst_pitch, out_x, out_y); } }
-+}
-+
+ }
+ 
 +/* Write one row of guest memory, as gcm_row_copy does for a copy. */
 +void gcm_guest_row_write(u32 d, const u8* s, u32 n)
 +{
@@ -8304,10 +8302,12 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
 +        }
 +    }
 +    return s_subch1_m2mf == 1;
- }
- 
++}
++
  static void gcm_2d_method(u32 subch, u32 method, u32 data)
-@@ -1783,8 +2051,52 @@
+ {
+     /* GCM2D_TRACE=1: histogram of (subchannel, method) actually seen. The
+@@ -1783,8 +2051,74 @@
   * starved guest still paid the full tick. Waiting here instead costs nothing
   * when no one kicks (the timeout is the old sleep) and drains immediately when
   * someone does. */
@@ -8344,6 +8344,21 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
 +          LARGE_INTEGER f, now, end;
 +          QueryPerformanceFrequency(&f);
 +          QueryPerformanceCounter(&end);
++#ifndef _WIN32
++          /* On a CPU of 8 logical CPUs or fewer, after 30 us of watching: nap 50 us between looks
++           * instead of spinning. sched_yield (SwitchToThread here) returns at once when nothing
++           * else is queued on the core, so this loop was a spin: on a Steam Deck about a fifth of
++           * the walker's time, on a core the SPU threads that fill the hole could have had. A
++           * stop that ends within 30 us is still seen at once, a longer one at most 50 us late.
++           * GCM_FIFO_NAP=0 spins as before, =1 naps on any CPU. */
++          static int nap = -1;
++          if (nap < 0) {
++              const char* e = getenv("GCM_FIFO_NAP");
++              const long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
++              nap = e ? (atoi(e) != 0) : (ncpu > 0 && ncpu <= 8);
++          }
++          const LONGLONG spin_until = end.QuadPart + f.QuadPart * 30 / 1000000;
++#endif
 +          end.QuadPart += f.QuadPart * ms / 1000;
 +          for (unsigned n = 0;; n++) {
 +              if (vm_read32(ea) != word) return;
@@ -8351,6 +8366,13 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
 +                  QueryPerformanceCounter(&now);
 +                  if (now.QuadPart >= end.QuadPart) return;
 +                  if (kick && WaitForSingleObject(kick, 0) == WAIT_OBJECT_0) return;
++#ifndef _WIN32
++                  if (nap && now.QuadPart >= spin_until) {
++                      struct timespec ts = { 0, 50000 };
++                      nanosleep(&ts, NULL);
++                      continue;
++                  }
++#endif
 +                  SwitchToThread();
 +              } else {
 +                  YieldProcessor();
@@ -8360,7 +8382,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
      static int on = -1;
      if (on < 0) { const char* e = getenv("GCM_FIFO_KICK"); on = (e && *e == '0') ? 0 : 1; }
      HANDLE ev = on ? (HANDLE)cellGcm_fifo_kick_event() : NULL;
-@@ -1952,7 +2264,29 @@
+@@ -1952,7 +2286,29 @@
      g_gcm_drain_tid = GetCurrentThreadId();
      const uint64_t ft_t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
      AcquireSRWLockExclusive(&s_gcm_fifo_lock);
@@ -8391,7 +8413,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
      ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
      if (ft_t0) {
          const uint64_t t1 = ps3_ft_now();
-@@ -1988,14 +2322,40 @@
+@@ -1988,14 +2344,40 @@
   * drain: the walker hands every data word through these checks, a million a
   * second in God of War HD gameplay, and it used to test each switch on its
   * own for every word. */
@@ -8434,7 +8456,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
  }
  
  /* One data word for the 3D engine (subchannel 0, or 1 unless GCM_SUBCH1_2D),
-@@ -2074,14 +2434,27 @@
+@@ -2074,14 +2456,27 @@
      if (!s_gcm_context_ea && !s_gcm_syscall_mode) return;
      if (!s_inited) { rsx_state_init(&s_state); s_inited = 1; }
      const int wdiag = gcm_word_diag();
@@ -8465,7 +8487,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
  
  
      /* Walk the FIFO exactly like the RSX: chase the guest-written `put` (an IO
-@@ -2091,6 +2464,7 @@
+@@ -2091,6 +2486,7 @@
       * one flat ring (cellmark), but PSL1GHT/Tiny3D immediately JUMPs into its
       * own command ring, so everything after the jump (including the reference
       * writes its waits spin on) silently never executed. */
@@ -8473,7 +8495,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
      u32 put = vm_read32(GCM_CONTROL_GUEST_ADDR + 0);
      /* The words behind `put` were stored by another thread (the title, or the
       * recycle below) before it stored `put`. On x86 the hardware keeps loads
-@@ -2257,7 +2631,7 @@
+@@ -2257,7 +2653,7 @@
           * skip is a faster decode, not a bigger tick, and VF5 depends on the
           * walker yielding at the cap (it lost 7 milestones when a whole run
           * cost one word). */
@@ -8482,7 +8504,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
              const u32 page_end = (s_fifo_getoff | 0xFFFFFu) + 1u;
              const u32 lim = (put > s_fifo_getoff && put < page_end) ? put : page_end;
              u32 off = s_fifo_getoff + 4u, nea = ea + 4u;
-@@ -2302,12 +2676,14 @@
+@@ -2302,12 +2698,14 @@
                            flips, 10); }
              if (PS3_FT_ON()) { const uint64_t t = ps3_ft_now();
                                 ps3_ft_span(PS3_FT_FLIP_FIFO, 0, w & 7u, 0, t, t); }
@@ -8498,7 +8520,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
                  /* Not past `queued`: a resync may already have written off
                   * this flip. */
                  if (s_fifo_flips_reached != s_fifo_flips_queued) s_fifo_flips_reached++;
-@@ -2384,6 +2760,8 @@
+@@ -2384,6 +2782,8 @@
                    }
                    why = "parked";
                    s_park_pass = 1;
@@ -8507,7 +8529,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
                    break;
                }
                if (tgt < s_fifo_getoff) s_fifo_back_jumps++;
-@@ -2519,21 +2897,34 @@
+@@ -2519,21 +2919,34 @@
               * which can match, are skipped. Most of a frame's words come this
               * way (God of War HD: about five million vertex-program microcode and
               * constant words a second). */
@@ -8549,7 +8571,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
              for (u32 i = 0; i < count; i++) {
                  u32 dea = gcm_io2ea(s_fifo_getoff + 4 + i * 4);
                  if (!dea) break;
-@@ -2680,7 +3071,11 @@
+@@ -2680,7 +3093,11 @@
                  if (mfull == 0xEB00u || mfull == 0xEB04u) {
                      cellGcmQueueUserCommand(vm_read32(dea));
                  } else if (mfull == 0xE920u || mfull == 0xE924u) {
@@ -8561,7 +8583,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
                  } else if (subch == 0 || (subch == 1 && !s1_2d)) {
                      gcm_3d_method(&s_state, m, vm_read32(dea), legacy_state_live);
                  } else
-@@ -2757,6 +3152,10 @@
+@@ -2757,6 +3174,10 @@
       * ring start, and the resync dropped them: inFAMOUS 2 stopped presenting
       * for good that way in about one New Marais run in five ("stuck-get" at a
       * self-jump with no "jump-park" before it). */
@@ -8572,7 +8594,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
      { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
        if (s_sema_blocked_pass || s_park_pass) {
            stuck = 0; last = s_fifo_getoff; s_sema_blocked_pass = 0; s_park_pass = 0; }
-@@ -3102,10 +3501,12 @@
+@@ -3102,10 +3523,12 @@
      /* in_fifo: the flip sits in the command stream as a GCM_FLIP_MARKER, and
       * the drain does this half when it reaches it (see the 0xFEAD case). */
      if (!in_fifo) {
@@ -8586,19 +8608,20 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
      }
      /* Flip requested but not yet shown: a subsequent cellGcmSetWaitFlip blocks
       * until the present thread's cellGcmTickFlip marks it done (vsync). */
-@@ -3214,9 +3615,9 @@
+@@ -3214,9 +3637,9 @@
      if (!s_display_buffer_set[bufferId])
          return CELL_GCM_ERROR_INVALID_VALUE;
  
 -    printf("[cellGcmSys] SetPrepareFlip(bufferId=%u)\n", bufferId);
-+    { static int said; if (said < 4) { said++; printf("[cellGcmSys] SetPrepareFlip(bufferId=%u)\n", bufferId); } }
- 
+-
 -    gcm_set_current_display_buffer(bufferId);
++    { static int said; if (said < 4) { said++; printf("[cellGcmSys] SetPrepareFlip(bufferId=%u)\n", bufferId); } }
++
 +    gcm_prepared_push(bufferId);
      s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
      s_flip_request_count++;
      s_last_flip_time = get_timestamp_ns();
-@@ -4231,7 +4632,8 @@
+@@ -4231,7 +4654,8 @@
  /* Immediate flip — perform flip right now */
  s32 cellGcmSetFlipImmediate(u32 bufferId)
  {
