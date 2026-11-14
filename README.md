@@ -261,7 +261,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Japanese or Asian release (BCJS, BCAS)? | ✅ Hong Kong / Asia (BCAS20108) runs, reported by a player, and its disc 01.00 and update 2.01 race in tests too; Japanese untried, please report |
 | Slow PC or laptop? | 🛠️ Laptops now use their dedicated graphics card. On most PCs the CPU sets the pace (the game's own threads), so the launcher's **Speed: 30 fps** rarely helps: it's for a graphics card at its limit. **On a laptop:** plug it in and set Windows' power mode to *Best performance* (and the maker's performance mode, e.g. in HP Command Center or Lenovo Vantage): a tester's i5-1135G7 ran into its power limit 88% of the time, which held its cores at 2.9 GHz instead of 4.2, while its graphics were only 30% busy. Speed-ups for 4-6 core CPUs are being worked on |
 | Linux? | 🧪 New and early: a [native Linux build](#linux). First test (no graphics card) reached the race start; races on a real GPU untested |
-| Steam Deck, Proton, Wine? | ❓ Not tried yet: the Linux build in a distrobox is the route to try ([Steam Deck](#steam-deck)). Reports welcome |
+| Steam Deck, Proton, Wine? | 🟡 Steam Deck: the Linux build in a distrobox runs (menus ~25-30 fps, races ~8-10; [Steam Deck](#steam-deck)). Proton and Wine not tried. Reports welcome |
 | Android? | 🛠️ Being worked on |
 | Online? | ❌ No |
 | Is it legal? | ✅ No game files here: you build it from your own disc |
@@ -613,8 +613,9 @@ If you have a Linux PC with a graphics card, please
 
 ### Steam Deck
 
-**Not tried on a Deck yet**: reports very welcome. The route to try is the Linux build in a
-distrobox. SteamOS keeps its system files read-only, so `setup.sh` can't install the build tools there
+**Tried on a Steam Deck OLED** (SteamOS 3.9, update 2.17 with DLC, the build in an Arch distrobox;
+the Ubuntu box below is the same route): it builds, boots, races and plays sound in time. More reports
+welcome. The route is the Linux build in a distrobox. SteamOS keeps its system files read-only, so `setup.sh` can't install the build tools there
 (it says so and stops). Distrobox, part of SteamOS 3.5 and later, gives you an Ubuntu container that
 shares your home folder, screen, sound and graphics. In desktop mode, in Konsole:
 
@@ -638,8 +639,13 @@ Steam, the Deck's controls reach the game as a controller; from a terminal they 
 keyboard. Leave full screen off in `play.sh`: Game Mode fits the 16:9 window onto the 16:10 screen
 with bars, while full screen would stretch it.
 
-What to expect: GT5's pace is set by the CPU, and the Deck's is in the same class as a laptop i5 that
-raced at 5 to 12 frames per second on Windows. B-Spec races and replays in watch mode
+Play from Game Mode. In desktop mode Steam's desktop controller layout turns the Deck's buttons into
+keys, and the menu button becomes Esc, which quits the game.
+
+What to expect, measured on the Deck: the main menu at about 25-30 frames a second and races at about
+8-10 (100-130 ms a frame). GT5's pace is set by the CPU: in a race the GPU is mostly idle (locking its
+clock at 1600 MHz changed nothing), and the game's own threads set the frame rate. The first races
+after an update recompile their shaders once and stutter. B-Spec races and replays in watch mode
 (`export LD_WATCH=1` in `GT5/settings.sh`) are the realistic use. Suspend and resume are untested:
 quit the game first.
 
