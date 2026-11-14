@@ -9,6 +9,13 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🧮 **Linux: texture binding no longer re-hashes every car's cube map at every draw**
+- Each car's small ambient cube map was checked for changes at every draw that bound it, by hashing
+  its six faces byte by byte: in a race on a Steam Deck, about 87% of the time spent binding
+  textures, itself about 13% of the graphics thread. It is now checked once a frame, as the texture
+  cache checks a texture, and hashed 8 bytes at a time: texture binding fell to about 0.2% of all
+  the CPU time. The cars look the same.
+
 ⚡ **Linux on small CPUs: the graphics thread naps instead of spinning while it waits for SPU work**
 - GT5's SPU jobs fill gaps in the graphics command stream, and the graphics thread waits at each gap
   (on a Steam Deck about 1,000-1,400 times a second in a race). It watches the gap so it carries on
