@@ -9,6 +9,33 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 14 Nov 2026
 
+🏷️ Released as **v0.1.47**
+
+🛡️ **The game starts on PCs where Windows forces Control Flow Guard on every program**
+([#31](https://github.com/MormonFTP-hub/gt5-recomp/issues/31), Fantomas3228: the game closed a second
+after Play, with a log that just stopped)
+- Windows Security's *Exploit protection* can turn Control Flow Guard (CFG) on for all programs. With it
+  on, Windows checks every `longjmp` the program makes, and the SPU code's fast jumps (which skip
+  unwinding, for speed) failed that check: Windows ended the game on the spot (fast fail, exit code
+  `0xC0000409`) as the first SPU job ran.
+- Now the game asks Windows whether CFG is on for it, and if so makes those jumps the standard way.
+  play.err then says `[spu] Control Flow Guard is on for this process`. PCs without CFG forced on keep
+  the faster jumps.
+- Checked on this PC by starting the game with CFG switched on for that one run: before, it closed
+  after 2 s with `0xC0000409` at the same line as in #31; now it runs normally. No Windows setting needs
+  changing any more (Fantomas3228's workaround, `Set-ProcessMitigation -Name gt5.exe -Disable CFG`,
+  can stay or be undone).
+
+📺 **Options > Display no longer crashes the game** (reported by Arpadiam on Discord: the Resolution
+list was empty, and leaving the screen with OK closed the game)
+- The port described the TV's video modes to the game with a block of data missing (the TV's colour
+  information comes before the list of modes), so GT5 read its list 20 bytes too early, found a mode
+  with resolution 0, showed an empty Resolution list and failed when the screen was confirmed.
+- The list now has the layout the PS3 uses, with one mode: the one the port draws (1080p or 720p, as
+  set in the launcher), at 59.94/60 Hz, the way RPCS3 reports it.
+- Checked on this PC with the European disc: Display Settings shows *1920 x 1080 59.94p*, and OK
+  returns to Options with the game still running. The 2.11 update's Resolution row is not tested here.
+
 🏷️ Released as **v0.1.46**
 
 ☀️ **Races at 1080p get the right brightness: no more blown-out white or too-dark tracks** (reported by

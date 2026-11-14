@@ -8795,7 +8795,7 @@ index 298ee7d..6821d92 100644
  }
  
 diff --git a/libs/video/cellVideoOut.c b/libs/video/cellVideoOut.c
-index c67a6eaa..5d9e759a 100644
+index c67a6eaa..58dd9030 100644
 --- a/libs/video/cellVideoOut.c
 +++ b/libs/video/cellVideoOut.c
 @@ -8,7 +8,9 @@
@@ -8879,6 +8879,64 @@ index c67a6eaa..5d9e759a 100644
  
      if (!state)
          return CELL_VIDEO_OUT_ERROR_ILLEGAL_PARAMETER;
+@@ -194,40 +238,27 @@ s32 cellVideoOutGetDeviceInfo(u32 videoOut, u32 deviceIndex,
+     info = GUEST_PTR(info, CellVideoOutDeviceInfo*);
+     memset(info, 0, sizeof(CellVideoOutDeviceInfo));
+ 
++    video_mode_from_env();
+     info->portType       = CELL_VIDEO_OUT_OUTPUT_HDMI;
+     info->colorSpace     = CELL_VIDEO_OUT_COLOR_SPACE_RGB;
+-    info->latency        = 0;
++    info->latency        = ps3_bswap16(1000);
+     info->state          = 2; /* connected */
+     info->rgbOutputRange = 1;
+-
+-    /* Report supported modes */
+-    int idx = 0;
+-
+-    /* 480p */
+-    info->availableModes[idx].resolutionId = CELL_VIDEO_OUT_RESOLUTION_480;
+-    info->availableModes[idx].scanMode     = CELL_VIDEO_OUT_SCAN_MODE_PROGRESSIVE;
+-    info->availableModes[idx].aspect       = CELL_VIDEO_OUT_ASPECT_16_9;
+-    idx++;
+-
+-    /* 576p */
+-    info->availableModes[idx].resolutionId = CELL_VIDEO_OUT_RESOLUTION_576;
+-    info->availableModes[idx].scanMode     = CELL_VIDEO_OUT_SCAN_MODE_PROGRESSIVE;
+-    info->availableModes[idx].aspect       = CELL_VIDEO_OUT_ASPECT_16_9;
+-    idx++;
+-
+-    /* 720p */
+-    info->availableModes[idx].resolutionId = CELL_VIDEO_OUT_RESOLUTION_720;
+-    info->availableModes[idx].scanMode     = CELL_VIDEO_OUT_SCAN_MODE_PROGRESSIVE;
+-    info->availableModes[idx].aspect       = CELL_VIDEO_OUT_ASPECT_16_9;
+-    idx++;
+-
+-    /* 1080p */
+-    info->availableModes[idx].resolutionId = CELL_VIDEO_OUT_RESOLUTION_1080;
+-    info->availableModes[idx].scanMode     = CELL_VIDEO_OUT_SCAN_MODE_PROGRESSIVE;
+-    info->availableModes[idx].aspect       = CELL_VIDEO_OUT_ASPECT_16_9;
+-    idx++;
+-
+-    info->availableModeCount = (u8)idx;
++    info->colorInfo.redX = info->colorInfo.redY = 0xFFFF;
++    info->colorInfo.greenX = info->colorInfo.greenY = 0xFFFF;
++    info->colorInfo.blueX = info->colorInfo.blueY = 0xFFFF;
++    info->colorInfo.whiteX = info->colorInfo.whiteY = 0xFFFF;
++    info->colorInfo.gamma = ps3_bswap32(100);
++
++    /* One mode: the one the host draws (720p, or 1080p with PS3_VIDEO_MODE=1080), as RPCS3 reports
++     * it. The frame buffer is sized for that mode at start-up, so a game's own display menu (GT5's
++     * Options > Display) offers that mode and nothing it can't be switched to. */
++    info->availableModes[0].resolutionId = (u8)s_resolution_id;
++    info->availableModes[0].scanMode     = CELL_VIDEO_OUT_SCAN_MODE_PROGRESSIVE;
++    info->availableModes[0].conversion   = 0; /* none */
++    info->availableModes[0].aspect       = CELL_VIDEO_OUT_ASPECT_16_9;
++    info->availableModes[0].refreshRates = ps3_bswap16(0x0001 | 0x0004); /* 59.94 Hz, 60 Hz */
++    info->availableModeCount = 1;
+ 
+     return CELL_OK;
+ }
 diff --git a/libs/video/display_aspect.c b/libs/video/display_aspect.c
 new file mode 100644
 index 00000000..6aa79ae2
@@ -17645,10 +17703,35 @@ index a55afb05..13dd876e 100644
      printf("[boot] VFS root: %s\n", ppu_vfs_root);
  
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 5fc50208..440fb21d 100644
+index 5fc50208..fb6cc166 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
-@@ -242,8 +242,11 @@ void spu_stop(spu_context* ctx)
+@@ -144,7 +144,23 @@ void spu_jmp_no_unwind(void* env)
+ {
+ #if defined(_WIN64) && defined(_MSC_VER)
+     static int s_unwind = -1;
+-    if (s_unwind < 0) s_unwind = getenv("SPU_LONGJMP_UNWIND") ? 1 : 0;
++    if (s_unwind < 0) {
++        int u = getenv("SPU_LONGJMP_UNWIND") ? 1 : 0;
++        /* Control Flow Guard on for the process (Windows Security's Exploit protection can force it on
++         * every program) makes the CRT's longjmp refuse a buffer whose Frame is 0: it ends the process
++         * on the spot, fast fail 13, exit code 0xC0000409, a second after the game starts (#31). Then
++         * keep the unwinding jump. */
++        typedef BOOL (WINAPI *get_policy_fn)(HANDLE, int, void*, SIZE_T);
++        get_policy_fn get_policy = (get_policy_fn)(void*)GetProcAddress(
++            GetModuleHandleA("kernel32.dll"), "GetProcessMitigationPolicy");
++        DWORD cfg = 0;   /* PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY; bit 0 EnableControlFlowGuard */
++        if (!u && get_policy && get_policy(GetCurrentProcess(), 7 /* ProcessControlFlowGuardPolicy */,
++                                           &cfg, sizeof cfg) && (cfg & 1)) {
++            u = 1;
++            fprintf(stderr, "[spu] Control Flow Guard is on for this process: SPU jumps unwind\n");
++        }
++        s_unwind = u;
++    }
+     if (!s_unwind) ((_JUMP_BUFFER*)env)->Frame = 0;
+ #else
+     (void)env;
+@@ -242,8 +258,11 @@ void spu_stop(spu_context* ctx)
   * on entry to spu_run_with_halt and the caller's FPCR is put back on the way out: a run can
   * happen synchronously on a PPU thread (a workload dispatched from the PPU caller), whose
   * lifted floating point must keep round to nearest with denormals. Double precision restores
@@ -17662,7 +17745,7 @@ index 5fc50208..440fb21d 100644
  static uint64_t spu_float_mode_enter(void)
  {
  #if defined(__aarch64__) && defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
-@@ -260,6 +263,19 @@ static uint64_t spu_float_mode_enter(void)
+@@ -260,6 +279,19 @@ static uint64_t spu_float_mode_enter(void)
      if (v == SPU_FPCR_RZFZ) return ~0ull;   /* nested run: the outer one restores */
      __asm__ volatile("msr fpcr, %0" :: "r"((uint64_t)SPU_FPCR_RZFZ));
      return v;
@@ -17682,7 +17765,7 @@ index 5fc50208..440fb21d 100644
  #else
      return ~0ull;
  #endif
-@@ -268,6 +284,8 @@ static void spu_float_mode_leave(uint64_t outer)
+@@ -268,6 +300,8 @@ static void spu_float_mode_leave(uint64_t outer)
  {
  #if defined(__aarch64__) && defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
      if (outer != ~0ull) __asm__ volatile("msr fpcr, %0" :: "r"(outer));
@@ -17691,7 +17774,7 @@ index 5fc50208..440fb21d 100644
  #else
      (void)outer;
  #endif
-@@ -363,6 +381,22 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+@@ -363,6 +397,22 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
                fflush(stderr); } }
          SPU_DRAIN(ctx);
      }
@@ -17714,7 +17797,7 @@ index 5fc50208..440fb21d 100644
      yz_lockstep_unregister(ctx);   /* leave the ring; hand the token onward */
      s_spu_halt_armed = outer_armed;
      if (outer_armed) memcpy(s_spu_halt_env, outer_env, sizeof(jmp_buf));
-@@ -432,8 +466,11 @@ static int spu_mfc_cache_enabled(void)
+@@ -432,8 +482,11 @@ static int spu_mfc_cache_enabled(void)
      static atomic_int cached;
      int value = atomic_load_explicit(&cached, memory_order_relaxed);
      if (!value) {
@@ -17727,7 +17810,7 @@ index 5fc50208..440fb21d 100644
          atomic_store_explicit(&cached, value, memory_order_relaxed);
      }
      return value == 2;
-@@ -856,6 +893,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -856,6 +909,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
               * successful PUTLLC, it does not report it lost. Already under the
               * lock-line lock, which is what spu_coh_notify_write expects. */
              ctx->resv_valid = 0;
@@ -17735,7 +17818,7 @@ index 5fc50208..440fb21d 100644
              { static int s_w = -1;
                if (s_w < 0) s_w = getenv("SPU_PUTLLC_WHY") ? 1 : 0;
                if (s_w) { static unsigned long long n;
-@@ -2108,6 +2146,38 @@ static void spu_ovl_dump(spu_context* ctx, uint32_t ea, uint32_t lsa, const uint
+@@ -2108,6 +2162,38 @@ static void spu_ovl_dump(spu_context* ctx, uint32_t ea, uint32_t lsa, const uint
      t_next_ea = ea + size; t_next_lsa = lsa + size;
  }
  
@@ -17774,7 +17857,7 @@ index 5fc50208..440fb21d 100644
  /* SPU_LOCKGUARD=<hex ea>: the word at that EA is a ticket lock (serving,next
   * halfwords). Log any SPU write that moves either halfword by anything other
   * than 0 or +1 -- a stale whole-line store rolling the lock back. `src` is the
-@@ -2133,6 +2203,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -2133,6 +2219,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
  {
      uint32_t lsa = (uint32_t)(ls - ctx->ls);
      spu_ovl_dump(ctx, ea, lsa, ls, size);
@@ -24095,3 +24178,39 @@ index 6f4fd64d..bc216c03 100644
  /* Self-check of the AES-128 and AES-CMAC primitives against the FIPS-197 and
   * RFC 4493 vectors. Returns 0 if both match. Run once on first use: silently
   * wrong crypto here produces plausible-looking garbage, which is the single most
+diff --git a/libs/video/cellVideoOut.h b/libs/video/cellVideoOut.h
+index 5aa7e27f..c5c49bff 100644
+--- a/libs/video/cellVideoOut.h
++++ b/libs/video/cellVideoOut.h
+@@ -117,6 +117,21 @@ typedef struct CellVideoOutDisplayMode {
+     u16 refreshRates;
+ } CellVideoOutDisplayMode;
+ 
++/* The TV's colour primaries, big-endian in guest memory. */
++typedef struct CellVideoOutColorInfo {
++    u16 redX, redY, greenX, greenY, blueX, blueY, whiteX, whiteY;
++    u32 gamma;
++} CellVideoOutColorInfo;
++
++typedef struct CellVideoOutKSVList {
++    u8  ksv[32 * 5];
++    u8  reserved[4];
++    u32 count;
++} CellVideoOutKSVList;
++
++/* SDK layout. colorInfo sits between the header and the mode list: without it the modes were written
++ * 20 bytes early, GT5 read resolution 0 as the TV's only mode, showed an empty Resolution list in
++ * Options > Display and closed when that screen was left with OK. */
+ typedef struct CellVideoOutDeviceInfo {
+     u8  portType;
+     u8  colorSpace;
+@@ -125,7 +140,9 @@ typedef struct CellVideoOutDeviceInfo {
+     u8  state;
+     u8  rgbOutputRange;
+     u8  reserved[5];
++    CellVideoOutColorInfo colorInfo;
+     CellVideoOutDisplayMode availableModes[32];
++    CellVideoOutKSVList ksvList;
+ } CellVideoOutDeviceInfo;
+ 
+ /* ---------------------------------------------------------------------------
