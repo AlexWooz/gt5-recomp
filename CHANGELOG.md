@@ -14,7 +14,8 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
   render target was cleared in a submission of its own, waited on after first waiting for the open
   batch, and each released target made the renderer wait for every batch before it destroyed its
   cached framebuffers. GT5's menu releases and recreates a target or two a frame.
-- A new colour or depth target is now cleared in the open batch, before the draws that use it, and
+- A new colour or depth target is now cleared in the open batch, before the draws that use it (and
+  a new texture is readied there too: in a race those waits were about 1.2 s in every 5 s), and
   framebuffers go to the same deferred list as released images, destroyed once the batches that may
   use them are done. (When a batch's list has no room left, that batch is waited on and they go at
   once, where before the extra entries were dropped.)
