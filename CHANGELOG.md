@@ -9,6 +9,25 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 13 Nov 2026
 
+🏷️ Released as **v0.1.39**
+
+🚗 **Cockpit view with a game update (2.xx): the windows are clear again** (reported on Discord by
+Arpadiam and brocolison with 2.11 and the Master Mod, licence test B-1)
+- In the cockpit camera, the windscreen and side windows showed a big, blown-out, speckled copy of the
+  screen: a second HUD ("Best Lap", "Target"), the dashboard and the pillars. The disc's own version
+  01.00 never did this, which is why the plain disc looked fine.
+- Since the updates, the glass uses GT5's "no texture": a 1x1 texture set to read as transparent black
+  whatever memory holds (its channel mapping takes nothing from memory). It points at the very start
+  of video memory, where the last finished frame sits. The port applied that mapping to textures it
+  decodes from memory, but not to one that lands on a picture it has drawn itself, so the glass got the
+  whole last frame, stretched over the windows, and the glass's own fine dither pattern turned into the
+  speckles.
+- A texture whose mapping takes no channel from memory now reads its fixed values, as on the PS3,
+  wherever it points.
+- Checked on this PC with the European disc and update 2.17, at 1080p: B-1 in the cockpit camera shows
+  the track through clear glass, with one HUD and working mirrors; the roof and chase cameras, menus and
+  an Arcade race look as before.
+
 🏷️ Released as **v0.1.38**
 
 🛞 **The first real steering wheel: a Genius Speed Wheel 3 Vibration** (tested by brocolison,

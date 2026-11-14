@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.39](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.39) | 13 Nov 2026 | Cockpit view with a game update (2.xx): the windows are clear again |
 | [v0.1.38](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.38) | 13 Nov 2026 | Steering wheels: a Genius Speed Wheel 3 is found by itself, and pedals on one axis split into throttle and brake |
 | [v0.1.37](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.37) | 13 Nov 2026 | Clear the shader cache from the launcher (Help) or ClearShaders.bat |
 | [v0.1.36](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.36) | 13 Nov 2026 | The GT5 Master Mod runs (2.11, US): setup names its executable; README and STATUS list it |

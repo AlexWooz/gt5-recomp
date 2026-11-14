@@ -121,7 +121,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **13 Nov 2026:** the first real steering wheel tried (a Genius Speed Wheel 3): it's now found by
+- **13 Nov 2026:** with a game update (2.xx), the cockpit view's windows are clear again (they showed a
+  blown-out, speckled copy of the screen with a second HUD); the first real steering wheel tried (a Genius Speed Wheel 3): it's now found by
   itself, and wheels with both pedals on one axis get throttle and brake (before, resting was half
   throttle); the stutter the first time you see a car or track is about three times shorter: new
   shaders compile on up to 8 threads (from a community pull request) (v0.1.32); DLC works offline with
