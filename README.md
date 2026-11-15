@@ -208,6 +208,7 @@ To play the previous build right away instead, copy `GT5\build\gt5.previous.exe`
 
 A DualSense, DualShock 4 or XInput pad works. Without one, the keyboard:
 Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
+Esc quits the game, after asking (`set "PS3_ESC_CONFIRM=0"` in `play.bat` quits at once).
 
 A steering wheel works too, with force feedback (new; one real wheel tried so far): see the
 [FAQ](#faq).

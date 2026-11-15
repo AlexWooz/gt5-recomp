@@ -16350,6 +16350,7 @@ diff --git a/libs/video/rsx_live_draw.h b/libs/video/rsx_live_draw.h
  /* End-only persistence hook used by the window-close path. Safe to call more
   * than once; it writes the fixed QPC ring at most once per renderer run. */
 diff --git a/libs/video/rsx_null_backend.c b/libs/video/rsx_null_backend.c
+index 32e8a959..0c42e550 100644
 --- a/libs/video/rsx_null_backend.c
 +++ b/libs/video/rsx_null_backend.c
 @@ -7,6 +7,7 @@
@@ -16360,7 +16361,30 @@ diff --git a/libs/video/rsx_null_backend.c b/libs/video/rsx_null_backend.c
  #include <stdio.h>
  #include <string.h>
  #include "../../runtime/ps3_log.h"
-@@ -247,14 +248,19 @@
+@@ -93,9 +94,19 @@ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+     }
+ 
+     case WM_KEYDOWN:
+-        if (wp == VK_ESCAPE) {
+-            s_state.window_closed = 1;
+-            DestroyWindow(hwnd);
++        /* Esc quits, after asking (Arpadiam on Discord: with the keyboard it is easy to hit by accident and
++         * lose what the game had not saved). No is the default, so Esc or Enter on the box keeps playing.
++         * While it is open this thread, which also draws and ticks vblank, waits: the game holds still.
++         * PS3_ESC_CONFIRM=0 quits at once, as before. */
++        if (wp == VK_ESCAPE && !(lp & (1L << 30))) {   /* not a key repeat */
++            static int confirm = -1;
++            if (confirm < 0) { const char* e = getenv("PS3_ESC_CONFIRM"); confirm = !(e && e[0] == '0'); }
++            if (!confirm ||
++                MessageBoxA(hwnd, "Quit Gran Turismo 5?\n\nAnything the game has not saved yet is lost.",
++                            "Gran Turismo 5", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_TOPMOST) == IDYES) {
++                s_state.window_closed = 1;
++                DestroyWindow(hwnd);
++            }
+         }
+         return 0;
+     }
+@@ -247,14 +258,19 @@ int rsx_null_backend_init(u32 width, u32 height, const char* title)
      wc.lpszClassName = "ps3recomp_null";
      RegisterClassExA(&wc);
  
@@ -16384,18 +16408,18 @@ diff --git a/libs/video/rsx_null_backend.c b/libs/video/rsx_null_backend.c
          CW_USEDEFAULT, CW_USEDEFAULT,
          wr.right - wr.left, wr.bottom - wr.top,
          NULL, NULL, GetModuleHandle(NULL), NULL);
-@@ -262,6 +268,10 @@
-     if (!s_state.hwnd) {
+@@ -263,6 +279,10 @@ int rsx_null_backend_init(u32 width, u32 height, const char* title)
          printf("[RSX null] ERROR: CreateWindow failed (%lu)\n", GetLastError());
          return -1;
-+    }
+     }
 +    if (behind) {
 +        ShowWindow(s_state.hwnd, SW_SHOWNOACTIVATE);
 +        SetWindowPos(s_state.hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-     }
++    }
  
      s_state.hdc = GetDC(s_state.hwnd);
-@@ -315,8 +325,16 @@
+     s_state.last_fps_time = GetTickCount64();
+@@ -315,8 +335,16 @@ int rsx_null_backend_pump_messages(void)
          if (fps <= 0.0)
              fps = (s_state.frame_count - s_state.title_frames) * 1000.0 /
                    (double)(now - s_state.title_time);

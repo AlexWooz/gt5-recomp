@@ -9,6 +9,17 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.55**
+
+⌨️ **Esc asks before it quits the game** (asked for by Arpadiam on Discord: with the keyboard it is easy to
+hit by accident and lose what the game hadn't saved)
+- Esc in the game window now shows "Quit Gran Turismo 5?". No is the default, so Esc or Enter on the box
+  keeps playing; while it is open the game holds still. `set "PS3_ESC_CONFIRM=0"` in `play.bat` quits at
+  once, as before. Closing the window with its X button still quits straight away. Windows only (on Linux
+  Esc still quits at once).
+- Checked on this PC: Esc showed the question and the game kept running; No went back to the game at full
+  speed; Esc again and Yes ended it.
+
 🏷️ Released as **v0.1.54**
 
 🎞️ **Frame generation (beta): 30 fps and watch mode look like 60**
