@@ -9,6 +9,33 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.64**
+
+🐧 **Linux and the Vulkan renderer: races start at the right brightness, and car reflections and shadows are drawn in full**
+([#20](https://github.com/MormonFTP-hub/gt5-recomp/issues/20), melroy89: scenes sometimes far too dark until the
+licence test was restarted, flicker, and "rejected colour feedback" lines in the logs; Radeon RX 7900 XTX)
+- Brightness: GT5 sets its exposure from the scene itself. It shrinks each frame step by step and reads the
+  smallest copy back. Since v0.1.49 new shaders are built in the background, and a draw whose shader isn't
+  ready yet is left out. At a scene's first frames, while most of its shaders were new, that included those
+  shrinking steps, so GT5 measured a leftover image and opened the race far too dark (or too bright). Now only
+  the scene's own objects wait for their shaders; full-screen steps like these, and the HUD, get theirs
+  straight away (a few dozen per new scene, so no freezes come back). Checked on the Windows Vulkan test copy
+  from an empty shader cache, Tokyo R246 in Arcade: at the start line the old way showed a near-black road
+  under a deep blue sky, the new way the right picture. Here the old way recovered within a few seconds. If a
+  scene still stays dark for longer, `play.err` now says which image each brightness reading comes from.
+- Car reflections: each of the six sides of the reflection map gets its smaller, blurrier copies drawn in the
+  rows below it, in the same image. The renderer refused the first of those draws, because it reads the side
+  while drawing into the same image. So that level was never drawn, and every smaller one was made from it.
+  Those refusals were the "rejected colour feedback" lines in melroy89's logs. That draw now reads a copy of
+  the side.
+- Shadows: GT5's shadow pass also reads a 1x1 texture at its own image's address. Those draws were refused
+  too, hundreds a second already at the top menu, so objects were missing from the shadow map. They're drawn
+  now.
+- The flicker itself didn't show here: an NVIDIA card with the same renderer, presenting every frame the way
+  the Linux build does, at the top menu, before a Tokyo R246 race and in it. Vulkan's validation layer, with
+  its synchronisation checks on, found no errors from boot to a race. The reflection and shadow fixes change
+  what is drawn every frame, so they may help with it; that is untested on AMD.
+
 🏷️ Released as **v0.1.63**
 
 ⚡ **Less CPU for every frame: the Steam Deck work from a community pull request** (by AlexWooz, #33;
