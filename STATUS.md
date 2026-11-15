@@ -74,7 +74,9 @@ performance matters more than the graphics card.
   force feedback, both pedals on one axis), attaches and gets the game's commands in a race
   ([#29](https://github.com/MormonFTP-hub/gt5-recomp/pull/29)); since 13 Nov it's found by itself and
   its pedal axis splits into throttle and brake: on v0.1.39 the player raced a full 16-car field with it,
-  using the keyboard for the menus. **Force feedback is still untried on a real wheel.** Wheel owners:
+  using the keyboard for the menus. Since 15 Nov a wheel with no d-pad moves through the menus itself
+  (rim for left / right, throttle and brake for down / up), checked with a simulated wheel, not yet on
+  that one. **Force feedback is still untried on a real wheel.** Wheel owners:
   [tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml),
   with `GT5\logs\play.err` attached (settings are in the README's FAQ).
 - **The picture can freeze on one screen at the first start** while the game carries on behind it
@@ -126,7 +128,10 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **14 Nov 2026:** Photo Mode: Auto Focus no longer fills the viewfinder with ghost copies, and photos after the first keep the right exposure (v0.1.51); Linux: the game window opens on KDE Plasma under Wayland (v0.1.50); no more freezes when new shaders are needed (they build in the background), and
+- **15 Nov 2026:** saves over 2 MB (`GT5.0` + `GT5.1`, a big garage on 2.xx) load again instead of the
+  game closing at every start; a steering wheel with no d-pad moves through the menus: the rim for left / right,
+  throttle and brake for down / up, and spare buttons can be the d-pad (v0.1.53).
+- **14 Nov 2026:** Photo Mode: Auto Focus no longer fills the viewfinder with ghost copies, and photos after the first keep the right exposure, and new cars get a proper Garage picture instead of a black square (v0.1.51); Linux: the game window opens on KDE Plasma under Wayland (v0.1.50); no more freezes when new shaders are needed (they build in the background), and
   road markings and shadows get the PS3's polygon offset (v0.1.49); Photo Mode pictures keep their colours: no more yellow-green tint or coloured ghost copies (v0.1.48);
   the game starts on PCs where Windows forces Control Flow Guard on, and Options >
   Display no longer crashes it (v0.1.47); races at 1080p get the right brightness: auto-exposure read a leftover image, so

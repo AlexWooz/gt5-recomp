@@ -289,7 +289,10 @@ itself (Windows calls it a joystick, so before that it needed `set "PS3_WHEEL=04
 that axis where it rests: one way is throttle, the other is brake. If they're the wrong way round:
 `set "PS3_WHEEL_PEDALS=throttle=Yinv"`. Other wheels with pedals on one axis get the same. On v0.1.39
 brocolison raced a full 16-car field with it, throttle and brake both working, with the keyboard for
-the menus (that wheel has no d-pad). A pad or the keyboard works alongside any wheel.
+the menus: GT5's menus move with the d-pad, and that wheel has none. Since 15 Nov a wheel with no d-pad
+moves through the menus by itself: **at the menus, turn the rim for left / right and press the throttle
+/ brake for down / up** (hold to scroll); Cross (button 1) chooses and Circle (button 3) goes back. In a
+race the rim and pedals only drive. A pad or the keyboard works alongside any wheel.
 
 What hasn't been checked: force feedback on a real wheel, including which way the forces push. So
 **wheel owners are wanted**: please
@@ -307,7 +310,9 @@ If something is off, add a line to `play.bat` (next to the other `set` lines):
 | Steering too quick or too slow | set your wheel's rotation to 900° in its software (G HUB, ...), or tell the port what it is: `set "PS3_WHEEL_RANGE=1080"` |
 | A pedal does nothing, or the wrong thing | `set "PS3_WHEEL_TRACE=1"`, press each pedal, and see which axis moves in the `[wheel] axes` lines of `play.err`; then e.g. `set "PS3_WHEEL_PEDALS=throttle=Y,brake=RZ,clutch=Z"` (add `inv` to one that works backwards: `brake=RZinv`) |
 | Throttle and brake swapped on a wheel whose pedals share one axis | `set "PS3_WHEEL_PEDALS=throttle=Yinv"` (`play.err` names the shared axis: `[wheel] throttle and brake share the Y axis`) |
-| A button is wrong | `set "PS3_WHEEL_BUTTONS=cross=1,circle=3,start=10"`, with button numbers as Windows' *Set up USB game controllers* window (`joy.cpl`) shows them; names: cross square circle triangle r1 l1 r2 l2 select start r3 l3 gear1..gear6 gearr plus minus dialcw dialccw |
+| A button is wrong | `set "PS3_WHEEL_BUTTONS=cross=1,circle=3,start=10"`, with button numbers as Windows' *Set up USB game controllers* window (`joy.cpl`) shows them; names: cross square circle triangle r1 l1 r2 l2 select start r3 l3 gear1..gear6 gearr plus minus dialcw dialccw, and up down left right for the d-pad |
+| No d-pad on the wheel, and you'd rather move through menus with buttons | `set "PS3_WHEEL_BUTTONS=up=7,down=8"` (any spare buttons; left= and right= too). Without it, the rim and pedals move through menus on such a wheel; `set "PS3_WHEEL_MENU=off"` turns that off |
+| No Start button on the wheel (to pause) | give Start a spare button: `set "PS3_WHEEL_BUTTONS=start=8"` (the defaults put Start on button 10, which smaller wheels don't have) |
 | The wrong device is used, or none | `set "PS3_WHEEL=G29"` (part of its name, or its `046d:c24f` VID:PID); `play.err` lists every controller it saw |
 | You don't want it | `set "PS3_WHEEL=off"` |
 

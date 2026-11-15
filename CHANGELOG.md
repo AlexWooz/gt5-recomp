@@ -9,6 +9,53 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.53**
+
+💾 **Saves over 2 MB load again** (brocolison and Keduboneur78 on Discord: after a long session, or after
+getting every car, the game closed at every start and the progress seemed lost)
+- Once GT5 2.xx's save data passes 2 MB, the game writes it as two files, `GT5.0` (exactly 2 MB) and
+  `GT5.1`. Keduboneur78's log shows his save going from 387 KB in one file to 3.3 MB in two within one
+  session. Nothing was wrong with those files.
+- When loading, the game asks how big the save is, and the port answered 0 KB (a PS3, and RPCS3, give the
+  real size). From that, GT5 read only `GT5.0`, had two thirds of its save, and stopped with its own
+  error at every start.
+- The port now reports the save's size the way the PS3 does (every file rounded up to 1 KB, plus 35 KB
+  for the system files), puts the file list in the game's own buffer, and recognises the protected-file
+  marks a save made in RPCS3 or on a PS3 carries. The log now prints the list the game is given
+  (`[cellSaveData] stat:`).
+- Checked on this PC with a save cut into `GT5.0` + `GT5.1`: before, the game read `GT5.0` only; now it
+  reads both. **If your game closed at start: put your save folder back as it was, with `GT5.0` and
+  `GT5.1` together, and start the game.** Please tell us if it loads.
+
+🧹 Logs: when GT5 stops itself it prints `abort() is called from` and a list of the game's own addresses.
+Just before that it writes a text the port never sets up, and the port copied 16 KB of zeros into
+`play.out` for it, which looked like a lost error message. It now writes one line saying so.
+
+🎞️ Under the hood: the first part of frame generation (making the frames that 30 fps and watch mode leave
+out, on the graphics card) is in the code, switched off (`LD_FRAMEGEN`). It works, but in its present form
+it slows the game itself (60 game frames a second down to about 24 in a test with the graphics card busy),
+so it isn't in the launcher yet.
+
+🎮 **Steering wheels: a wheel with no d-pad moves through the menus**
+(brocolison on Discord: his Genius Speed Wheel 3 needed the keyboard for the menus)
+- GT5's menus move only with the d-pad. A G27 has one on its shifter, but many cheaper wheels have
+  none (that Genius has eight buttons and no d-pad), so the menus needed the keyboard. Now, on such a
+  wheel, while the game is at its menus, turning the rim past a quarter of its travel is d-pad left or
+  right, and the throttle and the brake are down and up; hold them to scroll. The wheel's buttons
+  already reached the menus: Cross (button 1) chooses, Circle (button 3) goes back. The game plays a
+  centring spring on the wheel at its menus and the pause screen and stops it when a race loads; that
+  is how the port tells them from driving, so in a race the rim and pedals only drive.
+- Any wheel can put the d-pad on spare buttons: `set "PS3_WHEEL_BUTTONS=up=7,down=8,left=5,right=6"`.
+  A button given a job that way leaves the one it had by default, so `start=8` (for wheels without a
+  button 10, where Start sits by default) makes button 8 Start only. `set "PS3_WHEEL_MENU=off"` turns
+  the rim-and-pedals menu control off; `on` gives it to wheels with a d-pad as well.
+- `logs\play.err` now says how many buttons the wheel has, whether it has a d-pad, and when the game
+  goes to and leaves its menus.
+- Checked with a simulated wheel with no d-pad (not yet on a real one): at the top menu each turn of
+  the rim moved one icon left or right; Cross opened Arcade Mode, the throttle went down a row and the
+  brake back up, Circle went back. In a race, steering, throttle and brake reached the game with no
+  d-pad. The wheel's Start paused the race, and the pause screen counts as a menu.
+
 🏷️ Released as **v0.1.52**
 
 🐧 **Linux and the Vulkan renderer: new shaders are handed over a little faster on scene changes**
@@ -48,6 +95,17 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
   clean, sharp preview, where it showed overlapping copies before. At 1080p the viewfinder keeps its
   brightness after a photo (before, it climbed to nearly three times as bright within 40 seconds), and
   three photos in a row came out equally bright. Replay Photo Mode wasn't tried.
+
+🚗 **Garage: new cars get a proper thumbnail again, not a black or scrambled square** (found out on
+15 Nov that v0.1.51 fixes this too; Arpadiam on Discord, US 2.11 + Master Mod)
+- When you get a car, GT5 draws its picture for the Garage and copies it back from the graphics card in
+  small pieces, the same way as the Auto Focus patch above, and saves it. The port delivered those
+  copies late, so the saved picture came out black or as coloured noise; with update 2.17 here a late
+  copy even landed in memory the game had already reused, and the screen went black.
+- Checked on this PC with the European disc and with update 2.17: a car bought in the Used Car
+  Dealership gets a correct picture. Pictures saved by older versions stay black: repainting the car
+  at GT Auto (Paint Body, 2,000 Cr and a paint item; buying a car also gives you a paint item of its
+  colour) makes the game draw a new one.
 
 🏷️ Released as **v0.1.50**
 

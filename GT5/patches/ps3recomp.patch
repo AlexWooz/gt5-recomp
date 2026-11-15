@@ -4630,10 +4630,10 @@ index 6d8dd233..f2f478fc 100644
  }
 diff --git a/libs/hardware/wheel.h b/libs/hardware/wheel.h
 new file mode 100644
-index 00000000..3c868e55
+index 00000000..68b6a6c1
 --- /dev/null
 +++ b/libs/hardware/wheel.h
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,111 @@
 +/*
 + * ps3recomp - steering wheel emulation (Logitech G27 on cellUsbd)
 + *
@@ -4731,6 +4731,7 @@ index 00000000..3c868e55
 +void wheel_g27_output(const u8* data, u32 len);        /* an OUT report from the game */
 +void wheel_g27_ffb_snapshot(WheelFfb* out);            /* consistent copy, under the lock */
 +void wheel_g27_reset(void);                            /* back to power-on state */
++int  wheel_g27_in_menus(void);                         /* the game plays its menu centring spring */
 +
 +/* ---- wheel_host_win.c (stubs elsewhere) ---- */
 +int  wheel_host_start(void);              /* 1 if the feature is on and the thread runs */
@@ -4746,10 +4747,10 @@ index 00000000..3c868e55
 +#endif /* PS3RECOMP_WHEEL_H */
 diff --git a/libs/hardware/wheel_g27.c b/libs/hardware/wheel_g27.c
 new file mode 100644
-index 00000000..ab065052
+index 00000000..9b170855
 --- /dev/null
 +++ b/libs/hardware/wheel_g27.c
-@@ -0,0 +1,395 @@
+@@ -0,0 +1,411 @@
 +/*
 + * ps3recomp - the emulated Logitech G27 (see wheel.h)
 + *
@@ -5126,6 +5127,22 @@ index 00000000..ab065052
 +    if (changed) wheel_host_ffb_changed();
 +}
 +
++/* Is the game at its menus? GT5 keeps a centring spring playing in a slot there
++ * (`21 0B 7F 7F 77 00 80`, from the moment its driver takes the wheel) and stops it as a race
++ * loads (`23 0B ...`); in the race it only plays the steering force (`11 08 xx 80`), which it
++ * also stops and restarts now and then, and through the start countdown. So the spring, not
++ * the steering force, tells menus from driving. The host side uses this to let a wheel with
++ * no d-pad move through menus without touching the race (wheel_host_win.c). */
++int wheel_g27_in_menus(void)
++{
++    int on = 0;
++    g27_lock();
++    for (int s = 0; s < WHEEL_FFB_SLOTS; s++)
++        if (s_ffb.slot[s].playing && s_ffb.slot[s].type == WHEEL_FX_SPRING) on = 1;
++    g27_unlock();
++    return on;
++}
++
 +void wheel_g27_ffb_snapshot(WheelFfb* out)
 +{
 +    g27_lock();
@@ -5147,10 +5164,10 @@ index 00000000..ab065052
 +}
 diff --git a/libs/hardware/wheel_host_win.c b/libs/hardware/wheel_host_win.c
 new file mode 100644
-index 00000000..5d76ef01
+index 00000000..2a8a0a08
 --- /dev/null
 +++ b/libs/hardware/wheel_host_win.c
-@@ -0,0 +1,777 @@
+@@ -0,0 +1,912 @@
 +/*
 + * ps3recomp - the PC steering wheel behind the emulated G27 (see wheel.h)
 + *
@@ -5177,7 +5194,12 @@ index 00000000..5d76ef01
 + *                        split where it rests: below is throttle, throttle=Yinv swaps.
 + *   PS3_WHEEL_STEER      steering axis (X).
 + *   PS3_WHEEL_BUTTONS    e.g. cross=1,circle=3,start=10, by the numbers Windows'
-+ *                        Game Controllers panel shows (1 = first button).
++ *                        Game Controllers panel shows (1 = first button);
++ *                        up/down/left/right put the d-pad on buttons.
++ *   PS3_WHEEL_MENU       how a wheel with no d-pad moves through menus. Unset: at the
++ *                        game's menus (it plays its menu centring spring there),
++ *                        turning the rim is d-pad left/right and the throttle / brake
++ *                        are down / up. off: never. on: also on a wheel with a d-pad.
 + *   PS3_WHEEL_SHIFTER    1/0: report an H-shifter attached or not (default: once
 + *                        a gear is engaged).
 + *   PS3_WHEEL_TRACE      1 = log what the wheel and the game exchange.
@@ -5217,6 +5239,8 @@ index 00000000..5d76ef01
 +    "select", "start", "r3", "l3", "gear1", "gear2", "gear3", "gear4",
 +    "gear5", "gear6", "gearr", "plus", "minus", "dialcw", "dialccw",
 +};
++/* The d-pad on buttons, for wheels without one: hat directions 0, 2, 4, 6. */
++static const char* const k_dpad_name[4] = { "up", "right", "down", "left" };
 +
 +enum { MODE_OFF, MODE_AUTO, MODE_MATCH, MODE_VIRTUAL };
 +
@@ -5225,6 +5249,7 @@ index 00000000..5d76ef01
 +    int  pedal[3];          /* throttle, brake, clutch: AX_* or AX_NONE */
 +    int  pedal_inv[3];      /* -1 = released where it rests (see pedal()), 2 = the other end */
 +    int  btn[WHEEL_BTN_COUNT];  /* host button index (0-based) per G27 button, -1 = none */
++    int  dpad[4];               /* host button per d-pad direction (up right down left), -1 = none */
 +} WheelMap;
 +
 +static int   s_mode = -1;
@@ -5233,6 +5258,9 @@ index 00000000..5d76ef01
 +static int   s_gain = 100;
 +static float s_ffb_sign = 1.f;
 +static int   s_shifter_cfg = -1;
++static int   s_menu_cfg = -1;  /* PS3_WHEEL_MENU: -1 = wheels with no d-pad, 0 = off, 1 = all */
++static int   s_has_hat = 1;    /* the wheel has a d-pad (a POV hat) */
++static int   s_vbtn;           /* virtual wheel: host button held (1-based), 0 = none */
 +
 +static void lower(char* s) { for (; *s; s++) *s = (char)tolower((unsigned char)*s); }
 +
@@ -5253,6 +5281,12 @@ index 00000000..5d76ef01
 +    if (e && *e == '1') s_ffb_sign = -1.f;
 +    e = getenv("PS3_WHEEL_SHIFTER");
 +    if (e && *e) s_shifter_cfg = (*e == '1');
++    e = getenv("PS3_WHEEL_MENU");
++    if (e && *e) {
++        char m[16]; snprintf(m, sizeof m, "%s", e); lower(m);
++        if (!strcmp(m, "off") || !strcmp(m, "0") || !strcmp(m, "no")) s_menu_cfg = 0;
++        else if (!strcmp(m, "on") || !strcmp(m, "1") || !strcmp(m, "yes")) s_menu_cfg = 1;
++    }
 +}
 +
 +static int axis_by_name(const char* s, int* inv)
@@ -5274,6 +5308,7 @@ index 00000000..5d76ef01
 +{
 +    m->steer = AX_X;
 +    for (int i = 0; i < WHEEL_BTN_COUNT; i++) m->btn[i] = i;   /* G29/G923 order */
++    for (int d = 0; d < 4; d++) m->dpad[d] = -1;
 +    /* Pedals rest at the top of their range on Logitech wheels. Axis usage
 +     * differs: G29 / G923 (PlayStation) put the clutch on Z and the brake on
 +     * Rz, the G920 / G923 (Xbox) the other way round. */
@@ -5312,12 +5347,24 @@ index 00000000..5d76ef01
 +    e = getenv("PS3_WHEEL_BUTTONS");
 +    if (e && *e) {
 +        char buf[512]; snprintf(buf, sizeof buf, "%s", e); lower(buf);
++        int set[WHEEL_BTN_COUNT] = { 0 };
 +        for (char* tok = strtok(buf, ",; "); tok; tok = strtok(NULL, ",; ")) {
 +            char* eq = strchr(tok, '=');
 +            if (!eq) continue;
 +            *eq = 0;
 +            for (int i = 0; i < WHEEL_BTN_COUNT; i++)
-+                if (!strcmp(tok, k_btn_name[i])) m->btn[i] = atoi(eq + 1) - 1;   /* 1-based, 0 = none */
++                if (!strcmp(tok, k_btn_name[i])) { m->btn[i] = atoi(eq + 1) - 1; set[i] = 1; }   /* 1-based, 0 = none */
++            for (int d = 0; d < 4; d++)
++                if (!strcmp(tok, k_dpad_name[d])) m->dpad[d] = atoi(eq + 1) - 1;
++        }
++        /* A button given a job here leaves the one it had by default only: start=8 on an
++         * eight-button wheel makes button 8 Start, not Start and L2. */
++        for (int i = 0; i < WHEEL_BTN_COUNT; i++) {
++            if (set[i] || m->btn[i] < 0) continue;
++            int taken = 0;
++            for (int j = 0; j < WHEEL_BTN_COUNT; j++) if (set[j] && m->btn[j] == m->btn[i]) taken = 1;
++            for (int d = 0; d < 4; d++) if (m->dpad[d] == m->btn[i]) taken = 1;
++            if (taken) m->btn[i] = -1;
 +        }
 +    }
 +}
@@ -5471,6 +5518,7 @@ index 00000000..5d76ef01
 +    DIDEVCAPS caps; memset(&caps, 0, sizeof caps); caps.dwSize = sizeof caps;
 +    IDirectInputDevice8_GetCapabilities(s_dev, &caps);
 +    s_has_ffb = (caps.dwFlags & DIDC_FORCEFEEDBACK) && s_gain > 0;
++    s_has_hat = caps.dwPOVs > 0;
 +    /* Effects need exclusive access; a helper window that is never shown is
 +     * enough with background access. */
 +    if (FAILED(IDirectInputDevice8_SetCooperativeLevel(s_dev, s_hwnd,
@@ -5515,12 +5563,19 @@ index 00000000..5d76ef01
 +    {
 +        const char* e = getenv("PS3_WHEEL_RANGE");
 +        fprintf(stderr, "[wheel] using \"%s\" (%04X:%04X), force feedback %s, range %s degrees; "
-+                        "steer %s, throttle %s, brake %s, clutch %s\n",
++                        "steer %s, throttle %s, brake %s, clutch %s; %lu buttons, %s\n",
 +                s_name, s_vid, s_pid, s_has_ffb ? "on" : "off", (e && *e) ? e : "900",
 +                k_axis_name[s_map.steer],
 +                s_map.pedal[0] >= 0 ? k_axis_name[s_map.pedal[0]] : "none",
 +                s_map.pedal[1] >= 0 ? k_axis_name[s_map.pedal[1]] : "none",
-+                s_map.pedal[2] >= 0 ? k_axis_name[s_map.pedal[2]] : "none");
++                s_map.pedal[2] >= 0 ? k_axis_name[s_map.pedal[2]] : "none",
++                (unsigned long)caps.dwButtons, s_has_hat ? "a d-pad" : "no d-pad");
++        int dpad_btns = 0;
++        for (int d = 0; d < 4; d++) dpad_btns += s_map.dpad[d] >= 0;
++        if (s_menu_cfg == 1 || (s_menu_cfg < 0 && !s_has_hat))
++            fprintf(stderr, "[wheel] no d-pad: at the game's menus, turn the rim for left / right and press "
++                            "the throttle / brake for down / up (PS3_WHEEL_MENU=off stops this)%s\n",
++                    dpad_btns ? "" : "; PS3_WHEEL_BUTTONS=up=7,down=8 puts the d-pad on buttons instead");
 +    }
 +    return 1;
 +}
@@ -5567,6 +5622,45 @@ index 00000000..5d76ef01
 +    }
 +    float f = high ? (65535.f - (float)v) / 65535.f : (float)v / 65535.f;
 +    return f < 0.f ? 0.f : (f > 1.f ? 1.f : f);
++}
++
++/* Hat direction from -1/0/+1 steps (dy +1 = down), -1 = centred. */
++static int hat_from(int dx, int dy)
++{
++    static const int k[3][3] = { { 7, 0, 1 }, { 6, -1, 2 }, { 5, 4, 3 } };
++    return k[dy + 1][dx + 1];
++}
++
++/* GT5's menus move only with the d-pad (a G27 has one on its shifter). A wheel without one,
++ * as most cheap wheels are (a player's Genius Speed Wheel 3 has eight buttons and no d-pad),
++ * left the keyboard as the only way through them. At the menus (see wheel_g27_in_menus), the
++ * rim turned past a quarter of its travel holds d-pad left or right, and the throttle and the
++ * brake hold down and up; the game's own repeat scrolls while they're held. A d-pad or d-pad
++ * buttons pressed win. In a race nothing changes. */
++static void menu_dpad(WheelInput* in)
++{
++    static int dx, dy, was;   /* not at the menus until the game's driver says so */
++    static unsigned said;
++    if (!(s_menu_cfg == 1 || (s_menu_cfg < 0 && !s_has_hat))) return;
++    const int menus = wheel_g27_in_menus();
++    if (menus != was) {
++        if (said < 100) {
++            said++;
++            fprintf(stderr, menus ? "[wheel] the game is at its menus: the rim and pedals move through them\n"
++                                  : "[wheel] the game left its menus: the rim and pedals drive\n");
++        }
++        was = menus;
++        dx = dy = 0;
++    }
++    if (!menus) return;
++    /* Hysteresis, so a rim held near the threshold doesn't flicker. */
++    const float s = in->steer;
++    if ((dx > 0 && s < 0.15f) || (dx < 0 && s > -0.15f)) dx = 0;
++    if (!dx) dx = s > 0.25f ? 1 : s < -0.25f ? -1 : 0;
++    if ((dy > 0 && in->throttle < 0.3f) || (dy < 0 && in->brake < 0.3f)) dy = 0;
++    if (!dy) dy = in->throttle > 0.5f ? 1 : in->brake > 0.5f ? -1 : 0;
++    /* One direction at a time: a diagonal moves some menus nowhere. */
++    if (in->hat < 0 && (dx || dy)) in->hat = dy ? hat_from(0, dy) : hat_from(dx, 0);
 +}
 +
 +static void dev_poll(void)
@@ -5650,6 +5744,15 @@ index 00000000..5d76ef01
 +        const int h = s_map.btn[i];
 +        if (h >= 0 && h < 128 && (js.rgbButtons[h] & 0x80)) in.buttons |= 1u << i;
 +    }
++    if (in.hat < 0) {   /* the d-pad on buttons (PS3_WHEEL_BUTTONS=up=7,...) */
++        int on[4];
++        for (int d = 0; d < 4; d++) {
++            const int h = s_map.dpad[d];
++            on[d] = h >= 0 && h < 128 && (js.rgbButtons[h] & 0x80);
++        }
++        in.hat = hat_from(on[1] - on[3], on[2] - on[0]);
++    }
++    menu_dpad(&in);
 +    if (in.buttons & (0x7Fu << WHEEL_BTN_GEAR1)) s_shifter_seen = 1;
 +    in.shifter = s_shifter_cfg >= 0 ? s_shifter_cfg : s_shifter_seen;
 +    publish(&in);
@@ -5832,11 +5935,17 @@ index 00000000..5d76ef01
 +    (void)unused;
 +    if (s_mode == MODE_VIRTUAL) {
 +        /* For testing the game side: PS3_WHEEL_VIRTUAL=steer=0.5,throttle=1
-+         * holds the rim and pedals where it says, from DELAY seconds on. */
++         * holds the rim and pedals where it says, from DELAY seconds on.
++         * PS3_WHEEL_VIRTUAL_FILE=<path>: a test writes "<what> <ms>" there, e.g.
++         * "cross 200", "up 150" (the d-pad: up/down/left/right), "steer=-0.8 600",
++         * "throttle=1 300", and the wheel does that for that long; the file is
++         * emptied when it is taken. nohat=1 in PS3_WHEEL_VIRTUAL plays a wheel
++         * with no d-pad (as most cheap wheels are). */
 +        WheelInput in; memset(&in, 0, sizeof in);
 +        in.connected = 1; in.hat = -1; in.shifter = s_shifter_cfg > 0;
 +        publish(&in);
 +        const char* v = getenv("PS3_WHEEL_VIRTUAL");
++        const char* vf = getenv("PS3_WHEEL_VIRTUAL_FILE");
 +        const char* at;
 +        float steer = 0.f, thr = 0.f, brk = 0.f;
 +        double delay = 0.;
@@ -5844,15 +5953,58 @@ index 00000000..5d76ef01
 +        if (v && (at = strstr(v, "throttle="))) thr = (float)atof(at + 9);
 +        if (v && (at = strstr(v, "brake="))) brk = (float)atof(at + 6);
 +        if (v && (at = strstr(v, "delay="))) delay = atof(at + 6);
-+        fprintf(stderr, "[wheel] PS3_WHEEL=virtual: a G27 with no PC wheel behind it (steer %.2f, throttle %.2f, brake %.2f after %.0f s)\n",
-+                steer, thr, brk, delay);
++        s_has_hat = !(v && strstr(v, "nohat=1"));
++        build_map(&s_map, 0, 0);
++        fprintf(stderr, "[wheel] PS3_WHEEL=virtual: a G27 with no PC wheel behind it (steer %.2f, throttle %.2f, brake %.2f after %.0f s%s)\n",
++                steer, thr, brk, delay, s_has_hat ? "" : ", no d-pad");
 +        const ULONGLONG t0 = GetTickCount64();
++        ULONGLONG press_until = 0;
++        WheelInput press; memset(&press, 0, sizeof press);
++        int press_steer = 0, press_thr = 0, press_brk = 0;
 +        while (!s_stop) {
-+            if ((double)(GetTickCount64() - t0) / 1000.0 >= delay) {
-+                in.steer = steer; in.throttle = thr; in.brake = brk;
-+                publish(&in);
++            const ULONGLONG now = GetTickCount64();
++            if (vf && *vf && now >= press_until) {
++                FILE* f = fopen(vf, "rb");
++                if (f) {
++                    char line[96] = "";
++                    const int got = fgets(line, sizeof line, f) != NULL;
++                    fclose(f);
++                    char what[48] = ""; int ms = 150;
++                    if (got && sscanf(line, "%47s %d", what, &ms) >= 1 && *what) {
++                        f = fopen(vf, "wb"); if (f) fclose(f);
++                        memset(&press, 0, sizeof press); press.hat = -1;
++                        press_steer = press_thr = press_brk = 0;
++                        lower(what);
++                        static const char* const dn[4] = { "up", "right", "down", "left" };
++                        int known = 0;
++                        for (int d = 0; d < 4; d++) if (!strcmp(what, dn[d])) { press.hat = d * 2; known = 1; }
++                        for (int i = 0; i < WHEEL_BTN_COUNT; i++)
++                            if (!strcmp(what, k_btn_name[i])) { press.buttons = 1u << i; known = 1; }
++                        if (!strncmp(what, "steer=", 6))    { press.steer = (float)atof(what + 6); press_steer = known = 1; }
++                        if (!strncmp(what, "throttle=", 9)) { press.throttle = (float)atof(what + 9); press_thr = known = 1; }
++                        if (!strncmp(what, "brake=", 6))    { press.brake = (float)atof(what + 6); press_brk = known = 1; }
++                        if (!strncmp(what, "btn", 3))       { press.buttons = 0; press.hat = -1; known = 1;
++                                                              s_vbtn = atoi(what + 3); }   /* "btn7": host button 7 */
++                        press_until = known ? now + (ULONGLONG)(ms > 0 ? ms : 150) : 0;
++                        fprintf(stderr, "[wheel] virtual: %s for %d ms%s\n", what, ms, known ? "" : " (unknown, ignored)");
++                    }
++                }
 +            }
-+            Sleep(50);
++            const int pressing = now < press_until;
++            if (!pressing) s_vbtn = 0;
++            const int held = (double)(now - t0) / 1000.0 >= delay;
++            in.steer = pressing && press_steer ? press.steer : held ? steer : 0.f;
++            in.throttle = pressing && press_thr ? press.throttle : held ? thr : 0.f;
++            in.brake = pressing && press_brk ? press.brake : held ? brk : 0.f;
++            in.buttons = pressing ? press.buttons : 0;
++            in.hat = pressing && s_has_hat ? press.hat : -1;
++            if (s_vbtn) {   /* a host button by number, through the button map */
++                for (int i = 0; i < WHEEL_BTN_COUNT; i++) if (s_map.btn[i] == s_vbtn - 1) in.buttons |= 1u << i;
++                for (int d = 0; d < 4; d++) if (s_map.dpad[d] == s_vbtn - 1) in.hat = d * 2;
++            }
++            menu_dpad(&in);
++            publish(&in);
++            Sleep(10);
 +        }
 +        return 0;
 +    }
@@ -5929,7 +6081,7 @@ index 00000000..5d76ef01
 +
 +#endif
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index afdd93de..5a0aaf2e 100644
+index afdd93de..7742f5c3 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -69,6 +69,7 @@ static double pad_clock(unsigned long long t0_ms)
@@ -6413,7 +6565,7 @@ index afdd93de..5a0aaf2e 100644
  s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
  {
      { static int _once = 0;
-@@ -800,6 +1185,23 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
+@@ -800,6 +1185,25 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
      CellPadData _d; CellPadData* data = &_d;
      memset(data, 0, sizeof(CellPadData));
  
@@ -6421,6 +6573,8 @@ index afdd93de..5a0aaf2e 100644
 +     * many words as the port setting asks for (the driver's own len is not
 +     * used). Nothing while a system dialog has the input. */
 +    if (pad_is_ldd(port_no)) {
++        static int said;
++        if (!said) { said = 1; fprintf(stderr, "[cellPad] the game reads its custom controller on port %u\n", port_no); }
 +        const u32 setting = s_port_setting[port_no];
 +        s32 len = (setting & CELL_PAD_SETTING_SENSOR_ON) ? CELL_PAD_LEN_CHANGE_SENSOR_ON
 +                : (setting & CELL_PAD_SETTING_PRESS_ON)  ? CELL_PAD_LEN_CHANGE_PRESS_ON
@@ -6437,7 +6591,7 @@ index afdd93de..5a0aaf2e 100644
      /* Poll fresh state */
      pad_poll_backend();
  
-@@ -854,7 +1256,15 @@ skip_inject: ;
+@@ -854,7 +1258,15 @@ skip_inject: ;
       * physical device, which yields no-buttons-pressed data below. */
  
      {
@@ -6453,7 +6607,7 @@ index afdd93de..5a0aaf2e 100644
      u32 setting = s_port_setting[port_no];
  
      /* Determine data length based on port settings */
-@@ -913,7 +1323,7 @@ skip_inject: ;
+@@ -913,7 +1325,7 @@ skip_inject: ;
       * LEFT 0x0080, RIGHT 0x0020, CROSS 0x4000, CIRCLE 0x2000, TRIANGLE 0x1000.
       * Legit input simulation on the same footing as PAD_AUTOPRESS/PAD_STICK. */
      { static int s_sc = -1;
@@ -6462,7 +6616,7 @@ index afdd93de..5a0aaf2e 100644
        static unsigned long long t0 = 0;   /* not ULONGLONG: this builds on POSIX too */
        if (s_sc < 0) {
            s_sc = 0;
-@@ -925,7 +1335,10 @@ skip_inject: ;
+@@ -925,7 +1337,10 @@ skip_inject: ;
                    double t = strtod(p, (char**)&p);
                    if (*p == ':') p++;
                    unsigned m = (unsigned)strtoul(p, (char**)&p, 0);
@@ -6474,7 +6628,7 @@ index afdd93de..5a0aaf2e 100644
                    while (*p == ',' || *p == ' ') p++;
                }
                printf("[cellPad] PAD_SCRIPT: %d event(s)%s\n", n_ev,
-@@ -941,8 +1354,11 @@ skip_inject: ;
+@@ -941,8 +1356,11 @@ skip_inject: ;
             * hold it for a fixed number of polls, which is what a real press
             * looks like regardless of poll rate. */
            static int fired[256], held[256];
@@ -6487,7 +6641,7 @@ index afdd93de..5a0aaf2e 100644
                if (held[i] > 0) {
                    held[i]--;
                    data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(ev[i].mask & 0xFF);
-@@ -967,21 +1383,27 @@ skip_inject: ;
+@@ -967,21 +1385,27 @@ skip_inject: ;
       *   echo 0x0040 4 > pad.txt  # DOWN for 4 reports (menus auto-repeat a
       *                            # long hold; the default is 40)
       */
@@ -6518,7 +6672,7 @@ index afdd93de..5a0aaf2e 100644
                                 printf("[cellPad] PAD_FILE press 0x%04X\n", m); fflush(stdout); }
                    }
                    fclose(f);
-@@ -991,8 +1413,18 @@ skip_inject: ;
+@@ -991,8 +1415,18 @@ skip_inject: ;
            if (held_n > 0) {
                if (data->len > 0) held_n--;
                data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(held_mask & 0xFF);
@@ -6539,7 +6693,7 @@ index afdd93de..5a0aaf2e 100644
  
      /* Analog sticks */
      /* PAD_STICK="lx,ly,rx,ry" (0-255, 128 = centred): hold the analog sticks at
-@@ -1080,7 +1512,9 @@ skip_inject: ;
+@@ -1080,7 +1514,9 @@ skip_inject: ;
              { CELL_PAD_BTN_OFFSET_DIGITAL2, 0x01, CELL_PAD_BTN_OFFSET_PRESS_L2 },
              { CELL_PAD_BTN_OFFSET_DIGITAL2, 0x02, CELL_PAD_BTN_OFFSET_PRESS_R2 } };
          for (unsigned k = 0; k < sizeof pm / sizeof pm[0]; k++)
@@ -6550,7 +6704,7 @@ index afdd93de..5a0aaf2e 100644
                  data->button[pm[k].off] = 255;
      }
  
-@@ -1095,6 +1529,13 @@ skip_inject: ;
+@@ -1095,6 +1531,13 @@ skip_inject: ;
      }  /* end connected block */
  
  emit:
@@ -6564,7 +6718,7 @@ index afdd93de..5a0aaf2e 100644
      /* A non-zero len means "here is a CHANGE packet" -- the constant is literally
       * named CELL_PAD_LEN_CHANGE_DEFAULT. Hardware reports len = 0 once the port
       * has nothing new, and titles DRAIN on that: The Simpsons Arcade Game's
-@@ -1120,6 +1561,24 @@ emit:
+@@ -1120,6 +1563,24 @@ emit:
       * attack firing once.
       *
       * PAD_ALWAYS_CHANGE=1 restores the old always-a-packet behaviour. */
@@ -6589,7 +6743,7 @@ index afdd93de..5a0aaf2e 100644
      {
          unsigned int ea = (unsigned int)(uintptr_t)data_guest;
          vm_write32((unsigned long long)ea + 0, (unsigned int)data->len);   /* len (s32) */
-@@ -1157,8 +1616,8 @@ s32 cellPadGetInfo(CellPadInfo2* info)
+@@ -1157,8 +1618,8 @@ s32 cellPadGetInfo(CellPadInfo2* info)
       * it ever finished booting. Both entry points describe the same hardware
       * and have to answer the same way. */
      u32 connected = 0;
@@ -6600,7 +6754,7 @@ index afdd93de..5a0aaf2e 100644
  
      vm_write32(gaddr + 0x00, s_max_connect);
      vm_write32(gaddr + 0x04, connected);
-@@ -1168,10 +1627,11 @@ s32 cellPadGetInfo(CellPadInfo2* info)
+@@ -1168,10 +1629,11 @@ s32 cellPadGetInfo(CellPadInfo2* info)
       * Packed for 7 ports, status landed at 0x28 and GH3 -- which reads
       * info+0x208+port -- saw port 0 disconnected and never polled the pad. */
      for (u32 i = 0; i < CELL_PAD_MAX_PORT_NUM; i++) {
@@ -6616,7 +6770,7 @@ index afdd93de..5a0aaf2e 100644
          vm_write8(gaddr + 0x208 + i, (u8)((on ? CELL_PAD_STATUS_CONNECTED : 0) | pad_status_take(i)));
      }
      return CELL_OK;
-@@ -1194,7 +1654,21 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
+@@ -1194,7 +1656,21 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
      info->max_connect = s_max_connect;
  
      u32 connected = 0;
@@ -6639,7 +6793,7 @@ index afdd93de..5a0aaf2e 100644
          /* Always present a virtual pad on port 0 (standard emulator behavior) so
           * boot flows that block until a controller is connected can proceed even
           * with no physical device attached. */
-@@ -1251,6 +1725,17 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -1251,6 +1727,17 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
  
      u32 connected = 0;
      for (u32 i = 0; i < s_max_connect && i < CELL_PAD_MAX_PORT_NUM; i++) {
@@ -6657,7 +6811,7 @@ index afdd93de..5a0aaf2e 100644
          /* Same virtual-pad-on-port-0 rule as cellPadGetInfo2, so both views of
           * the ports agree (a game that cross-checks them must see one truth). */
          if ((i < PAD_MAX_HOST_PORTS && s_host_state[i].connected) || i == 0) {
-@@ -1434,3 +1919,69 @@ s32 cellPadClearBuf(u32 port_no)
+@@ -1434,3 +1921,83 @@ s32 cellPadClearBuf(u32 port_no)
      /* Nothing to clear in our implementation -- state is polled fresh */
      return CELL_OK;
  }
@@ -6716,6 +6870,20 @@ index afdd93de..5a0aaf2e 100644
 +        return CELL_PAD_ERROR_NO_DEVICE;
 +    for (int i = 0; i < CELL_PAD_MAX_CODES; i++)
 +        s_ldd[handle].button[i] = vm_read16(ea + 4 + (unsigned int)i * 2);
++    /* PS3_WHEEL_TRACE: what the game's own driver made of the controller (buttons, d-pad,
++     * sticks), each time it changes. */
++    static int trace = -1;
++    if (trace < 0) { const char* e = getenv("PS3_WHEEL_TRACE"); trace = (e && *e && *e != '0') ? 1 : 0; }
++    if (trace) {
++        static u16 last[8]; static unsigned lines;
++        const u16* b = s_ldd[handle].button;
++        if (memcmp(last + 2, b + 2, 6 * sizeof(u16)) != 0 && lines < 5000) {
++            lines++;
++            memcpy(last, b, sizeof last);
++            fprintf(stderr, "[cellPad] port %d from the game's driver: d1=%02X d2=%02X R=%u,%u L=%u,%u\n",
++                    handle, b[2] & 0xFF, b[3] & 0xFF, b[4], b[5], b[6], b[7]);
++        }
++    }
 +    return CELL_OK;
 +}
 +
@@ -9368,7 +9536,7 @@ index cfb9685b..8627b851 100644
           * (oracle: RPCS3 FragmentProgramDecompiler.cpp's _builtin_sqrt macro,
           * reused by _builtin_divsq) AND forces the result to exactly 0,
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 25791179..f4692ba8 100644
+index 25791179..f282e15c 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
 @@ -22,7 +22,7 @@
@@ -9414,7 +9582,15 @@ index 25791179..f4692ba8 100644
  static unsigned long long g_ld_bind_white = 0, g_ld_bind_real = 0, g_ld_bind_surf = 0;
  /* Set once PS1 VRAM actually holds a drawn frame (see the PS1_PC heartbeat).
   * Every surface dump before this is an early-boot snapshot of a framebuffer the
-@@ -88,9 +94,9 @@ static volatile long g_ld_ps1_vram_ready = 0;
+@@ -80,6 +86,7 @@ static volatile long g_ld_ps1_vram_ready = 0;
+ #include "rsx_restart_cuts.h"
+ #include "rsx_vertex_compact.h"
+ #include "rsx_vp_decompiler.h"
++#include "rsx_framegen.h"
+ 
+ #include <ctype.h>
+ #include <stdio.h>
+@@ -88,9 +95,9 @@ static volatile long g_ld_ps1_vram_ready = 0;
  #if defined(YZ_PERF_CLEAN) || defined(_MSC_VER)
  #define LD_DIAG_ENABLED(name) 0
  #else
@@ -9427,7 +9603,7 @@ index 25791179..f4692ba8 100644
  #endif
  #include <string.h>
  
-@@ -102,7 +108,9 @@ static volatile long g_ld_ps1_vram_ready = 0;
+@@ -102,7 +109,9 @@ static volatile long g_ld_ps1_vram_ready = 0;
  #include <d3d12.h>
  #include <d3d12sdklayers.h>
  #include <dxgi1_4.h>
@@ -9437,7 +9613,7 @@ index 25791179..f4692ba8 100644
  #include "rsx_vertex_formats.h"
  #include <sys/stat.h>
  
-@@ -123,8 +131,8 @@ extern volatile unsigned long long g_yz_auto_start_tick;
+@@ -123,8 +132,8 @@ extern volatile unsigned long long g_yz_auto_start_tick;
   * -----------------------------------------------------------------------*/
  
  #define LD_SWAP_BUFFERS  2
@@ -9448,7 +9624,7 @@ index 25791179..f4692ba8 100644
  #define MAX_RETIRED_TEXTURES 4096
  #define MAX_VTEX         64
  #define MAX_SAMPLERS     128
-@@ -158,11 +166,20 @@ extern volatile unsigned long long g_yz_auto_start_tick;
+@@ -158,11 +167,20 @@ extern volatile unsigned long long g_yz_auto_start_tick;
  /* Per-surface copy a draw samples when it reads its own render target. */
  #define SRV_FEEDBACK_BASE (UAV_ZDEPTH_BASE + MAX_SURFACES)
  /* Top-left windows of a surface for smaller textures that alias it (see surface_window). */
@@ -9472,7 +9648,7 @@ index 25791179..f4692ba8 100644
  
  #define SMP_DEFAULT      0
  #define SMP_CACHE_SLOTS  MAX_SAMPLERS
-@@ -195,6 +212,7 @@ extern volatile unsigned long long g_yz_auto_start_tick;
+@@ -195,6 +213,7 @@ extern volatile unsigned long long g_yz_auto_start_tick;
  #define TEX_FMT_DXT45      0x88
  #define TEX_FMT_G8B8       0x8B
  #define TEX_FMT_DEPTH24_D8 0x90
@@ -9480,7 +9656,7 @@ index 25791179..f4692ba8 100644
  #define TEX_FMT_LINEAR     0x20
  #define TEX_FMT_UNNORM     0x40
  #define TEX_FMT_BASE_MASK  0x9F
-@@ -207,7 +225,8 @@ typedef struct {
+@@ -207,7 +226,8 @@ typedef struct {
      ID3D12Resource* fb_tex;   /* feedback copy, see surface_feedback_srv */
      u32 pitch;                /* guest row pitch of colour target 0 (bytes), 0 = unknown */
      /* Top-left windows of the surface for smaller aliasing textures (see surface_window). */
@@ -9490,7 +9666,7 @@ index 25791179..f4692ba8 100644
      u32 swin_wgen;            /* bumped by every write into the surface; a window older than it is recopied */
  #if !defined(YZ_PERF_CLEAN)
      u32 resource_serial;
-@@ -236,9 +255,13 @@ typedef struct {
+@@ -236,9 +256,13 @@ typedef struct {
      u32 w, h;
      u32 snapshot_w, snapshot_h;
      D3D12_RESOURCE_STATES snapshot_state;
@@ -9504,7 +9680,7 @@ index 25791179..f4692ba8 100644
      u64 draws;
      u64 depth_test_draws;
      u64 depth_write_draws;
-@@ -248,10 +271,13 @@ typedef struct {
+@@ -248,10 +272,13 @@ typedef struct {
  typedef struct {
      u32 location, offset, format, width, height, pitch, remap;
      u32 cubemap;
@@ -9518,7 +9694,7 @@ index 25791179..f4692ba8 100644
  } texcache_t;
  typedef struct {
      u32 location, offset, format, width, height, pitch;
-@@ -289,6 +315,9 @@ typedef struct {
+@@ -289,6 +316,9 @@ typedef struct {
      ID3D12Device*              dev;
      ID3D12CommandQueue*        queue;
      ID3D12CommandAllocator*    alloc;
@@ -9528,7 +9704,7 @@ index 25791179..f4692ba8 100644
      ID3D12GraphicsCommandList* list;
      ID3D12Fence*               fence;
      HANDLE                     fence_event;
-@@ -314,6 +343,7 @@ typedef struct {
+@@ -314,6 +344,7 @@ typedef struct {
      ID3D12DescriptorHeap*      srv_heap;
      u32                        srv_step, srv_ring_used;
      ID3D12Resource*            white_tex;
@@ -9536,7 +9712,7 @@ index 25791179..f4692ba8 100644
      texcache_t                 textures[MAX_TEXTURES];
      u32                        n_textures;
      vtexcache_t                vtex[MAX_VTEX];
-@@ -346,6 +376,8 @@ typedef struct {
+@@ -346,6 +377,8 @@ typedef struct {
      ID3D12RootSignature*       rootsig_x;
      ID3D12RootSignature*       depth_snapshot_rootsig;
      ID3D12PipelineState*       depth_snapshot_pso;
@@ -9545,7 +9721,7 @@ index 25791179..f4692ba8 100644
      ID3D12RootSignature*       downsample_rootsig;
      ID3D12PipelineState*       downsample_pso[4];
      DXGI_FORMAT                downsample_fmt[4];
-@@ -449,6 +481,7 @@ typedef struct {
+@@ -449,6 +482,7 @@ typedef struct {
      u32 cube_mask, vtex_mask, txl_mask;
      u32 input_mask, input_stride;
      u32 packed_offsets;
@@ -9553,7 +9729,7 @@ index 25791179..f4692ba8 100644
  } ld_pso_metadata;
  
  static ld_pso_metadata g_ld_current_pso;
-@@ -720,7 +753,7 @@ static void ld_present_measure_record(u32 guest_frame)
+@@ -720,7 +754,7 @@ static void ld_present_measure_record(u32 guest_frame)
  static void ld_present_measure_dump(void)
  {
      if (g_ld_present_dumped || g_ld_present_total == 0 ||
@@ -9562,7 +9738,7 @@ index 25791179..f4692ba8 100644
          return;
      g_ld_present_dumped = 1;
  
-@@ -1052,6 +1085,17 @@ typedef enum {
+@@ -1052,6 +1086,17 @@ typedef enum {
      LD_FLUSH_REASON_COUNT
  } ld_flush_reason;
  
@@ -9580,7 +9756,7 @@ index 25791179..f4692ba8 100644
  #if defined(YZ_PERF_PROFILE)
  typedef enum {
      LD_REJECT_WORLD = 0,
-@@ -1239,7 +1283,53 @@ static const u8* guest_ptr(u32 location, u32 offset, u32 min_bytes)
+@@ -1239,7 +1284,53 @@ static const u8* guest_ptr(u32 location, u32 offset, u32 min_bytes)
      return g.guest_ptr(g.guest_user, location, offset, min_bytes);
  }
  static u64 fnv1a(const void* data, u32 n, u64 h);
@@ -9634,7 +9810,7 @@ index 25791179..f4692ba8 100644
  static u64 live_legacy_pso_key(void);
  static void ld_vertex_diag_emit(const char* reason, int dump_surface);
  
-@@ -1385,6 +1475,19 @@ static void decode_render_state(render_state_t* rs)
+@@ -1385,6 +1476,19 @@ static void decode_render_state(render_state_t* rs)
      rsx_dsp_surface alpha_surface;
      rsx_dsp_get_surface(&g.rsx, &alpha_surface);
      rs->alpha_ref_format = alpha_surface.color_format;
@@ -9654,7 +9830,7 @@ index 25791179..f4692ba8 100644
      rs->rt_fp16 = alpha_surface.color_format == RSX_SURFACE_FMT_F_W16Z16Y16X16;
      rs->rt_count = ld_rt_count(alpha_surface.color_target);
      rs->blend_enable = rsx_dsp_reg(&g.rsx, M_BLEND_ENABLE) & 1;
-@@ -1537,6 +1640,9 @@ static D3D12_SAMPLER_DESC decode_sampler(const rsx_dsp_texture* t)
+@@ -1537,6 +1641,9 @@ static D3D12_SAMPLER_DESC decode_sampler(const rsx_dsp_texture* t)
      sd.MinLOD = (float)min_lod_fx / 256.0f;
      sd.MaxLOD = mip_present ? (float)max_lod_fx / 256.0f : 0.0f;
      if (sd.MaxLOD < sd.MinLOD) sd.MaxLOD = sd.MinLOD;
@@ -9664,7 +9840,7 @@ index 25791179..f4692ba8 100644
      sd.MaxAnisotropy = 1;
      return sd;
  }
-@@ -1679,17 +1785,55 @@ static u32 sampler_slot(const rsx_dsp_texture* t, u64 key)
+@@ -1679,17 +1786,55 @@ static u32 sampler_slot(const rsx_dsp_texture* t, u64 key)
      g.smp_keys[g.n_samplers++] = key;
      return slot;
  }
@@ -9725,7 +9901,7 @@ index 25791179..f4692ba8 100644
      /* The caller preflights capacity before recording render-state commands,
       * because a command-list flush here would discard that state. */
      if (g.smp_ring_used >= SMP_RING_TABLES) {
-@@ -1718,8 +1862,808 @@ static D3D12_GPU_DESCRIPTOR_HANDLE sampler_table(const u32 slots[SMP_TABLE_SIZE]
+@@ -1718,8 +1863,808 @@ static D3D12_GPU_DESCRIPTOR_HANDLE sampler_table(const u32 slots[SMP_TABLE_SIZE]
  /* ---------------------------------------------------------------------------
   * command list submit/wait (simple synchronous model, like the harness)
   * -----------------------------------------------------------------------*/
@@ -10534,7 +10710,7 @@ index 25791179..f4692ba8 100644
  #if defined(YZ_PERF_PROFILE)
      const LONGLONG flush_begin = ld_profile_qpc();
      g_ld_profile.total.flush_reason[reason]++;
-@@ -1736,7 +2680,7 @@ static void ld_flush(ld_flush_reason reason)
+@@ -1736,7 +2681,7 @@ static void ld_flush(ld_flush_reason reason)
          g.ready = 0;
          return;
      }
@@ -10543,7 +10719,7 @@ index 25791179..f4692ba8 100644
      g.queue->lpVtbl->ExecuteCommandLists(g.queue, 1, lists);
      const u64 v = ++g.fence_value;
      const HRESULT signal_hr =
-@@ -1749,13 +2693,15 @@ static void ld_flush(ld_flush_reason reason)
+@@ -1749,13 +2694,15 @@ static void ld_flush(ld_flush_reason reason)
          g.ready = 0;
          return;
      }
@@ -10561,7 +10737,7 @@ index 25791179..f4692ba8 100644
          if (FAILED(event_hr)) {
              fprintf(stderr,
                      "[d3d-fail] fence SetEventOnCompletion "
-@@ -1765,13 +2711,40 @@ static void ld_flush(ld_flush_reason reason)
+@@ -1765,13 +2712,40 @@ static void ld_flush(ld_flush_reason reason)
              g.ready = 0;
              return;
          }
@@ -10603,7 +10779,7 @@ index 25791179..f4692ba8 100644
      ld_drain_info_queue("flush");
      /* Dynamic guest textures can replace a cached D3D resource while an
       * earlier draw in this command list still references the old one.  The
-@@ -1782,6 +2755,7 @@ static void ld_flush(ld_flush_reason reason)
+@@ -1782,6 +2756,7 @@ static void ld_flush(ld_flush_reason reason)
      g.n_retired_textures = 0;
      g.alloc->lpVtbl->Reset(g.alloc);
      g.list->lpVtbl->Reset(g.list, g.alloc, NULL);
@@ -10611,7 +10787,7 @@ index 25791179..f4692ba8 100644
      g.upload_used = 0;
  #if defined(YZ_PERF_PROFILE)
      const u64 flush_ticks = (u64)(ld_profile_qpc() - flush_begin);
-@@ -1913,6 +2887,73 @@ static void decode_texel(u32 base_fmt, const u8* p, u32 remap, u8 d[4])
+@@ -1913,6 +2888,73 @@ static void decode_texel(u32 base_fmt, const u8* p, u32 remap, u8 d[4])
  
  typedef struct { u32 w, h; const u8* data; u32 row_bytes, rows; } tex_level_t;
  
@@ -10685,7 +10861,7 @@ index 25791179..f4692ba8 100644
  static ID3D12Resource* create_texture_mipped(DXGI_FORMAT fmt, const tex_level_t* lv, u32 n)
  {
      if (n == 0) return NULL;
-@@ -1921,20 +2962,22 @@ static ID3D12Resource* create_texture_mipped(DXGI_FORMAT fmt, const tex_level_t*
+@@ -1921,20 +2963,22 @@ static ID3D12Resource* create_texture_mipped(DXGI_FORMAT fmt, const tex_level_t*
      rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
      rd.Width = lv[0].w; rd.Height = lv[0].h; rd.DepthOrArraySize = 1;
      rd.MipLevels = (u16)n; rd.Format = fmt; rd.SampleDesc.Count = 1;
@@ -10714,7 +10890,7 @@ index 25791179..f4692ba8 100644
          src.PlacedFootprint.Offset = start;
          src.PlacedFootprint.Footprint.Format = fmt;
          src.PlacedFootprint.Footprint.Width = lv[m].w;
-@@ -1944,7 +2987,7 @@ static ID3D12Resource* create_texture_mipped(DXGI_FORMAT fmt, const tex_level_t*
+@@ -1944,7 +2988,7 @@ static ID3D12Resource* create_texture_mipped(DXGI_FORMAT fmt, const tex_level_t*
          dst.pResource = tex; dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
          dst.SubresourceIndex = m;
          g.list->lpVtbl->CopyTextureRegion(g.list, &dst, 0, 0, 0, &src, NULL);
@@ -10723,7 +10899,7 @@ index 25791179..f4692ba8 100644
  #if defined(YZ_PERF_PROFILE)
          g_ld_profile.total.texture_upload_bytes +=
              (u64)pitch * lv[m].rows;
-@@ -1971,8 +3014,8 @@ static ID3D12Resource* create_texture_cube(
+@@ -1971,8 +3015,8 @@ static ID3D12Resource* create_texture_cube(
      rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
      rd.Width = lv[0].w; rd.Height = lv[0].h; rd.DepthOrArraySize = 6;
      rd.MipLevels = (u16)n_mips; rd.Format = fmt; rd.SampleDesc.Count = 1;
@@ -10734,7 +10910,7 @@ index 25791179..f4692ba8 100644
              g.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd,
              D3D12_RESOURCE_STATE_COPY_DEST, NULL,
              &IID_ID3D12Resource, (void**)&tex)))
-@@ -1981,17 +3024,22 @@ static ID3D12Resource* create_texture_cube(
+@@ -1981,17 +3025,22 @@ static ID3D12Resource* create_texture_cube(
          for (u32 mip = 0; mip < n_mips; mip++) {
              const tex_level_t* level = &lv[face * n_mips + mip];
              const u32 pitch = (level->row_bytes + 255) & ~255u;
@@ -10762,7 +10938,7 @@ index 25791179..f4692ba8 100644
              src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
              src.PlacedFootprint.Offset = start;
              src.PlacedFootprint.Footprint.Format = fmt;
-@@ -2004,7 +3052,7 @@ static ID3D12Resource* create_texture_cube(
+@@ -2004,7 +3053,7 @@ static ID3D12Resource* create_texture_cube(
              dst.SubresourceIndex = face * n_mips + mip;
              g.list->lpVtbl->CopyTextureRegion(
                  g.list, &dst, 0, 0, 0, &src, NULL);
@@ -10771,7 +10947,7 @@ index 25791179..f4692ba8 100644
  #if defined(YZ_PERF_PROFILE)
              g_ld_profile.total.texture_upload_bytes +=
                  (u64)pitch * level->rows;
-@@ -2022,12 +3070,101 @@ static ID3D12Resource* create_texture_cube(
+@@ -2022,12 +3071,101 @@ static ID3D12Resource* create_texture_cube(
      return tex;
  }
  
@@ -10873,7 +11049,7 @@ index 25791179..f4692ba8 100644
  static u32 texture_source_span(const rsx_dsp_texture* t)
  {
      const u32 base_fmt = t->format & TEX_FMT_BASE_MASK & ~(u32)TEX_FMT_UNNORM;
-@@ -2048,10 +3185,25 @@ static u32 texture_source_span(const rsx_dsp_texture* t)
+@@ -2048,10 +3186,25 @@ static u32 texture_source_span(const rsx_dsp_texture* t)
      default: return 0;
      }
      if (!t->width || !t->height || t->width > 4096 || t->height > 4096 ||
@@ -10900,7 +11076,7 @@ index 25791179..f4692ba8 100644
      /* A pitch-linear (LN) texture cannot carry a mip chain -- the RSX samples
       * only its base level and ignores the mipmap count in SET_TEXTURE_FORMAT.
       * Honouring that count instead walks `off += pitch * mh` through whatever
-@@ -2077,6 +3229,8 @@ static u32 texture_source_span(const rsx_dsp_texture* t)
+@@ -2077,6 +3230,8 @@ static u32 texture_source_span(const rsx_dsp_texture* t)
      for (u32 m = 0; m < n_mips; m++) {
          if (block_size)
              span += ((mw + 3) / 4) * block_size * ((mh + 3) / 4);
@@ -10909,7 +11085,7 @@ index 25791179..f4692ba8 100644
          else {
              const u32 pitch = (m == 0 && linear && t->pitch)
                  ? t->pitch : mw * texel_size;
-@@ -2086,10 +3240,20 @@ static u32 texture_source_span(const rsx_dsp_texture* t)
+@@ -2086,10 +3241,20 @@ static u32 texture_source_span(const rsx_dsp_texture* t)
          mw = mw > 1 ? mw >> 1 : 1;
          mh = mh > 1 ? mh >> 1 : 1;
      }
@@ -10930,7 +11106,7 @@ index 25791179..f4692ba8 100644
  {
      const u32 span = texture_source_span(t);
      const u8* src = span ? guest_ptr(t->location, t->offset, span) : NULL;
-@@ -2125,20 +3289,397 @@ static u64 texture_content_hash(const rsx_dsp_texture* t, int* readable)
+@@ -2125,20 +3290,397 @@ static u64 texture_content_hash(const rsx_dsp_texture* t, int* readable)
  
      /* One hash per cached texture per presented frame.  Word-at-a-time FNV is
       * deliberately cheap; this is a mutation detector, not a content ID. */
@@ -10996,10 +11172,7 @@ index 25791179..f4692ba8 100644
 +            p[2][c] = (p[0][c] + p[1][c]) * 0.5f;
 +            p[3][c] = 0.0f;
 +        }
-     }
--    for (; i < span; i++) {
--        hash ^= src[i];
--        hash *= 1099511628211ull;
++    }
 +    const u32 idx = (u32)cb[4] | ((u32)cb[5] << 8) | ((u32)cb[6] << 16) | ((u32)cb[7] << 24);
 +    u32 cnt[4] = {0, 0, 0, 0};
 +    for (int i = 0; i < 16; i++) cnt[(idx >> (2 * i)) & 3]++;
@@ -11065,8 +11238,9 @@ index 25791179..f4692ba8 100644
 +        for (int i = 0; i < 16; i++) out[i][3] = (u8)(((b[i >> 1] >> ((i & 1) * 4)) & 15) * 17);
 +        return;
      }
--    *readable = 1;
--    return hash;
+-    for (; i < span; i++) {
+-        hash ^= src[i];
+-        hash *= 1099511628211ull;
 +    u32 a[8];
 +    a[0] = b[0]; a[1] = b[1];
 +    if (a[0] > a[1]) for (u32 k = 1; k < 7; k++) a[k + 1] = ((7 - k) * a[0] + k * a[1]) / 7;
@@ -11097,7 +11271,9 @@ index 25791179..f4692ba8 100644
 +            if (px[i][c] < mn[c]) mn[c] = px[i][c];
 +            if (px[i][c] > mx[c]) mx[c] = px[i][c];
 +        }
-+    }
+     }
+-    *readable = 1;
+-    return hash;
 +    u32 e0 = any ? dxt_565(mx) : 0, e1 = any ? dxt_565(mn) : 0;
 +    if (holes ? e0 > e1 : e0 < e1) { const u32 s = e0; e0 = e1; e1 = s; }
 +    int p[4][3];
@@ -11340,7 +11516,7 @@ index 25791179..f4692ba8 100644
  }
  
  static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
-@@ -2146,8 +3687,19 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+@@ -2146,8 +3688,19 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
      const u32 base_fmt = t->format & TEX_FMT_BASE_MASK & ~(u32)TEX_FMT_UNNORM;
      const int linear = (t->format & TEX_FMT_LINEAR) != 0;
      const u32 w = t->width, h = t->height;
@@ -11361,7 +11537,7 @@ index 25791179..f4692ba8 100644
      u32 n_mips = t->mipmaps ? t->mipmaps : 1;
      if (n_mips > 14) n_mips = 14;
      /* A pitch-linear (LN) texture cannot carry a mip chain -- the RSX samples
-@@ -2172,6 +3724,18 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+@@ -2172,6 +3725,18 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
          const u32 total = texture_source_span(t);
          const u8* src = guest_ptr(t->location, t->offset, total);
          if (!src) return NULL;
@@ -11380,7 +11556,7 @@ index 25791179..f4692ba8 100644
          if (t->cubemap) {
              n_mips = 1;
              for (u32 d = (w < h ? w : h) / 4; d > 1; d >>= 1)
-@@ -2201,9 +3765,19 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+@@ -2201,9 +3766,19 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
              return create_texture_cube(dxgi, cube_levels, n_mips);
          }
          tex_level_t levels[14];
@@ -11401,7 +11577,7 @@ index 25791179..f4692ba8 100644
              levels[n].w = (mw + 3) & ~3u;
              levels[n].h = (mh + 3) & ~3u;
              levels[n].data = src + off;
-@@ -2215,7 +3789,14 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+@@ -2215,7 +3790,14 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
              mw = mw > 1 ? mw >> 1 : 1;
              mh = mh > 1 ? mh >> 1 : 1;
          }
@@ -11417,7 +11593,7 @@ index 25791179..f4692ba8 100644
      }
  
      u32 texel_size;
-@@ -2243,6 +3824,7 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+@@ -2243,6 +3825,7 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
          }
          if (n_mips > available_mips) n_mips = available_mips;
          const u32 face_span = span / 6;
@@ -11425,7 +11601,7 @@ index 25791179..f4692ba8 100644
          u8* rgba[6 * 14] = {0};
          tex_level_t cube_levels[6 * 14];
          u32 level = 0;
-@@ -2252,12 +3834,16 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+@@ -2252,12 +3835,16 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
              for (u32 mip = 0; mip < n_mips; mip++) {
                  const u32 pitch = (mip == 0 && linear && t->pitch)
                      ? t->pitch : mw * texel_size;
@@ -11444,7 +11620,7 @@ index 25791179..f4692ba8 100644
                  const u8* level_src =
                      src + (size_t)face * face_span + off;
                  for (u32 y = 0; y < mh; y++)
-@@ -2266,19 +3852,22 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+@@ -2266,19 +3853,22 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
                              ? level_src + (size_t)y * pitch +
                                  (size_t)x * texel_size
                              : level_src +
@@ -11473,7 +11649,7 @@ index 25791179..f4692ba8 100644
                  if (mw == 1 && mh == 1) break;
                  mw = mw > 1 ? mw >> 1 : 1;
                  mh = mh > 1 ? mh >> 1 : 1;
-@@ -2286,12 +3875,15 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+@@ -2286,12 +3876,15 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
          }
          ID3D12Resource* resource = (!oom && level == 6 * n_mips)
              ? create_texture_cube(
@@ -11490,7 +11666,7 @@ index 25791179..f4692ba8 100644
      u8* rgba[14] = {0};
      tex_level_t levels[14];
      u32 mw = w, mh = h, off = 0, n = 0;
-@@ -2299,9 +3891,13 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+@@ -2299,9 +3892,13 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
      for (u32 m = 0; m < n_mips; m++) {
          const u32 pitch = (m == 0 && linear && t->pitch)
              ? t->pitch : mw * texel_size;
@@ -11506,7 +11682,7 @@ index 25791179..f4692ba8 100644
          const u8* level_src = src + off;
          /* LD_PLANE_DUMP=1: write the first few big single-channel (B8) planes
           * straight out as PGM, exactly as the guest laid them down. Settles
-@@ -2326,9 +3922,12 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+@@ -2326,9 +3923,12 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
              for (u32 x = 0; x < mw; x++) {
                  const u8* pixel = linear
                      ? level_src + (size_t)y * pitch + (size_t)x * texel_size
@@ -11522,7 +11698,7 @@ index 25791179..f4692ba8 100644
              }
          /* LD_TEXRGBA_DUMP=1: the DECODED level-0 RGBA, with a non-black count
           * and the remap that produced it.
-@@ -2375,16 +3974,16 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+@@ -2375,16 +3975,16 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
          levels[n].w = mw;
          levels[n].h = mh;
          levels[n].data = rgba[n];
@@ -11542,7 +11718,7 @@ index 25791179..f4692ba8 100644
      for (u32 m = 0; m < n; m++) free(rgba[m]);
      return resource;
  }
-@@ -2396,7 +3995,9 @@ static ID3D12Resource* decode_guest_texture_profiled(
+@@ -2396,7 +3996,9 @@ static ID3D12Resource* decode_guest_texture_profiled(
      const LONGLONG begin = ld_profile_qpc();
      g_ld_profile.total.texture_decode_calls++;
  #endif
@@ -11552,7 +11728,7 @@ index 25791179..f4692ba8 100644
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.texture_decode_qpc +=
          (u64)(ld_profile_qpc() - begin);
-@@ -2410,7 +4011,7 @@ static void write_texture_srv(u32 index, const texcache_t* entry)
+@@ -2410,7 +4012,7 @@ static void write_texture_srv(u32 index, const texcache_t* entry)
      const int compressed = base_fmt == TEX_FMT_DXT1 ||
                             base_fmt == TEX_FMT_DXT23 ||
                             base_fmt == TEX_FMT_DXT45;
@@ -11561,7 +11737,7 @@ index 25791179..f4692ba8 100644
          static const u32 sel2d3d[4] = { 3, 0, 1, 2 };
          static const u32 out2comp[4] = { 1, 2, 3, 0 };
          u32 mapping[4];
-@@ -2425,6 +4026,31 @@ static void write_texture_srv(u32 index, const texcache_t* entry)
+@@ -2425,6 +4027,31 @@ static void write_texture_srv(u32 index, const texcache_t* entry)
                      : base_fmt == TEX_FMT_DXT1 ? DXGI_FORMAT_BC1_UNORM
                      : base_fmt == TEX_FMT_DXT23 ? DXGI_FORMAT_BC2_UNORM
                                                  : DXGI_FORMAT_BC3_UNORM;
@@ -11593,7 +11769,7 @@ index 25791179..f4692ba8 100644
          desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
          desc.Shader4ComponentMapping =
              !compressed || entry->remap == 0xAAE4
-@@ -2463,6 +4089,40 @@ static void write_texture_srv(u32 index, const texcache_t* entry)
+@@ -2463,6 +4090,40 @@ static void write_texture_srv(u32 index, const texcache_t* entry)
  /* Decode a guest texture descriptor into a cached SRV slot.  Unlike the old
   * descriptor-only cache, re-hash the source once per frame and refresh the
   * D3D resource when the game rewrites the same guest address. */
@@ -11634,7 +11810,7 @@ index 25791179..f4692ba8 100644
  static u32 texture_srv_slot(const rsx_dsp_texture* t)
  {
      const u32 remap = t->remap & 0xFFFF;
-@@ -2470,15 +4130,28 @@ static u32 texture_srv_slot(const rsx_dsp_texture* t)
+@@ -2470,15 +4131,28 @@ static u32 texture_srv_slot(const rsx_dsp_texture* t)
      if (refresh_enabled < 0)
          refresh_enabled = getenv("RSX_NO_TEX_REFRESH") ? 0 : 1;
  
@@ -11666,7 +11842,7 @@ index 25791179..f4692ba8 100644
              int readable = 0;
              const u64 hash = texture_content_hash(t, &readable);
              /* LD_TEX_RACE=1: hash the SAME source twice, back to back. The two
-@@ -2527,9 +4200,15 @@ static u32 texture_srv_slot(const rsx_dsp_texture* t)
+@@ -2527,9 +4201,15 @@ static u32 texture_srv_slot(const rsx_dsp_texture* t)
                } }
              entry->last_hash_frame = g_ld_frames;
              if (readable && hash != entry->content_hash) {
@@ -11683,7 +11859,7 @@ index 25791179..f4692ba8 100644
                      ID3D12Resource* old = entry->tex;
                      entry->tex = replacement;
                      entry->content_hash = hash;
-@@ -2591,6 +4270,7 @@ static u32 texture_srv_slot(const rsx_dsp_texture* t)
+@@ -2591,6 +4271,7 @@ static u32 texture_srv_slot(const rsx_dsp_texture* t)
      replacement.pitch = t->pitch;
      replacement.remap = remap;
      replacement.cubemap = t->cubemap;
@@ -11691,7 +11867,7 @@ index 25791179..f4692ba8 100644
      replacement.last_hash_frame = g_ld_frames;
      replacement.last_use_serial = ++g_ld_texture_use_serial;
      {
-@@ -2598,6 +4278,7 @@ static u32 texture_srv_slot(const rsx_dsp_texture* t)
+@@ -2598,6 +4279,7 @@ static u32 texture_srv_slot(const rsx_dsp_texture* t)
          replacement.content_hash = texture_content_hash(t, &readable);
      }
      replacement.tex = decode_guest_texture_profiled(t, remap);
@@ -11699,7 +11875,7 @@ index 25791179..f4692ba8 100644
      if (replacement.tex) {
          texcache_t* entry = &g.textures[index];
          if (evicted)
-@@ -2612,10 +4293,10 @@ static u32 texture_srv_slot(const rsx_dsp_texture* t)
+@@ -2612,10 +4294,10 @@ static u32 texture_srv_slot(const rsx_dsp_texture* t)
              (g_ld_texture_decode_fail & (g_ld_texture_decode_fail - 1)) == 0)
              fprintf(stderr,
                      "[texture-cache] decode failed n=%llu src=%u:0x%08X "
@@ -11712,7 +11888,7 @@ index 25791179..f4692ba8 100644
      }
      return replacement.tex ? SRV_TEXTURE_BASE + index : SRV_WHITE;
  }
-@@ -2838,6 +4519,21 @@ static u32 vertex_texture_srv_slot(const rsx_dsp_vertex_texture* vt)
+@@ -2838,6 +4520,21 @@ static u32 vertex_texture_srv_slot(const rsx_dsp_vertex_texture* vt)
  /* fp constants are stored as raw bits; the shader reads them as floats. */
  static float ld_c2f(u32 bits) { float f; memcpy(&f, &bits, sizeof f); return f; }
  
@@ -11734,7 +11910,7 @@ index 25791179..f4692ba8 100644
  static u32 surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
                         DXGI_FORMAT want_fmt)
  {
-@@ -2865,11 +4561,18 @@ static u32 surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+@@ -2865,11 +4562,18 @@ static u32 surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
       * aliasing, the fix is one surface plus a copy on redeclare -- not going
       * back to destroying content. */
      u32 slot = MAX_SURFACES;
@@ -11758,7 +11934,7 @@ index 25791179..f4692ba8 100644
      /* Never destroy a usable render target because a malformed live command
       * briefly decoded a guest pointer as clip dimensions.  The known-good
       * orphanage stream never exceeds 1280x1024; D3D12 rejects the observed
-@@ -2910,7 +4613,7 @@ static u32 surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+@@ -2910,7 +4614,7 @@ static u32 surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
      D3D12_CLEAR_VALUE cv = {0}; cv.Format = rd.Format;
      surface_t* s = &g.surfaces[slot];
      ID3D12Resource* replacement = NULL;
@@ -11767,7 +11943,7 @@ index 25791179..f4692ba8 100644
          g.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd,
          D3D12_RESOURCE_STATE_RENDER_TARGET, &cv,
          &IID_ID3D12Resource, (void**)&replacement);
-@@ -2942,15 +4645,51 @@ static u32 surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+@@ -2942,15 +4646,51 @@ static u32 surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
      s->tex = replacement;
      s->location = location; s->offset = offset; s->w = want_w; s->h = want_h;
      s->fmt = want_fmt;
@@ -11821,7 +11997,7 @@ index 25791179..f4692ba8 100644
      return slot;
  }
  
-@@ -2992,12 +4731,25 @@ static u32 ld_tex_texel_bytes(u32 format)
+@@ -2992,12 +4732,25 @@ static u32 ld_tex_texel_bytes(u32 format)
      }
  }
  static u64 g_ld_swin_copies;
@@ -11849,7 +12025,7 @@ index 25791179..f4692ba8 100644
      if (w > s->w || h > s->h) return -1;
      const u32 sb = s->fmt == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8u : 4u;   /* the surface formats live-draw creates */
      const u32 tb = ld_tex_texel_bytes(t->format);
-@@ -3012,11 +4764,32 @@ static int surface_window(u32 si, const rsx_dsp_texture* t, int dbg)
+@@ -3012,11 +4765,32 @@ static int surface_window(u32 si, const rsx_dsp_texture* t, int dbg)
          }
          return -1;
      }
@@ -11883,7 +12059,7 @@ index 25791179..f4692ba8 100644
          k = 0;
          for (u32 j = 1; j < LD_SWIN_PER; j++)
              if (!s->swin[j].tex || (s->swin[k].tex && s->swin[j].used < s->swin[k].used)) k = j;
-@@ -3029,7 +4802,7 @@ static int surface_window(u32 si, const rsx_dsp_texture* t, int dbg)
+@@ -3029,7 +4803,7 @@ static int surface_window(u32 si, const rsx_dsp_texture* t, int dbg)
          D3D12_HEAP_PROPERTIES hp = {0};
          hp.Type = D3D12_HEAP_TYPE_DEFAULT;
          ID3D12Resource* wt = NULL;
@@ -11892,7 +12068,7 @@ index 25791179..f4692ba8 100644
                  D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, NULL, &IID_ID3D12Resource, (void**)&wt))) {
              static u32 n_fail;
              if (n_fail++ < 8)
-@@ -3037,7 +4810,7 @@ static int surface_window(u32 si, const rsx_dsp_texture* t, int dbg)
+@@ -3037,7 +4811,7 @@ static int surface_window(u32 si, const rsx_dsp_texture* t, int dbg)
                          w, h);
              return -1;
          }
@@ -11901,7 +12077,7 @@ index 25791179..f4692ba8 100644
          s->swin[k].wgen = s->swin_wgen - 1u;
          srv_write(SRV_SURF_WIN_BASE + si * LD_SWIN_PER + k, wt);
          static u32 n_log;
-@@ -3045,6 +4818,7 @@ static int surface_window(u32 si, const rsx_dsp_texture* t, int dbg)
+@@ -3045,6 +4819,7 @@ static int surface_window(u32 si, const rsx_dsp_texture* t, int dbg)
              fprintf(stderr, "[swin] %u:0x%X surface %ux%u pitch=%u -> window %ux%u (slot %u.%u)\n",
                      s->location, s->offset, s->w, s->h, s->pitch, w, h, si, k);
      }
@@ -11909,7 +12085,7 @@ index 25791179..f4692ba8 100644
      if (dbg) {
          static u32 n_hit;
          if (n_hit++ < 24)
-@@ -3069,8 +4843,9 @@ static int surface_window(u32 si, const rsx_dsp_texture* t, int dbg)
+@@ -3069,8 +4844,9 @@ static int surface_window(u32 si, const rsx_dsp_texture* t, int dbg)
          D3D12_TEXTURE_COPY_LOCATION dst = {0}, src = {0};
          dst.pResource = s->swin[k].tex; dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
          src.pResource = s->tex;         src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -11920,7 +12096,7 @@ index 25791179..f4692ba8 100644
          b[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
          b[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
          b[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-@@ -3099,13 +4874,15 @@ static u32 surface_feedback_srv(u32 slot)
+@@ -3099,13 +4875,15 @@ static u32 surface_feedback_srv(u32 slot)
          b[k].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
      }
      int fresh = 0;
@@ -11937,7 +12113,7 @@ index 25791179..f4692ba8 100644
                  g.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd,
                  D3D12_RESOURCE_STATE_COPY_DEST, NULL,
                  &IID_ID3D12Resource, (void**)&s->fb_tex))) {
-@@ -3122,7 +4899,17 @@ static u32 surface_feedback_srv(u32 slot)
+@@ -3122,7 +4900,17 @@ static u32 surface_feedback_srv(u32 slot)
      b[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
      b[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
      g.list->lpVtbl->ResourceBarrier(g.list, fresh ? 1 : 2, b);
@@ -11955,7 +12131,7 @@ index 25791179..f4692ba8 100644
      b[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
      b[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
      b[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-@@ -3131,18 +4918,171 @@ static u32 surface_feedback_srv(u32 slot)
+@@ -3131,18 +4919,171 @@ static u32 surface_feedback_srv(u32 slot)
      return SRV_FEEDBACK_BASE + slot;
  }
  
@@ -12133,7 +12309,7 @@ index 25791179..f4692ba8 100644
  }
  
  /* NV3089 scaled-image blit whose SOURCE is a live surface: the pixels exist
-@@ -3299,19 +5239,19 @@ static int ld_downsample(u32 si, u32 sx, u32 sy, u32 k,
+@@ -3299,19 +5240,19 @@ static int ld_downsample(u32 si, u32 sx, u32 sy, u32 k,
      b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
      g.list->lpVtbl->ResourceBarrier(g.list, 1, &b);
      const D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_handle(LD_SWAP_BUFFERS + di);
@@ -12160,7 +12336,7 @@ index 25791179..f4692ba8 100644
      g.list->lpVtbl->DrawInstanced(g.list, 3, 1, 0, 0);
      b.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
      b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-@@ -3437,20 +5377,20 @@ static int ld_scaled_blit(u32 si, float sx, float sy, float sw, float sh,
+@@ -3437,20 +5378,20 @@ static int ld_scaled_blit(u32 si, float sx, float sy, float sw, float sh,
      g.list->lpVtbl->ResourceBarrier(g.list, 1, &b);
  
      D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_handle(LD_SWAP_BUFFERS + di);
@@ -12188,7 +12364,7 @@ index 25791179..f4692ba8 100644
      g.list->lpVtbl->DrawInstanced(g.list, 3, 1, 0, 0);
  
      b.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-@@ -3539,6 +5479,7 @@ int rsx_live_draw_resolve_blit(u32 src_loc, u32 src_abs, u32 src_pitch, u32 ds,
+@@ -3539,6 +5480,7 @@ int rsx_live_draw_resolve_blit(u32 src_loc, u32 src_abs, u32 src_pitch, u32 ds,
      dl.pResource = dst->tex; dl.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
      D3D12_BOX box = { sx, sy, 0, sx + w, sy + h, 1 };
      g.list->lpVtbl->CopyTextureRegion(g.list, &dl, dx, dy, 0, &sl, &box);
@@ -12196,7 +12372,7 @@ index 25791179..f4692ba8 100644
      for (int q = 0; q < 2; q++) {
          b[q].Transition.StateBefore = b[q].Transition.StateAfter;
          b[q].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-@@ -3605,6 +5546,7 @@ static int ld_blit_gpu(u32 src_loc, u32 src_abs, u32 src_pitch,
+@@ -3605,6 +5547,7 @@ static int ld_blit_gpu(u32 src_loc, u32 src_abs, u32 src_pitch,
      d.pResource = dst; d.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
      D3D12_BOX box = { sx, sy, 0, sx + w, sy + h, 1 };
      g.list->lpVtbl->CopyTextureRegion(g.list, &d, dx, dy, 0, &s, &box);
@@ -12204,7 +12380,7 @@ index 25791179..f4692ba8 100644
      for (int k = 0; k < 2; k++) {
          b[k].Transition.StateBefore = b[k].Transition.StateAfter;
          b[k].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-@@ -3623,7 +5565,21 @@ static u32 current_surface(void)
+@@ -3623,7 +5566,21 @@ static u32 current_surface(void)
                                   sf.color_format == RSX_SURFACE_FMT_F_W16Z16Y16X16
                                       ? DXGI_FORMAT_R16G16B16A16_FLOAT
                                       : DXGI_FORMAT_R8G8B8A8_UNORM);
@@ -12227,7 +12403,7 @@ index 25791179..f4692ba8 100644
      return slot;
  }
  
-@@ -3678,7 +5634,7 @@ static void zdepth_grow_snapshot(u32 i, u32 rt_w, u32 rt_h)
+@@ -3678,7 +5635,7 @@ static void zdepth_grow_snapshot(u32 i, u32 rt_w, u32 rt_h)
      rd.SampleDesc.Count = 1;
      rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
      ID3D12Resource* snap = NULL;
@@ -12236,7 +12412,7 @@ index 25791179..f4692ba8 100644
              g.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd,
              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, NULL,
              &IID_ID3D12Resource, (void**)&snap))) {
-@@ -3750,6 +5706,10 @@ static u32 zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
+@@ -3750,6 +5707,10 @@ static u32 zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
              retire_texture(old->snapshot);
              old->snapshot = NULL;
          }
@@ -12247,7 +12423,7 @@ index 25791179..f4692ba8 100644
      }
  
      D3D12_HEAP_PROPERTIES hp = {0};
-@@ -3769,7 +5729,7 @@ static u32 zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
+@@ -3769,7 +5730,7 @@ static u32 zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
      cv.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
      cv.DepthStencil.Depth = 1.0f;
      zdepth_t* z = &g.zdepths[slot];
@@ -12256,7 +12432,7 @@ index 25791179..f4692ba8 100644
              g.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd,
              D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv,
              &IID_ID3D12Resource, (void**)&z->tex);
-@@ -3793,8 +5753,9 @@ static u32 zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
+@@ -3793,8 +5754,9 @@ static u32 zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
      D3D12_DEPTH_STENCIL_VIEW_DESC dsvd = {0};
      dsvd.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
      dsvd.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
@@ -12268,7 +12444,7 @@ index 25791179..f4692ba8 100644
  
      /* D3D12 forbids a partial CopyTextureRegion from a depth/stencil
       * resource.  Keep the replay-proven logical dimensions and resolve the
-@@ -3809,7 +5770,7 @@ static u32 zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
+@@ -3809,7 +5771,7 @@ static u32 zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
      snapshot_rd.Format = DXGI_FORMAT_R32_FLOAT;
      snapshot_rd.SampleDesc.Count = 1;
      snapshot_rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
@@ -12277,7 +12453,7 @@ index 25791179..f4692ba8 100644
              g.dev, &hp, D3D12_HEAP_FLAG_NONE, &snapshot_rd,
              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, NULL,
              &IID_ID3D12Resource, (void**)&z->snapshot);
-@@ -3852,7 +5813,7 @@ static int zdepth_snapshot(u32 slot)
+@@ -3852,7 +5814,7 @@ static int zdepth_snapshot(u32 slot)
      if (!z->snapshot || !g.depth_snapshot_rootsig ||
          !g.depth_snapshot_pso)
          return 0;
@@ -12286,7 +12462,7 @@ index 25791179..f4692ba8 100644
  
      D3D12_GPU_DESCRIPTOR_HANDLE source_table, destination_table;
      if (!depth_snapshot_descriptors(
-@@ -3886,8 +5847,8 @@ static int zdepth_snapshot(u32 slot)
+@@ -3886,8 +5848,8 @@ static int zdepth_snapshot(u32 slot)
      g.list->lpVtbl->ResourceBarrier(g.list, nbar, bars);
  
      ID3D12DescriptorHeap* heaps[] = {g.srv_heap, g.smp_heap};
@@ -12297,7 +12473,7 @@ index 25791179..f4692ba8 100644
      g.list->lpVtbl->SetComputeRootSignature(
          g.list, g.depth_snapshot_rootsig);
      g.list->lpVtbl->SetComputeRootDescriptorTable(
-@@ -3897,6 +5858,7 @@ static int zdepth_snapshot(u32 slot)
+@@ -3897,6 +5859,7 @@ static int zdepth_snapshot(u32 slot)
      g.list->lpVtbl->Dispatch(
          g.list, (z->snapshot_w + 7u) / 8u,
          (z->snapshot_h + 7u) / 8u, 1);
@@ -12305,7 +12481,7 @@ index 25791179..f4692ba8 100644
  
      D3D12_RESOURCE_BARRIER uav_done = {0};
      uav_done.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-@@ -3926,6 +5888,138 @@ static int zdepth_snapshot(u32 slot)
+@@ -3926,6 +5889,138 @@ static int zdepth_snapshot(u32 slot)
      return 1;
  }
  
@@ -12444,7 +12620,7 @@ index 25791179..f4692ba8 100644
  /* ---------------------------------------------------------------------------
   * PSO cache (VP+FP+render-state keyed)
   * -----------------------------------------------------------------------*/
-@@ -3939,11 +6033,7 @@ static u64 fnv1a(const void* data, u32 n, u64 h)
+@@ -3939,11 +6034,7 @@ static u64 fnv1a(const void* data, u32 n, u64 h)
  static int sampler_table_needs_flush(const u32 slots[SMP_TABLE_SIZE])
  {
      if (g.smp_ring_used < SMP_RING_TABLES) return 0;
@@ -12457,7 +12633,7 @@ index 25791179..f4692ba8 100644
  }
  
  static u32 shader_disk_cache_stage_index(u32 stage)
-@@ -3968,6 +6058,7 @@ static void shader_disk_cache_progress(u64 value)
+@@ -3968,6 +6059,7 @@ static void shader_disk_cache_progress(u64 value)
              (unsigned long long)g_ld_shader_disk_rejects);
  }
  
@@ -12465,7 +12641,7 @@ index 25791179..f4692ba8 100644
  static int shader_disk_cache_prepare(void)
  {
      if (g_ld_shader_disk_ready >= 0)
-@@ -4006,6 +6097,11 @@ static int shader_disk_cache_prepare(void)
+@@ -4006,6 +6098,11 @@ static int shader_disk_cache_prepare(void)
      g_ld_shader_disk_ready = 1;
      fprintf(stderr, "[shader-disk-cache] enabled dir='%s' version=%u\n",
              g_ld_shader_disk_dir, SHADER_DISK_CACHE_VERSION);
@@ -12477,7 +12653,7 @@ index 25791179..f4692ba8 100644
      return 1;
  }
  
-@@ -4021,11 +6117,224 @@ static int shader_disk_cache_path(
+@@ -4021,11 +6118,224 @@ static int shader_disk_cache_path(
      return length > 0 && length < MAX_PATH;
  }
  
@@ -12702,7 +12878,7 @@ index 25791179..f4692ba8 100644
      if (!shader_disk_cache_path(path, stage, hash, source_length))
          return NULL;
  
-@@ -4076,6 +6385,62 @@ static ID3DBlob* shader_disk_cache_load(
+@@ -4076,6 +6386,62 @@ static ID3DBlob* shader_disk_cache_load(
      return blob;
  }
  
@@ -12765,7 +12941,7 @@ index 25791179..f4692ba8 100644
  static void shader_disk_cache_store(
      u32 stage, const char* source, u32 source_length, u64 hash,
      ID3DBlob* blob)
-@@ -4104,25 +6469,30 @@ static void shader_disk_cache_store(
+@@ -4104,25 +6470,30 @@ static void shader_disk_cache_store(
      header.blob_length = (u32)blob_length;
      header.source_hash = hash;
  
@@ -12814,7 +12990,7 @@ index 25791179..f4692ba8 100644
  }
  
  static u64 ld_hash_structural_render_state(
-@@ -4403,6 +6773,287 @@ static u32 vp_txl_unit_mask(const u8* ucode, u32 instrs)
+@@ -4403,6 +6774,287 @@ static u32 vp_txl_unit_mask(const u8* ucode, u32 instrs)
      return mask;
  }
  
@@ -13102,7 +13278,7 @@ index 25791179..f4692ba8 100644
  static ID3D12PipelineState* build_pso(
      const char* vs_hlsl, const char* ps_hlsl, const render_state_t* rs,
      const rsx_vertex_layout_plan* masked_layout, int packed_offsets)
-@@ -4416,6 +7067,9 @@ static ID3D12PipelineState* build_pso(
+@@ -4416,6 +7068,9 @@ static ID3D12PipelineState* build_pso(
          vs_hlsl, vs_length, 1469598103934665603ull);
      const u64 ps_hash = fnv1a(
          ps_hlsl, ps_length, 1469598103934665603ull);
@@ -13112,7 +13288,7 @@ index 25791179..f4692ba8 100644
  #if defined(YZ_PERF_PROFILE)
      ld_profile_note_hlsl(
          vs_hlsl, g_ld_profile.vs_hashes, &g_ld_profile.n_vs_hashes,
-@@ -4548,41 +7202,19 @@ static ID3D12PipelineState* build_pso(
+@@ -4548,41 +7203,19 @@ static ID3D12PipelineState* build_pso(
          err = NULL;
      }
      D3D12_INPUT_ELEMENT_DESC il[16];
@@ -13160,7 +13336,7 @@ index 25791179..f4692ba8 100644
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.create_pso_qpc +=
          (u64)(ld_profile_qpc() - create_begin);
-@@ -4641,21 +7273,112 @@ static void ld_pso_bail(int* said, const char* reason)
+@@ -4641,21 +7274,112 @@ static void ld_pso_bail(int* said, const char* reason)
  #define LD_PSO_BAIL(reason) \
      do { static int _said_ = 0; ld_pso_bail(&_said_, (reason)); } while (0)
  
@@ -13276,7 +13452,7 @@ index 25791179..f4692ba8 100644
      if (!fp_size) {
          /* No END-bit instruction in 64 KB: the bytes at (location, offset) are
           * not a fragment program. Almost always the LOCATION is wrong, not the
-@@ -4708,15 +7431,89 @@ static ID3D12PipelineState* get_pso(
+@@ -4708,15 +7432,89 @@ static ID3D12PipelineState* get_pso(
      static int ctrl_auto = -1;
      if (ctrl_auto < 0) ctrl_auto = getenv("RSX_FP_CTRL_AUTO") ? 1 : 0;
      const u32 fp_ctrl = ctrl_auto ? RSX_FP_CTRL_AUTO : rsx_dsp_shader_control(&g.rsx);
@@ -13370,7 +13546,7 @@ index 25791179..f4692ba8 100644
      if (txl_mask && !(txl_mask & vtex_mask)) {
          g_ld_vtex_missing_for_txl++;
          static u32 warned = 0;
-@@ -4744,33 +7541,47 @@ static ID3D12PipelineState* get_pso(
+@@ -4744,33 +7542,47 @@ static ID3D12PipelineState* get_pso(
  
      render_state_t rs;
      decode_render_state(&rs);
@@ -13432,7 +13608,7 @@ index 25791179..f4692ba8 100644
      /* Texel-addressed (RSX_TEX_FMT_UNNORM) units need their coordinates divided
       * by the texture size in the shader -- D3D12 has no unnormalised addressing
       * mode. The divisor is baked into the HLSL, so the sizes are part of the
-@@ -4778,12 +7589,16 @@ static ID3D12PipelineState* get_pso(
+@@ -4778,12 +7590,16 @@ static ID3D12PipelineState* get_pso(
      u32 unnorm_mask = 0;
      u32 unnorm_dim[16][3] = {{0}};
      for (u32 uu = 0; uu < 16; uu++) {
@@ -13452,7 +13628,7 @@ index 25791179..f4692ba8 100644
          /* A depth texture bound to a zeta's snapshot reads that host
           * resource, which is as large as the largest pass that used the zeta
           * (bounded by the zeta), not as large as the texture. Texel
-@@ -4791,7 +7606,9 @@ static ID3D12PipelineState* get_pso(
+@@ -4791,7 +7607,9 @@ static ID3D12PipelineState* get_pso(
           * smaller than the zeta then reads its top-left corner, as it does in
           * VRAM, instead of a stretched copy of the whole depth buffer. */
          if ((ut.format & TEX_FMT_BASE_MASK & ~(u32)TEX_FMT_UNNORM) ==
@@ -13463,7 +13639,7 @@ index 25791179..f4692ba8 100644
              for (u32 zi = 0; zi < g.n_zdepths; zi++) {
                  const zdepth_t* z = &g.zdepths[zi];
                  if (z->location != ut.location || z->offset != ut.offset)
-@@ -4809,6 +7626,66 @@ static ID3D12PipelineState* get_pso(
+@@ -4809,6 +7627,66 @@ static ID3D12PipelineState* get_pso(
              }
          }
      }
@@ -13530,7 +13706,7 @@ index 25791179..f4692ba8 100644
      key = fnv1a(&unnorm_mask, sizeof(unnorm_mask), key);
      if (unnorm_mask) key = fnv1a(unnorm_dim, sizeof(unnorm_dim), key);
      if (masked_layout) {
-@@ -4828,14 +7705,17 @@ static ID3D12PipelineState* get_pso(
+@@ -4828,14 +7706,17 @@ static ID3D12PipelineState* get_pso(
          key = ld_hash_structural_render_state(&rs, key);
      else
          key = fnv1a(&rs, sizeof(rs), key);
@@ -13550,7 +13726,7 @@ index 25791179..f4692ba8 100644
      g_ld_current_pso.vp_start = start;
      g_ld_current_pso.vp_instrs = vp_instrs;
      g_ld_current_pso.fp_location = fp_loc;
-@@ -4843,6 +7723,7 @@ static ID3D12PipelineState* get_pso(
+@@ -4843,6 +7724,7 @@ static ID3D12PipelineState* get_pso(
      g_ld_current_pso.fp_size = fp_size;
      g_ld_current_pso.fp_control = fp_ctrl;
      g_ld_current_pso.cube_mask = cube_mask;
@@ -13558,7 +13734,7 @@ index 25791179..f4692ba8 100644
      g_ld_current_pso.vtex_mask = vtex_mask;
      g_ld_current_pso.txl_mask = txl_mask;
      g_ld_current_pso.input_mask =
-@@ -4856,15 +7737,27 @@ static ID3D12PipelineState* get_pso(
+@@ -4856,15 +7738,27 @@ static ID3D12PipelineState* get_pso(
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.pso_lookups++;
  #endif
@@ -13589,7 +13765,7 @@ index 25791179..f4692ba8 100644
          }
      }
  #if defined(YZ_PERF_PROFILE)
-@@ -4895,19 +7788,27 @@ static ID3D12PipelineState* get_pso(
+@@ -4895,19 +7789,27 @@ static ID3D12PipelineState* get_pso(
      u32 decompiled_constant_count = 0;
      int fi;
      if (ld_fp_constants_buffered()) {
@@ -13620,7 +13796,7 @@ index 25791179..f4692ba8 100644
              { static int n = 0;
                if (PS3_LOG_FIRST(n, 8))
                    fprintf(stderr, "[unnorm] mask=0x%X cube=0x%X dim0=%ux%u"
-@@ -4934,6 +7835,119 @@ static ID3D12PipelineState* get_pso(
+@@ -4934,6 +7836,119 @@ static ID3D12PipelineState* get_pso(
      g_ld_profile.total.decompile_qpc +=
          (u64)(ld_profile_qpc() - decompile_begin);
  #endif
@@ -13740,7 +13916,7 @@ index 25791179..f4692ba8 100644
      /* LD_FORCE_GREEN=1: make every fragment program return solid green.
       *
       * The same trick as LD_CLEAR_TEST, applied one stage later. Clears are
-@@ -4982,18 +7996,24 @@ static ID3D12PipelineState* get_pso(
+@@ -4982,18 +7997,24 @@ static ID3D12PipelineState* get_pso(
        if (hd == (const char*)-1) hd = getenv("LD_HLSL_DUMP");
        if (hd) {
          char fn[MAX_PATH]; FILE* f;
@@ -13768,7 +13944,7 @@ index 25791179..f4692ba8 100644
      return pso;
  }
  
-@@ -5050,6 +8070,23 @@ static int ld_upload_pixel_constants(u32* out_offset)
+@@ -5050,6 +8071,23 @@ static int ld_upload_pixel_constants(u32* out_offset)
      memcpy(
          destination + value_slots * 16u,
          &g.fp_alpha_ref, sizeof(g.fp_alpha_ref));
@@ -13792,7 +13968,7 @@ index 25791179..f4692ba8 100644
      g.ps_cb_used += allocation_bytes;
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.ps_constant_allocations++;
-@@ -5077,6 +8114,9 @@ typedef struct {
+@@ -5077,6 +8115,9 @@ typedef struct {
       * index order, which is what makes the offsets derivable at all (an
       * inline stream carries no per-array offset registers). */
      const u8* inl; u32 inl_bytes, inl_stride; u32 inl_off[16];
@@ -13802,7 +13978,7 @@ index 25791179..f4692ba8 100644
      batch_t arr[256]; u32 n_arr;
      batch_t idx[256]; u32 n_idx;
      u32     n_packets;
-@@ -5108,6 +8148,7 @@ static void dc_reset(void)
+@@ -5108,6 +8149,7 @@ static void dc_reset(void)
      dc.n_cuts = 0;
      dc.fetch_ok = 1;
      dc.inl = NULL; dc.inl_bytes = dc.inl_stride = 0;
@@ -13810,7 +13986,7 @@ index 25791179..f4692ba8 100644
  }
  static void push_vert(const vtx_t* v)
  {
-@@ -5332,9 +8373,430 @@ static void fetch_batches(void)
+@@ -5332,9 +8374,430 @@ static void fetch_batches(void)
          }
  }
  
@@ -14241,7 +14417,7 @@ index 25791179..f4692ba8 100644
      for (u32 batch = 0; batch < dc.n_arr && dc.fetch_ok; batch++)
          for (u32 i = 0; i < dc.arr[batch].count && dc.fetch_ok; i++)
              push_compact_ref(dc.arr[batch].first + i, 0);
-@@ -5365,7 +8827,33 @@ static void fetch_batches_hoisted(
+@@ -5365,7 +8828,33 @@ static void fetch_batches_hoisted(
                  contiguous = guest_ptr(
                      index_array.location, (u32)start64, (u32)bytes64);
              }
@@ -14275,7 +14451,7 @@ index 25791179..f4692ba8 100644
                  const u32 source_offset =
                      index_array.offset + (first + i) * element_size;
                  const u8* source = contiguous
-@@ -5397,6 +8885,8 @@ static void fetch_batches_hoisted(
+@@ -5397,6 +8886,8 @@ static void fetch_batches_hoisted(
  
      if (!dc.fetch_ok)
          return;
@@ -14284,7 +14460,7 @@ index 25791179..f4692ba8 100644
      dc.n_source_refs = dc.n_refs;
      if (packed_payload && dc.n_refs > 1) {
          u32 unique_refs = dc.n_refs;
-@@ -5417,12 +8907,22 @@ static void fetch_batches_hoisted(
+@@ -5417,12 +8908,22 @@ static void fetch_batches_hoisted(
          if (dc.fetch_plan.attr[attr].desc.frequency >= 2)
              g_ld_divider_fetches += dc.n_refs;
      }
@@ -14307,7 +14483,7 @@ index 25791179..f4692ba8 100644
          for (u32 i = 0; i < dc.n_refs; i++) {
              u8* destination = layout->stride
                  ? dc.compact_verts + (u64)i * layout->stride : NULL;
-@@ -5462,6 +8962,32 @@ static void fetch_batches_hoisted(
+@@ -5462,6 +8963,32 @@ static void fetch_batches_hoisted(
      dc.n_verts = dc.n_refs;
  }
  
@@ -14340,7 +14516,7 @@ index 25791179..f4692ba8 100644
  static const float* dc_vertex_attr(
      u32 vertex, u32 attr, float fallback[4])
  {
-@@ -5484,6 +9010,8 @@ static const float* dc_vertex_attr(
+@@ -5484,6 +9011,8 @@ static const float* dc_vertex_attr(
  static const float* dc_vertex_attr_canonical(
      u32 vertex, u32 attr, float fallback[4])
  {
@@ -14349,7 +14525,7 @@ index 25791179..f4692ba8 100644
      if (!ld_vertex_compact_payload())
          return dc.verts[vertex].a[attr];
      const s8 slot = dc.layout.slot_by_attr[attr];
-@@ -6099,7 +9627,7 @@ static int ld_movie_overlay_ensure(void)
+@@ -6099,7 +9628,7 @@ static int ld_movie_overlay_ensure(void)
      bd.Format = DXGI_FORMAT_UNKNOWN;
      bd.SampleDesc.Count = 1;
      bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
@@ -14358,7 +14534,7 @@ index 25791179..f4692ba8 100644
              g.dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
              D3D12_RESOURCE_STATE_COPY_DEST, NULL,
              &IID_ID3D12Resource, (void**)&g.movie_overlay_readback))) {
-@@ -6124,7 +9652,7 @@ static int ld_movie_overlay_ensure(void)
+@@ -6124,7 +9653,7 @@ static int ld_movie_overlay_ensure(void)
       * dedicated upload buffer lets host presentation append to the same
       * command list without a second fence/wait on every movie frame. */
      hp.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -14367,7 +14543,7 @@ index 25791179..f4692ba8 100644
              g.dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
              D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
              &IID_ID3D12Resource, (void**)&g.movie_upload))) {
-@@ -6305,7 +9833,20 @@ static void ld_movie_capture_overlay(void)
+@@ -6305,7 +9834,20 @@ static void ld_movie_capture_overlay(void)
      ld_movie_reset_rings();
  }
  
@@ -14389,7 +14565,7 @@ index 25791179..f4692ba8 100644
  static void sink_draw_arrays(void* u, const rsx_dispatch* r, u32 first, u32 count)
  {
      (void)u; (void)r; g_ld_stats.packets_seen++;
-@@ -6344,6 +9885,39 @@ static void sink_inline_array(void* u, const rsx_dispatch* r,
+@@ -6344,6 +9886,39 @@ static void sink_inline_array(void* u, const rsx_dispatch* r,
      g_ld_stats.packets_queued++;
  }
  
@@ -14429,7 +14605,7 @@ index 25791179..f4692ba8 100644
  static void sink_draw_index(void* u, const rsx_dispatch* r, u32 first, u32 count)
  {
      (void)u; (void)r; g_ld_stats.packets_seen++;
-@@ -6579,6 +10153,34 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6579,6 +10154,34 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
      if (rs.blend_enable)
          fprintf(file, "bf=%X/%X/%X/%X eq=%X/%X ", rs.sf_rgb, rs.df_rgb, rs.sf_a, rs.df_a,
                  rs.eq_rgb, rs.eq_a);
@@ -14464,7 +14640,7 @@ index 25791179..f4692ba8 100644
      fprintf(file, "at=%u/0x%X/0x%X ", rs.alpha_test_enable, rs.alpha_func, rs.alpha_ref_raw);
      fprintf(file, "sc=%08X/%08X ", rsx_dsp_reg(&g.rsx, M_SCISSOR_HORIZONTAL), rsx_dsp_reg(&g.rsx, M_SCISSOR_VERTICAL));
      if (rs.stencil_enable)
-@@ -7063,9 +10665,236 @@ static void write_topology_indices(u32 prim, u32* indices)
+@@ -7063,9 +10666,236 @@ static void write_topology_indices(u32 prim, u32* indices)
      }
  }
  
@@ -14701,7 +14877,7 @@ index 25791179..f4692ba8 100644
      if (g_ld_movie_mode && !ld_movie_composite_ui_enabled()) return;
      if (!dc.n_packets) { g_ld_stats.groups_empty++; return; }
      g_ld_stats.groups_seen++;
-@@ -7094,6 +10923,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7094,6 +10924,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              for (u32 i = 0; i < 16; i++)
                  g.rsx.constants[108 + i / 4][i % 4] =
                      g_ld_a010_camera_bits[i];
@@ -14709,7 +14885,7 @@ index 25791179..f4692ba8 100644
              static u64 repairs = 0;
              repairs++;
              if (repairs <= 16 || (repairs & (repairs - 1)) == 0) {
-@@ -7124,8 +10954,58 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7124,8 +10955,58 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          g_ld_profile.total_used_attribute_max = used_layout.count;
      const LONGLONG fetch_pack_begin = ld_profile_qpc();
  #endif
@@ -14770,7 +14946,7 @@ index 25791179..f4692ba8 100644
      } else if (ld_vertex_hoist_fetch()) {
          rsx_vertex_layout_plan legacy_layout;
          ld_layout_plan_get(0xFFFFu, &legacy_layout);
-@@ -7139,33 +11019,62 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7139,33 +11020,62 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      g_ld_profile.total.vertex_fetch_pack_qpc +=
          (u64)(ld_profile_qpc() - fetch_pack_begin);
  #endif
@@ -14842,7 +15018,7 @@ index 25791179..f4692ba8 100644
      const u64 vb_capacity = VERT_BUFFER_SIZE;
      if (draw_vb_bytes > vb_capacity || draw_ib_bytes > INDEX_BUFFER_SIZE) {
          live_draw_csv_emit(prim, n_tri, "drop_vbring_oversize");
-@@ -7193,13 +11102,16 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7193,13 +11103,16 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          memcpy(
              g.vb_mapped + g.vb_used, vertex_data,
              (size_t)draw_vb_bytes);
@@ -14860,7 +15036,7 @@ index 25791179..f4692ba8 100644
      if (!pso) {
  #if defined(YZ_PERF_PROFILE)
          ld_profile_note_rejected_pso();
-@@ -7258,6 +11170,24 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7258,6 +11171,24 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                rsx_dsp_texture st; rsx_dsp_get_texture(&g.rsx, u, &st);
                if (st.enabled && st.offset == (u32)skip) return;
            } }
@@ -14885,7 +15061,7 @@ index 25791179..f4692ba8 100644
      /* LD_TRACE_PSO=<hex key>: raw vertex attributes + unit-0 texels of the
       * first three draws with that CSV pso_key. */
      { static u64 tk = 1; static int tn;
-@@ -7423,7 +11353,11 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7423,7 +11354,11 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                }
            }
        } }
@@ -14897,7 +15073,7 @@ index 25791179..f4692ba8 100644
          rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
          /* LD_PS1_BUF0=1 -- DIAGNOSTIC, not a fix. Force a 24-bit PS1 VRAM
           * bind at buffer 1 (offset 0x4003C0) to sample buffer 0 (0x400000).
-@@ -7442,6 +11376,43 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7442,6 +11377,43 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          if (!t.enabled) continue;
          texture_mask |= 1u << u;
          smp_slots[u] = sampler_slot(&t, sampler_key(&t));
@@ -14941,7 +15117,7 @@ index 25791179..f4692ba8 100644
          /* Pick WHICH surface at this offset to sample.
           *
           * Matching on (location, offset) alone was fine when only one surface
-@@ -7463,7 +11434,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7463,7 +11435,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
           * depth read: try the zeta first. Before, the colour surface at the
           * same address was taken (zeros). */
          int zeta_pref = 0;
@@ -14951,7 +15127,7 @@ index 25791179..f4692ba8 100644
              for (u32 i = 0; i < g.n_zdepths; i++)
                  if (g.zdepths[i].location == t.location &&
                      g.zdepths[i].offset == t.offset &&
-@@ -7471,18 +11443,36 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7471,18 +11444,36 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                      zeta_pref = 1;
                      break;
                  }
@@ -14969,10 +15145,10 @@ index 25791179..f4692ba8 100644
 -              if (sf_i->location != t.location || sf_i->offset != t.offset ||
 -                  i == target)
 +              if (sf_i->location != t.location || sf_i->offset != t.offset)
-+                  continue;
+                   continue;
 +              any_at_address = 1;
 +              if (i == target)
-                   continue;
++                  continue;
 +              /* Only ever the dummy target of a depth-only pass: nothing to read. */
 +              if (!sf_i->last_draw_generation && !sf_i->last_clear_generation && !sf_i->last_copy_generation)
 +                  continue;
@@ -14992,7 +15168,7 @@ index 25791179..f4692ba8 100644
          /* LD_UVDBG=1: the texture coordinates of the draw that samples the PS1
           * framebuffer. Placed here rather than in fetch_batches because that
           * function is not on this draw's path -- probing it printed nothing at
-@@ -7559,7 +11549,53 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7559,7 +11550,53 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                    }
                }
            } }
@@ -15047,7 +15223,7 @@ index 25791179..f4692ba8 100644
              static u32 n_dbg = 0;
              if (PS3_LOG_FIRST(n_dbg, 24)) {
                  fprintf(stderr, "[alias-miss] tex %u:0x%08X fmt=0x%02X %ux%u target=%u surf:",
-@@ -7572,8 +11608,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7572,8 +11609,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          }
          if (sampled < 0 && !zeta_pref && g.surfaces[target].location == t.location &&
              g.surfaces[target].offset == t.offset) {
@@ -15060,7 +15236,7 @@ index 25791179..f4692ba8 100644
              g_ld_bind_surf++;
          } else if (sampled >= 0) {
              /* LD_ALIAS_DBG also reports the HIT. A texture that aliases a render
-@@ -7595,6 +11633,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7595,6 +11634,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                              g.surfaces[sampled].offset,
                              g.surfaces[sampled].w, g.surfaces[sampled].h);
              }
@@ -15071,7 +15247,7 @@ index 25791179..f4692ba8 100644
              {   /* a smaller texture reads the surface's top-left samples, texel for sample */
                  const int sw = surface_window((u32)sampled, &t, alias_dbg);
                  if (sw >= 0) { slots[u] = (u32)sw; g_ld_bind_surf++; continue; }
-@@ -7611,7 +11653,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7611,7 +11654,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              /* Mirror the replay-proven depth-RT contract: address and format
               * must match, and the pass must have executed a depth-writing draw.
               * Clear-only zetas intentionally fall through to guest VRAM. */
@@ -15080,7 +15256,7 @@ index 25791179..f4692ba8 100644
                  for (u32 i = 0; i < g.n_zdepths; i++)
                      if (g.zdepths[i].location == t.location &&
                          g.zdepths[i].offset == t.offset &&
-@@ -7650,12 +11692,26 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7650,12 +11693,26 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                  if (!seen && n_zdepth_used < SRV_TABLE_SIZE)
                      zdepth_used[n_zdepth_used++] = (u32)sampled_depth;
              } else {
@@ -15109,7 +15285,7 @@ index 25791179..f4692ba8 100644
      const u32 vtex_mask = vertex_texture_mask();
      u32 vtex_slots[SRV_TABLE_SIZE];
      for (u32 u = 0; u < SRV_TABLE_SIZE; u++)
-@@ -7724,23 +11780,27 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7724,23 +11781,27 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          rtvs[0] = rtv;
          for (u32 r = 1; r < n_mrt; r++)
              rtvs[r] = rtv_handle(LD_SWAP_BUFFERS + mrt[r]);
@@ -15142,7 +15318,7 @@ index 25791179..f4692ba8 100644
  
      const float W = sf.clip_w ? (float)sf.clip_w : (float)g.width;
      const float H = sf.clip_h ? (float)sf.clip_h : (float)g.height;
-@@ -7757,14 +11817,36 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7757,14 +11818,36 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          xf[5] = -((vp.translate[1] - Hv * 0.5f) / (Hv * 0.5f));
          xf[6] = vp.translate[2];
      }
@@ -15186,7 +15362,7 @@ index 25791179..f4692ba8 100644
      if (ld_fp_constants_buffered())
          g.list->lpVtbl->SetGraphicsRootConstantBufferView(
              g.list, 4,
-@@ -7775,7 +11857,6 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7775,7 +11858,6 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      if (vtex_mask)
          g.list->lpVtbl->SetGraphicsRootDescriptorTable(
              g.list, 3, vtex_table);
@@ -15194,7 +15370,7 @@ index 25791179..f4692ba8 100644
  
      D3D12_VIEWPORT dvp = {0, 0, W, H, 0.0f, 1.0f};
      D3D12_RECT sc = {
-@@ -7808,19 +11889,68 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7808,19 +11890,68 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              if (sc.bottom < sc.top)      sc.bottom = sc.top;
          }
      }
@@ -15268,7 +15444,7 @@ index 25791179..f4692ba8 100644
      {
          const u64 serial = ++g_ld_recent_draw_total;
          ld_recent_draw* draw =
-@@ -7850,14 +11980,16 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7850,14 +11981,16 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          draw->clip_h = sf.clip_h;
          draw->srv_ring_used = g.srv_ring_used;
          draw->sampler_ring_used = g.smp_ring_used;
@@ -15289,7 +15465,7 @@ index 25791179..f4692ba8 100644
          ibv.Format = DXGI_FORMAT_R32_UINT;
          g.list->lpVtbl->IASetIndexBuffer(g.list, &ibv);
          g.list->lpVtbl->DrawIndexedInstanced(
-@@ -7865,13 +11997,23 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7865,13 +11998,23 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      } else {
          g.list->lpVtbl->DrawInstanced(g.list, n_tri, 1, 0, 0);
      }
@@ -15316,7 +15492,7 @@ index 25791179..f4692ba8 100644
          z->draws++;
          if (depth_state.depth_test) z->depth_test_draws++;
          if (depth_state.depth_write) z->depth_write_draws++;
-@@ -7947,7 +12089,11 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -7947,7 +12090,11 @@ static void sink_end(void* user, const rsx_dispatch* r)
  #if defined(YZ_PERF_PROFILE)
      const LONGLONG begin = ld_profile_qpc();
  #endif
@@ -15328,7 +15504,7 @@ index 25791179..f4692ba8 100644
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.sink_end_qpc += (u64)(ld_profile_qpc() - begin);
  #endif
-@@ -7956,6 +12102,16 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -7956,6 +12103,16 @@ static void sink_end(void* user, const rsx_dispatch* r)
  static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
  {
      (void)user; (void)r;
@@ -15345,7 +15521,7 @@ index 25791179..f4692ba8 100644
      if (g_ld_movie_mode && !ld_movie_composite_ui_enabled()) return;
      g_ld_stats.clears++;
      const u32 target = current_surface();
-@@ -8220,11 +12376,138 @@ static int make_depth_snapshot_pipeline(void)
+@@ -8220,11 +12377,138 @@ static int make_depth_snapshot_pipeline(void)
      return SUCCEEDED(hr) ? 0 : -1;
  }
  
@@ -15484,7 +15660,7 @@ index 25791179..f4692ba8 100644
      ld_present_measure_init();
  #if defined(YZ_PERF_PROFILE)
      memset(&g_ld_profile, 0, sizeof(g_ld_profile));
-@@ -8339,7 +12622,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8339,7 +12623,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      ld_enable_dred();
      IDXGIFactory4* factory = NULL;
      if (FAILED(CreateDXGIFactory1(&IID_IDXGIFactory4, (void**)&factory))) return -1;
@@ -15493,7 +15669,7 @@ index 25791179..f4692ba8 100644
          factory->lpVtbl->Release(factory); return -1;
      }
  #if defined(YZ_PERF_PROFILE)
-@@ -8356,10 +12639,13 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8356,10 +12640,13 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      g.dev->lpVtbl->CreateCommandQueue(g.dev, &qd, &IID_ID3D12CommandQueue, (void**)&g.queue);
      g.dev->lpVtbl->CreateCommandAllocator(g.dev, D3D12_COMMAND_LIST_TYPE_DIRECT,
                                            &IID_ID3D12CommandAllocator, (void**)&g.alloc);
@@ -15507,7 +15683,7 @@ index 25791179..f4692ba8 100644
      g.dev->lpVtbl->CreateFence(g.dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void**)&g.fence);
      g.fence_event = CreateEventA(NULL, FALSE, FALSE, NULL);
  
-@@ -8373,6 +12659,9 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8373,6 +12660,9 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
              (HWND)hwnd, &scd, NULL, NULL, &sc1))) {
          factory->lpVtbl->Release(factory); return -1;
      }
@@ -15517,7 +15693,7 @@ index 25791179..f4692ba8 100644
      sc1->lpVtbl->QueryInterface(sc1, &IID_IDXGISwapChain3, (void**)&g.swap);
      sc1->lpVtbl->Release(sc1);
      factory->lpVtbl->Release(factory);
-@@ -8385,7 +12674,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8385,7 +12675,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      g.rtv_step = g.dev->lpVtbl->GetDescriptorHandleIncrementSize(g.dev, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
      for (u32 i = 0; i < LD_SWAP_BUFFERS; i++) {
          g.swap->lpVtbl->GetBuffer(g.swap, i, &IID_ID3D12Resource, (void**)&g.backbuf[i]);
@@ -15526,7 +15702,7 @@ index 25791179..f4692ba8 100644
      }
  
      /* upload arena */
-@@ -8395,28 +12684,28 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8395,28 +12685,28 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
      bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
      bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
@@ -15560,7 +15736,7 @@ index 25791179..f4692ba8 100644
          g.dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
          D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
          &IID_ID3D12Resource, (void**)&g.ps_cb);
-@@ -8475,23 +12764,29 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8475,23 +12765,29 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
          drd.MipLevels = 1; drd.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT; drd.SampleDesc.Count = 1;
          drd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
          D3D12_CLEAR_VALUE dcv = {0}; dcv.Format = drd.Format; dcv.DepthStencil.Depth = 1.0f;
@@ -15593,7 +15769,7 @@ index 25791179..f4692ba8 100644
  
      /* dispatcher + sink */
      rsx_dispatch_sink sink = {0};
-@@ -8501,6 +12796,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8501,6 +12797,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      sink.end = sink_end;
      sink.draw_arrays = sink_draw_arrays;
      sink.inline_array = sink_inline_array;
@@ -15601,7 +15777,7 @@ index 25791179..f4692ba8 100644
      sink.draw_index_array = sink_draw_index;
      sink.flip = sink_flip;
      rsx_dispatch_init(&g.rsx, &sink);
-@@ -8615,6 +12911,32 @@ void rsx_live_draw_method(u32 method, u32 arg)
+@@ -8615,6 +12912,32 @@ void rsx_live_draw_method(u32 method, u32 arg)
      rsx_dispatch_method(&g.rsx, method, arg);
  }
  
@@ -15634,7 +15810,7 @@ index 25791179..f4692ba8 100644
  void rsx_live_draw_set_movie_mode(int on)
  {
      static unsigned long long suppressed_at_start = 0;
-@@ -8929,12 +13251,122 @@ static void ld_dump_texel_rgb(const u8* p, int fp16, u8* out)
+@@ -8929,12 +13252,122 @@ static void ld_dump_texel_rgb(const u8* p, int fp16, u8* out)
   * through here while recording). */
  static FILE* g_ld_record_to;
  
@@ -15759,7 +15935,7 @@ index 25791179..f4692ba8 100644
      if (!width || !height) return UINT64_MAX;
      const int fp16 = surface->fmt == DXGI_FORMAT_R16G16B16A16_FLOAT;
      const u32 texel = fp16 ? 8u : 4u;
-@@ -8948,7 +13380,7 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
+@@ -8948,7 +13381,7 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
      bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
      bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
      ID3D12Resource* rb = NULL;
@@ -15768,7 +15944,7 @@ index 25791179..f4692ba8 100644
              D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&rb)))
          return UINT64_MAX;
  
-@@ -8968,7 +13400,9 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
+@@ -8968,7 +13401,9 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
      dst.PlacedFootprint.Footprint.Height = height;
      dst.PlacedFootprint.Footprint.Depth = 1;
      dst.PlacedFootprint.Footprint.RowPitch = pitch;
@@ -15779,7 +15955,7 @@ index 25791179..f4692ba8 100644
  
      b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
      b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-@@ -9202,6 +13636,7 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
+@@ -9202,6 +13637,7 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
  void rsx_live_draw_present(u32 buffer_id)
  {
      if (!g.ready) return;
@@ -15787,7 +15963,7 @@ index 25791179..f4692ba8 100644
  
      /* LD_SURF_DUMP=<dir>: dump EVERY live surface once, with its non-black
       * count, at LD_SURF_DUMP_FRAME (default 1200).
-@@ -9262,20 +13697,38 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9262,20 +13698,38 @@ void rsx_live_draw_present(u32 buffer_id)
       * late scene, e.g. frames for a GIF, without thousands of early files). */
      static long dump_from = -1;
      if (dump_from < 0) { const char* e = getenv("LD_FRAME_DUMP_FROM"); dump_from = e ? atol(e) : 0; }
@@ -15831,7 +16007,7 @@ index 25791179..f4692ba8 100644
          }
      }
      if (target == LD_INVALID_SURFACE && buffer_id < 8 &&
-@@ -9296,10 +13749,25 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9296,10 +13750,25 @@ void rsx_live_draw_present(u32 buffer_id)
          return;
      }
      g_ld_last_present_target = target;
@@ -15857,7 +16033,56 @@ index 25791179..f4692ba8 100644
          fprintf(stderr, "[frame-dump] %s %ux%u nonblack=%llu\n", path,
                  g.surfaces[target].w, g.surfaces[target].h,
                  (unsigned long long)(nb == UINT64_MAX ? 0 : nb));
-@@ -9416,7 +13884,23 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9399,10 +13868,48 @@ void rsx_live_draw_present(u32 buffer_id)
+           ld_trace_target("present", target, buffer_id);
+           last_present_target = target;
+       } }
++    /* Frame generation (LD_FRAMEGEN=1, rsx_framegen.c): the game frames watch mode or 30 fps left
++     * undrawn since the last present are made from that frame and this one, and shown first. Not
++     * across a gap of more than 150 ms (loading, a pause), where the two frames are not neighbours. */
++    int fg_real = 0;   /* the drawn frame was copied and submitted by rsx_fg_present_copy */
++    if (rsx_fg_enabled() && presented_surface->tex) {
++        static u64 fg_last_game; static LONGLONG fg_last_t;
++        LARGE_INTEGER fq; QueryPerformanceFrequency(&fq);
++        const u64 gf = g_ld_game_frames;
++        const LONGLONG now = lps_now();
++        const u64 undrawn = fg_last_game && gf > fg_last_game ? gf - fg_last_game - 1u : 0u;
++        const int gen = undrawn >= 1u && undrawn <= 3u && fg_last_t &&
++                        (now - fg_last_t) * 1000 < 150 * fq.QuadPart ? (int)undrawn : 0;
++        fg_last_game = gf; fg_last_t = now;
++        const int made = rsx_fg_begin(g.dev, g.list, presented_surface->tex, presented_surface->fmt,
++                                      presented_surface->w, presented_surface->h, g.width, g.height, gen);
++        for (int k = 1; k <= made && g.ready; k++) {
++            const u32 fb = g.swap->lpVtbl->GetCurrentBackBufferIndex(g.swap);
++            rsx_fg_draw(g.list, k, made, g.backbuf[fb], rtv_handle(fb));
++            ld_flush(LD_FLUSH_PRESENT);
++            rsx_fg_after_submit(g.queue);
++            const HRESULT fg_hr = g.swap->lpVtbl->Present(g.swap, lps_sync_interval(), 0);
++            if (FAILED(fg_hr)) {
++                fprintf(stderr, "[d3d-fail] Present (made frame) hr=0x%08lX frame=%u\n",
++                        (unsigned long)fg_hr, g_ld_frames);
++                ld_dump_dred("Present", fg_hr);
++                g.ready = 0;
++            }
++        }
++        /* The drawn frame goes to the window on a list of its own: a second submission of the renderer's
++         * list here would wait for the GPU to finish the whole frame (it has two allocators). */
++        if (made > 0 && g.ready)
++            fg_real = rsx_fg_present_copy(g.queue, presented_surface->tex,
++                                          g.backbuf[g.swap->lpVtbl->GetCurrentBackBufferIndex(g.swap)],
++                                          presented_surface->w, presented_surface->h, g.width, g.height);
++        ld_list_state_reset();   /* its heaps, root signatures and pipelines are not the renderer's */
++        if (!g.ready) return;
++    }
+     ID3D12Resource* srcimg = presented_surface->tex;
+     const u32 bbi = g.swap->lpVtbl->GetCurrentBackBufferIndex(g.swap);
+     ID3D12Resource* bb = g.backbuf[bbi];
+ 
++    if (!fg_real) {
+     D3D12_RESOURCE_BARRIER bar[2] = {0};
+     bar[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+     bar[0].Transition.pResource = srcimg;
+@@ -9416,17 +13923,38 @@ void rsx_live_draw_present(u32 buffer_id)
      bar[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
      g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
  
@@ -15882,12 +16107,14 @@ index 25791179..f4692ba8 100644
  
      bar[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
      bar[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-@@ -9424,9 +13908,13 @@ void rsx_live_draw_present(u32 buffer_id)
+     bar[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
      bar[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
      g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
++    }
  
+-    ld_flush(LD_FLUSH_PRESENT);
 +    const LONGLONG lps_t1 = lps_now();
-     ld_flush(LD_FLUSH_PRESENT);
++    if (!fg_real) ld_flush(LD_FLUSH_PRESENT);
 +    const LONGLONG lps_t2 = lps_now();
      {
 -        const HRESULT present_hr = g.swap->lpVtbl->Present(g.swap, 1, 0);
@@ -15897,7 +16124,7 @@ index 25791179..f4692ba8 100644
          if (SUCCEEDED(present_hr))
              ld_present_measure_record(g_ld_frames + 1u);
          else {
-@@ -10153,6 +14641,30 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -10153,6 +14681,30 @@ void rsx_live_draw_present(u32 buffer_id)
                    } }
                  (void)hi; (void)rbase;
              } }
@@ -15928,7 +16155,7 @@ index 25791179..f4692ba8 100644
            fprintf(stderr, "[fps] %.1f (frames %u..%u over %.1fs)\n",
                    (g_ld_frames - fps_f0) * 1000.0 / (double)(now - fps_t0),
                    fps_f0, g_ld_frames, (now - fps_t0) / 1000.0);
-@@ -10275,9 +14787,11 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -10275,9 +14827,11 @@ void rsx_live_draw_present(u32 buffer_id)
      }
  #endif
  
@@ -15943,7 +16170,7 @@ index 25791179..f4692ba8 100644
  #if !defined(YZ_PERF_CLEAN)
      g_ld_frame_vertex_constant_ring_recycles = 0;
  #endif
-@@ -10498,7 +15012,10 @@ void rsx_live_draw_shutdown(void)
+@@ -10498,7 +15052,10 @@ void rsx_live_draw_shutdown(void)
                  (unsigned long long)g_ld_shader_disk_writes[1],
                  (unsigned long long)g_ld_shader_disk_rejects);
      }
@@ -15955,7 +16182,7 @@ index 25791179..f4692ba8 100644
      shader_blob_cache_release(&g.vs_blobs);
      shader_blob_cache_release(&g.ps_blobs);
      for (u32 i = 0; i < g.n_textures; i++) if (g.textures[i].tex) g.textures[i].tex->lpVtbl->Release(g.textures[i].tex);
-@@ -10516,10 +15033,16 @@ void rsx_live_draw_shutdown(void)
+@@ -10516,10 +15073,16 @@ void rsx_live_draw_shutdown(void)
      if (g.movie_overlay_rgba) free(g.movie_overlay_rgba);
      if (g.movie_overlay_mask) free(g.movie_overlay_mask);
      if (g.white_tex) g.white_tex->lpVtbl->Release(g.white_tex);
@@ -15972,7 +16199,7 @@ index 25791179..f4692ba8 100644
      for (u32 i = 0; i < 4; i++)
          if (g.downsample_pso[i]) g.downsample_pso[i]->lpVtbl->Release(g.downsample_pso[i]);
      if (g.downsample_rootsig)
-@@ -10552,3 +15075,38 @@ void rsx_live_draw_shutdown(void)
+@@ -10552,3 +15115,38 @@ void rsx_live_draw_shutdown(void)
  }
  
  #endif /* _WIN32 */
@@ -16750,9 +16977,10 @@ diff --git a/runtime/ppu/ppu_hle.cpp b/runtime/ppu/ppu_hle.cpp
       * an HLE returning a value outside guest RAM (>= 0x10000000) that is not a
       * CELL_ERROR code (0x8001xxxx / 0x8002xxxx) is leaking a truncated HOST
 diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
+index 9309f2d3..e8692957 100644
 --- a/runtime/ppu/ppu_loader.cpp
 +++ b/runtime/ppu/ppu_loader.cpp
-@@ -862,6 +862,8 @@
+@@ -862,6 +862,8 @@ extern "C" int  spu_coh_is_reserved(uint32_t addr);
  extern "C" void spu_lockline_lock(void);
  extern "C" void spu_lockline_unlock(void);
  extern "C" void spu_coh_notify_write(uint32_t addr);
@@ -16761,7 +16989,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
  
  /* ---------------------------------------------------------------------------
   * lwarx/stwcx. cross-thread reservation invalidation.
-@@ -1070,11 +1072,12 @@
+@@ -1070,11 +1072,12 @@ extern "C" int ppu_stwcx32(uint64_t ea, uint32_t expected, uint32_t val)
      int ok = __atomic_compare_exchange_n((uint32_t*)(vm_base + ea), &exp_raw, new_raw,
                                           0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
      if (coh) {
@@ -16775,7 +17003,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
      /* PPU_CASWATCH=<hex ea>: log successful stwcx. on that 128-byte line.
       * PPU_WWATCH hooks plain stores only; an atomic counter (a semaphore an SPU
       * spins on) is written exclusively through here and looked untouched. */
-@@ -1143,11 +1146,12 @@
+@@ -1143,11 +1146,12 @@ extern "C" int ppu_stdcx64(uint64_t ea, uint64_t expected, uint64_t val)
      }
      int ok = __atomic_compare_exchange_n((uint64_t*)(vm_base + ea), &exp_raw, new_raw, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
      if (coh) {
@@ -16789,7 +17017,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
      if (ok && g_ww_lo && (uint32_t)ea + 4u >= g_ww_lo && (uint32_t)ea < g_ww_hi) {
          /* Report as two words: the watch window is word-granular, and a
           * doubleword CAS on a counter pair is exactly the case worth seeing. */
-@@ -1574,8 +1578,9 @@
+@@ -1574,8 +1578,9 @@ extern "C" int* ps3_ppu_vcall_sp_slot(void) { return &g_vcall_sp; }
          if (spu_coh_line_reserved((uint32_t)(a))) {                           \
              spu_lockline_lock();                                              \
              memcpy(vm_base + (uint32_t)(a), (src), (n));                      \
@@ -16800,7 +17028,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
          } else {                                                              \
              memcpy(vm_base + (uint32_t)(a), (src), (n));                      \
          }                                                                     \
-@@ -2139,6 +2144,7 @@
+@@ -2139,6 +2144,7 @@ typedef void (*ppu_fn)(ppu_context*);
  static uint32_t g_addr[PPU_HASH_SIZE];
  static ppu_fn   g_fn[PPU_HASH_SIZE];
  static uint32_t g_fn_count = 0;
@@ -16808,7 +17036,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
  
  extern "C" void ppu_register_function(uint64_t addr, ppu_fn fn)
  {
-@@ -2147,8 +2153,10 @@
+@@ -2147,8 +2153,10 @@ extern "C" void ppu_register_function(uint64_t addr, ppu_fn fn)
      /* Bounded probe: never loop past the whole table. A full table (function
       * count >= PPU_HASH_SIZE) would otherwise spin forever here at startup. */
      for (uint32_t probes = 0; probes < PPU_HASH_SIZE; probes++) {
@@ -16821,7 +17049,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
          i = (i + 1) & PPU_HASH_MASK;
      }
      static int warned = 0;
-@@ -2164,7 +2172,24 @@
+@@ -2164,7 +2172,24 @@ extern "C" void ppu_register_function(uint64_t addr, ppu_fn fn)
   * Built lazily on first use (registration is boot-time-only). */
  static struct { void* host; uint32_t guest; } g_inv[PPU_HASH_SIZE];
  static uint32_t g_inv_n = 0;
@@ -16846,12 +17074,10 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
  {
      if (!g_inv_n) {
          for (uint32_t i = 0; i < PPU_HASH_SIZE; i++)
-@@ -2183,6 +2208,25 @@
-     while (lo < hi) { uint32_t mid = (lo + hi) / 2;
-         if (g_inv[mid].host <= ra) lo = mid + 1; else hi = mid; }
+@@ -2185,6 +2210,25 @@ extern "C" uint32_t ppu_prof_resolve_host(void* ra)
      return lo ? g_inv[lo - 1].guest : 0;
-+}
-+
+ }
+ 
 +static ppu_fn ppu_lookup(uint32_t a);
 +
 +/* ppu_lookup for indirect calls. The table and its addresses are 3 MB, so the
@@ -16869,10 +17095,12 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
 +    ppu_fn fn = ppu_lookup(a);
 +    if (fn) { s.addr = a; s.gen = gen; s.fn = fn; }
 +    return fn;
- }
- 
++}
++
  static ppu_fn ppu_lookup(uint32_t a)
-@@ -2844,7 +2888,7 @@
+ {
+     uint32_t i = (a * 2654435761u) & PPU_HASH_MASK;
+@@ -2844,7 +2888,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
          }
      }
  
@@ -16881,7 +17109,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
      if (!fn) {
          /* OPD-swap clobber fixup: a malformed memcpy (game func_0036FA74) writes
           * some handler/vtable OPDs as {TOC, func} (code & toc SWAPPED), so lifted
-@@ -3195,6 +3239,14 @@
+@@ -3195,6 +3239,14 @@ extern "C" uint32_t g_sc_inflight[PS3_SC_INFLIGHT_MAX] = { 0 };
  
  extern "C" void lv2_syscall(ppu_context* ctx)
  {
@@ -16896,6 +17124,23 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
      /* One-shot: PPU_GUARD_EA=<hex> arms the page guard on that address without
       * waiting for a store watch to fire. Armed here because lv2_syscall runs
       * early and unconditionally; used to measure how far a guest block clear
+@@ -3310,6 +3362,16 @@ extern "C" void lv2_syscall(ppu_context* ctx)
+         uint32_t len  = (uint32_t)ctx->gpr[5];
+         uint32_t pwl  = (uint32_t)ctx->gpr[6];
+         uint32_t wlen = len;
++        /* A NULL string: GT5's abort path writes a C-library global that is never set here, with strlen's
++         * garbage for a length. Copying 16 KB from guest address 0 put a block of NUL bytes into play.out in
++         * front of every "abort() is called from" backtrace, which looked like a lost error message. */
++        if (buf == 0) {
++            static int nn = 0;
++            if (nn < 20) { fprintf(stderr, "[tty] write of a NULL string (len=%u) skipped\n", len); nn++; }
++            if (pwl) vm_write32(pwl, 0);
++            ctx->gpr[3] = 0;
++            return;
++        }
+         if (wlen > 0x4000u) {   /* guard against garbage len (divergence dumps memory) */
+             static int n = 0;
+             if (n < 20) { fprintf(stderr, "[tty] suspicious len=%u (buf=0x%08X) clamped\n", len, buf); n++; }
 diff --git a/runtime/ppu/ppu_memory.h b/runtime/ppu/ppu_memory.h
 index 97a9d17f..007a7fbf 100644
 --- a/runtime/ppu/ppu_memory.h
@@ -25033,3 +25278,988 @@ index 5aa7e27f..c5c49bff 100644
  } CellVideoOutDeviceInfo;
  
  /* ---------------------------------------------------------------------------
+diff --git a/libs/system/cellSaveData.c b/libs/system/cellSaveData.c
+index 1fb1b120..eb8dedb4 100644
+--- a/libs/system/cellSaveData.c
++++ b/libs/system/cellSaveData.c
+@@ -13,6 +13,7 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdlib.h>
++#include <ctype.h>
+ #include <sys/stat.h>
+ #include <errno.h>
+ #include <time.h>
+@@ -303,7 +304,7 @@ static void marshal_statget_init(uint32_t addr, int is_new, const char* dirName,
+  * CELL_SAVEDATA_CBRESULT_ERR_FAILURE if no dispatcher is installed. */
+ static s32 dispatch_func_stat_full(uint32_t func_opd, int is_new, const char* dirName,
+                                    uint32_t* userdata_ea, const CellSaveDataStatGet* input,
+-                                   CellSaveDataStatSet* output)
++                                   CellSaveDataStatSet* output, u32 list_ea, u32 list_cap)
+ {
+     if (!g_ps3_guest_caller) return CELL_SAVEDATA_CBRESULT_ERR_FAILURE;
+ 
+@@ -330,7 +331,11 @@ static s32 dispatch_func_stat_full(uint32_t func_opd, int is_new, const char* di
+         vm_write32(get_ea + 1624, (u32)input->sysSizeKB);
+         vm_write32(get_ea + 1628, input->fileNum);
+         vm_write32(get_ea + 1632, input->fileListNum);
+-        u32 files = input->fileListNum ? scratch_alloc(input->fileListNum * 56) : 0;
++        /* The firmware lays the list out in the title's own SetBuf buffer (RPCS3 does the same); scratch only
++         * when the title gave no buffer big enough. */
++        u32 files = 0;
++        if (input->fileListNum)
++            files = list_ea && list_cap >= input->fileListNum * 56u ? list_ea : scratch_alloc(input->fileListNum * 56);
+         if (input->fileListNum && !files) return CELL_SAVEDATA_CBRESULT_ERR_FAILURE;
+         vm_write32(get_ea + 1636, files);
+         for (u32 i = 0; i < input->fileListNum; i++) {
+@@ -544,19 +549,59 @@ static void pfd_path(const char* save_path, char* out, size_t n)
+ #endif
+ }
+ 
++/* The name as a whole word in the PFD: ours is one name per line, a real one (a save from a PS3, or one an
++ * earlier build appended our lines to) keeps each name NUL-padded in its entry table. Reading it line by line
++ * missed both a real PFD's names and the first line glued to the end of one, so a save brought over from a PS3
++ * listed its payload as a NORMALFILE. */
+ static int pfd_has(const char* save_path, const char* name)
+ {
+-    char path[1024], line[64];
++    char path[1024];
+     pfd_path(save_path, path, sizeof(path));
+     FILE* fp = fopen(path, "rb");
+     if (!fp) return 0;
+-    int found = 0;
+-    while (!found && fgets(line, sizeof(line), fp)) {
+-        line[strcspn(line, "\r\n")] = 0;
+-        found = !strcmp(line, name);
++    static unsigned char buf[64 * 1024];
++    size_t n = fread(buf, 1, sizeof buf, fp);
++    fclose(fp);
++    size_t nl = strlen(name);
++    if (!nl || nl > n) return 0;
++    for (size_t i = 0; i + nl <= n; i++) {
++        if (memcmp(buf + i, name, nl)) continue;
++        unsigned char after = i + nl < n ? buf[i + nl] : 0;
++        unsigned char before = i ? buf[i - 1] : 0;
++        int word_end = after == 0 || after == '\n' || after == '\r';
++        int word_start = !i || !(isalnum(before) || before == '.' || before == '_' || before == '-');
++        if (word_end && word_start) return 1;
+     }
++    return 0;
++}
++
++/* RPCS3 marks a save's secure files in PARAM.SFO instead: an INT32 key "*<name>" set to 1. A save made in RPCS3
++ * and copied over has no PFD at all, so read those marks too. */
++static int sfo_marks_secure(const char* save_path, const char* name)
++{
++    char path[1024];
++    snprintf(path, sizeof(path), "%s/PARAM.SFO", save_path);
++#ifdef _WIN32
++    for (char* p = path; *p; p++) if (*p == '/') *p = '\\';
++#endif
++    FILE* fp = fopen(path, "rb");
++    if (!fp) return 0;
++    uint8_t buf[8192];
++    size_t n = fread(buf, 1, sizeof buf, fp);
+     fclose(fp);
+-    return found;
++    if (n < 0x14 || buf[0] != 0 || buf[1] != 'P' || buf[2] != 'S' || buf[3] != 'F') return 0;
++    uint32_t ktab = ps3_psf_get32(buf + 8), dtab = ps3_psf_get32(buf + 12), cnt = ps3_psf_get32(buf + 16);
++    if (cnt > 256 || ktab > n || dtab > n || 0x14 + 16ull * cnt > n) return 0;
++    for (uint32_t i = 0; i < cnt; i++) {
++        const uint8_t* e = buf + 0x14 + 16 * i;
++        uint32_t ko = ps3_psf_get16(e), fmt = ps3_psf_get16(e + 2), len = ps3_psf_get32(e + 4), dof = ps3_psf_get32(e + 12);
++        if (ktab + (uint64_t)ko >= n || dtab + (uint64_t)dof + len > n) continue;
++        if (!memchr(buf + ktab + ko, 0, n - (ktab + (size_t)ko))) continue;
++        const char* key = (const char*)buf + ktab + ko;
++        if (key[0] == '*' && !strcmp(key + 1, name) && fmt == PS3_PSF_INT32 && len == 4)
++            return ps3_psf_get32(buf + dtab + dof) != 0;
++    }
++    return 0;
+ }
+ 
+ static void pfd_add(const char* save_path, const char* name)
+@@ -571,13 +616,14 @@ static void pfd_add(const char* save_path, const char* name)
+ static u32 savedata_file_type(const char* save_path, const char* name)
+ {
+     u32 t = savedata_content_type(name);
+-    return t == CELL_SAVEDATA_FILETYPE_NORMALFILE && pfd_has(save_path, name)
++    return t == CELL_SAVEDATA_FILETYPE_NORMALFILE && (pfd_has(save_path, name) || sfo_marks_secure(save_path, name))
+          ? CELL_SAVEDATA_FILETYPE_SECUREFILE : t;
+ }
+ 
+-/* Enumerate files in a save directory. Returns count, fills fileList up to max. */
++/* Enumerate files in a save directory. Returns count, fills fileList up to max, and adds every file's size,
++ * rounded up to 1 KB as the firmware does, to *bytes (for StatGet sizeKB). */
+ static u32 enumerate_save_files(const char* save_path,
+-                                 CellSaveDataFileStat* fileList, u32 max)
++                                 CellSaveDataFileStat* fileList, u32 max, u64* bytes)
+ {
+     u32 count = 0;
+ 
+@@ -603,6 +649,7 @@ static u32 enumerate_save_files(const char* save_path,
+                 sz.LowPart  = fd.nFileSizeLow;
+                 fileList[count].st_size = (u64)sz.QuadPart;
+             }
++            if (bytes) *bytes += ((((u64)fd.nFileSizeHigh << 32) | fd.nFileSizeLow) + 1023) & ~1023ull;
+             count++;
+         } while (FindNextFileA(hFind, &fd));
+ 
+@@ -651,6 +698,7 @@ static u32 enumerate_save_files(const char* save_path,
+                 fileList[count].st_ctime = (s64)st.st_ctim.tv_sec;
+ #endif
+             }
++            if (bytes) *bytes += ((u64)st.st_size + 1023) & ~1023ull;
+             count++;
+         }
+         closedir(dp);
+@@ -895,12 +943,13 @@ static s32 savedata_execute_run(const char* dirName, int is_save,
+     if (file_list_max > CELL_SAVEDATA_LISTITEM_MAX) return CELL_SAVEDATA_ERROR_PARAM;
+     CellSaveDataFileStat* fileList = NULL;
+     u32 fileNum = 0;
++    u64 used_bytes = 0;
+ 
+     if (file_list_max > 0) {
+         fileList = (CellSaveDataFileStat*)calloc(file_list_max, sizeof(CellSaveDataFileStat));
+         if (!fileList) return CELL_SAVEDATA_ERROR_INTERNAL;
+         if (!is_new) {
+-            fileNum = enumerate_save_files(save_path, fileList, file_list_max);
++            fileNum = enumerate_save_files(save_path, fileList, file_list_max, &used_bytes);
+         }
+     }
+ 
+@@ -935,8 +984,22 @@ static s32 savedata_execute_run(const char* dirName, int is_save,
+     statGet.fileListNum = fileNum < file_list_max ? fileNum : file_list_max;
+     statGet.fileList = fileList;
+     statGet.bind = 0;
+-    statGet.sizeKB = 0;
+-    statGet.sysSizeKB = 0;
++    /* The save's size as the firmware reports it: every file rounded up to 1 KB, plus a fixed 35 KB for the
++     * system files (RPCS3 measured this on a PS3). Both were 0 here. Players whose GT5 2.xx save had grown past
++     * 2 MB, so the game wrote it as GT5.0 (2 MB) + GT5.1, saw it load GT5.0 alone, fail reading its save back
++     * and close at every start (logs of 13-15 Nov). A PS3 and RPCS3 both report the real size. */
++    statGet.sysSizeKB = 35;
++    statGet.sizeKB = is_new ? 0 : (s32)(used_bytes / 1024) + statGet.sysSizeKB;
++    {
++        char files[256]; size_t at = 0; files[0] = 0;
++        for (u32 i = 0; i < statGet.fileListNum && at + 40 < sizeof files; i++)
++            at += (size_t)snprintf(files + at, sizeof files - at, " %s=%lluK/%s", fileList[i].fileName,
++                                   (unsigned long long)((fileList[i].st_size + 1023) / 1024),
++                                   fileList[i].fileType == CELL_SAVEDATA_FILETYPE_SECUREFILE ? "secure" :
++                                   fileList[i].fileType == CELL_SAVEDATA_FILETYPE_NORMALFILE ? "normal" : "content");
++        printf("[cellSaveData] stat: %u file(s), %u listed (max %u), sizeKB=%d:%s\n",
++               statGet.fileNum, statGet.fileListNum, file_list_max, statGet.sizeKB, files);
++    }
+ 
+     /* Call stat callback */
+     CellSaveDataCBResult cbResult;
+@@ -951,8 +1014,13 @@ static s32 savedata_execute_run(const char* dirName, int is_save,
+      * -- the moment Tokyo Jungle autosaved. Route it through the marshalling
+      * dispatcher, which builds StatGet/StatSet in guest memory. */
+     u32 callback_userdata = (u32)(uintptr_t)userdata;
++    /* SetBuf { ..., bufSize +32, buf +36 }: an existing save's list goes in the title's buffer, cleared to
++     * bufSize first as the firmware does (RPCS3: "Clear to bufSize if !isNew regardless of fileNum"). */
++    u32 list_ea = setBuf ? vm_read32((u32)(uintptr_t)setBuf + 36) : 0;
++    u32 list_cap = setBuf ? vm_read32((u32)(uintptr_t)setBuf + 32) : 0;
++    if (!is_new && list_ea && list_cap) memset(vm_base + list_ea, 0, list_cap);
+     cbResult.result = dispatch_func_stat_full((uint32_t)(uintptr_t)funcStat, is_new,
+-                         dirName, &callback_userdata, &statGet, &statSet);
++                         dirName, &callback_userdata, &statGet, &statSet, list_ea, list_cap);
+ 
+     if (cbResult.result < 0) {
+         printf("[cellSaveData] stat callback returned error %d\n", cbResult.result);
+diff --git a/libs/video/rsx_framegen.c b/libs/video/rsx_framegen.c
+new file mode 100644
+index 00000000..ca923a10
+--- /dev/null
++++ b/libs/video/rsx_framegen.c
+@@ -0,0 +1,736 @@
++/*
++ * ps3recomp - frame generation for the D3D12 live renderer (Windows); see rsx_framegen.h.
++ *
++ * Per drawn frame (rsx_fg_begin):
++ *   copy the presented frame into history slot n (the other slot holds the drawn frame before),
++ *   pass 0  luma at 1/4 size (box of 4x4),           pass 1  luma at 1/16 size,
++ * and when frames went undrawn since the one before:
++ *   pass 2  motion of 4x4 blocks at 1/16 size, full search +-FG_RS (+-128 screen pixels),
++ *   pass 3  motion of 4x4 blocks at 1/4 size (16x16 screen pixels), searched +-FG_RQ around the
++ *           coarse vector and +-1 around zero, so the HUD and anything that holds still stay put,
++ *   pass 4  3x3 median of the vectors.
++ * Per in-between frame (rsx_fg_draw), a full-screen pass: a vector v says the current frame's pixel
++ * at x was at x + v in the frame before, so what shows at x at time t (0 = before, 1 = now) is the
++ * current frame's pixel at x - (1-t)v and the earlier frame's at x + t v; the two are mixed by t,
++ * leaning on the newer frame where they disagree (something uncovered or covered).
++ *
++ * Every list call is one the live renderer's recording thread carries (ld_rec_install).
++ * Luma and vectors are R32 textures read and written as UAVs (typed UAV loads of R32 are always
++ * there); vectors are packed as two int16 in screen pixels.
++ */
++#ifdef _WIN32
++#include "rsx_framegen.h"
++
++#include <windows.h>
++#include <d3d12.h>
++#include <d3dcompiler.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define FG_RS 8           /* coarse search radius, 1/16-size pixels */
++#define FG_RQ 3           /* refine radius around the coarse vector, 1/4-size pixels */
++#define FG_HEAP 64
++#define FG_TAB 5          /* compute table: t0, u0..u3 */
++#define FG_PER_SLOT 28    /* 5 compute tables + the 3-SRV draw table */
++
++static const char k_src[] =
++"#define LUMA(c) dot((c).rgb, float3(0.299, 0.587, 0.114))\n"
++"/* A vector: x and y as int12 in screen pixels, and in the top byte how well its block matched\n"
++" * (mean luma difference per pixel x 2000, 255 at most). */\n"
++"uint packmv(int2 v, uint q) { return (uint(v.x) & 0xFFFu) | ((uint(v.y) & 0xFFFu) << 12) | (min(q, 255u) << 24); }\n"
++"int2 unpackmv(uint v) { return int2(int(v << 20) >> 20, int(v << 8) >> 20); }\n"
++"uint mvq(uint v) { return v >> 24; }\n"
++"#if PASS == 0\n"
++"Texture2D<float4> Frame : register(t0);\n"
++"RWTexture2D<float> OutL : register(u0);\n"
++"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
++"    if (id.x >= QW || id.y >= QH) return;\n"
++"    float s = 0;\n"
++"    [unroll] for (int y = 0; y < 4; y++) [unroll] for (int x = 0; x < 4; x++)\n"
++"        s += LUMA(Frame.Load(int3(id.x * 4 + x, id.y * 4 + y, 0)));\n"
++"    OutL[id.xy] = s * (1.0 / 16.0);\n"
++"}\n"
++"#elif PASS == 1\n"
++"RWTexture2D<float> InL : register(u0);\n"
++"RWTexture2D<float> OutL : register(u1);\n"
++"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
++"    if (id.x >= SW || id.y >= SH) return;\n"
++"    float s = 0;\n"
++"    [unroll] for (int y = 0; y < 4; y++) [unroll] for (int x = 0; x < 4; x++)\n"
++"        s += InL[uint2(id.x * 4 + x, id.y * 4 + y)];\n"
++"    OutL[id.xy] = s * (1.0 / 16.0);\n"
++"}\n"
++"#elif PASS == 2\n"
++"RWTexture2D<float> Cur : register(u0);\n"
++"RWTexture2D<float> Prev : register(u1);\n"
++"RWTexture2D<uint> Mv : register(u2);\n"
++"float P(int2 p) { return Prev[uint2(clamp(p, int2(0, 0), int2(SW - 1, SH - 1)))]; }\n"
++"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
++"    if (id.x >= GSW || id.y >= GSH) return;\n"
++"    int2 o = int2(id.xy) * 4;\n"
++"    float c[16];\n"
++"    [unroll] for (int i = 0; i < 16; i++)\n"
++"        c[i] = Cur[uint2(clamp(o + int2(i & 3, i >> 2), int2(0, 0), int2(SW - 1, SH - 1)))];\n"
++"    float best = 0;\n"
++"    [unroll] for (int j = 0; j < 16; j++) best += abs(c[j] - P(o + int2(j & 3, j >> 2)));\n"
++"    best = best * 0.9 - 0.002;\n"
++"    int2 bd = int2(0, 0);\n"
++"    [loop] for (int dy = -RS; dy <= RS; dy++)\n"
++"        [loop] for (int dx = -RS; dx <= RS; dx++) {\n"
++"            float s = 0.004 * (abs(dx) + abs(dy));\n"
++"            [unroll] for (int k = 0; k < 16; k++) s += abs(c[k] - P(o + int2(k & 3, k >> 2) + int2(dx, dy)));\n"
++"            if (s < best) { best = s; bd = int2(dx, dy); }\n"
++"        }\n"
++"    Mv[id.xy] = packmv(bd * 16, 0u);\n"
++"}\n"
++"#elif PASS == 3\n"
++"RWTexture2D<float> Cur : register(u0);\n"
++"RWTexture2D<float> Prev : register(u1);\n"
++"RWTexture2D<uint> MvS : register(u2);\n"
++"RWTexture2D<uint> MvQ : register(u3);\n"
++"float P(int2 p) { return Prev[uint2(clamp(p, int2(0, 0), int2(QW - 1, QH - 1)))]; }\n"
++"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
++"    if (id.x >= GQW || id.y >= GQH) return;\n"
++"    int2 o = int2(id.xy) * 4 - 1;\n"
++"    float c[36];\n"
++"    [unroll] for (int i = 0; i < 36; i++)\n"
++"        c[i] = Cur[uint2(clamp(o + int2(i % 6, i / 6), int2(0, 0), int2(QW - 1, QH - 1)))];\n"
++"    /* Around zero, around this block's coarse vector, and around its four neighbours' (a repeating\n"
++"     * pattern, a tram's doors, can fool one coarse block but rarely all of them). */\n"
++"    int2 pb = min(int2(id.xy) / 4, int2(GSW - 1, GSH - 1));\n"
++"    int2 cens[6];\n"
++"    cens[0] = int2(0, 0);\n"
++"    cens[1] = unpackmv(MvS[uint2(pb)]) / 4;\n"
++"    cens[2] = unpackmv(MvS[uint2(clamp(pb + int2(-1, 0), int2(0, 0), int2(GSW - 1, GSH - 1)))]) / 4;\n"
++"    cens[3] = unpackmv(MvS[uint2(clamp(pb + int2(1, 0), int2(0, 0), int2(GSW - 1, GSH - 1)))]) / 4;\n"
++"    cens[4] = unpackmv(MvS[uint2(clamp(pb + int2(0, -1), int2(0, 0), int2(GSW - 1, GSH - 1)))]) / 4;\n"
++"    cens[5] = unpackmv(MvS[uint2(clamp(pb + int2(0, 1), int2(0, 0), int2(GSW - 1, GSH - 1)))]) / 4;\n"
++"    float best = 1e9, bsad = 0;\n"
++"    int2 bd = int2(0, 0);\n"
++"    [loop] for (int round = 0; round < 6; round++) {\n"
++"        int2 cen = cens[round];\n"
++"        int r = round == 1 ? RQ : 1;\n"
++"        [loop] for (int dy = -r; dy <= r; dy++)\n"
++"            [loop] for (int dx = -r; dx <= r; dx++) {\n"
++"                int2 d = cen + int2(dx, dy);\n"
++"                float sad = 0;\n"
++"                [unroll] for (int k = 0; k < 36; k++) sad += abs(c[k] - P(o + int2(k % 6, k / 6) + d));\n"
++"                float s = sad + 0.003 * (abs(d.x) + abs(d.y));\n"
++"                if (d.x == 0 && d.y == 0) s = s * 0.9 - 0.002;\n"
++"                if (s < best) { best = s; bd = d; bsad = sad; }\n"
++"            }\n"
++"    }\n"
++"    MvQ[id.xy] = packmv(bd * 4, uint(bsad * (2000.0 / 36.0)));\n"
++"}\n"
++"#elif PASS == 4\n"
++"RWTexture2D<uint> In : register(u0);\n"
++"RWTexture2D<uint> Out : register(u1);\n"
++"int med9(int a[9]) {\n"
++"    [unroll] for (int i = 0; i < 5; i++)\n"
++"        [unroll] for (int j = i + 1; j < 9; j++)\n"
++"            if (a[j] < a[i]) { int t = a[i]; a[i] = a[j]; a[j] = t; }\n"
++"    return a[4];\n"
++"}\n"
++"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
++"    if (id.x >= GQW || id.y >= GQH) return;\n"
++"    int xs[9], ys[9];\n"
++"    [unroll] for (int i = 0; i < 9; i++) {\n"
++"        int2 v = unpackmv(In[uint2(clamp(int2(id.xy) + int2(i % 3 - 1, i / 3 - 1), int2(0, 0), int2(GQW - 1, GQH - 1)))]);\n"
++"        xs[i] = v.x; ys[i] = v.y;\n"
++"    }\n"
++"    Out[id.xy] = packmv(int2(med9(xs), med9(ys)), mvq(In[id.xy]));\n"
++"}\n"
++"#elif PASS == 9\n"
++"cbuffer K : register(b0) { float T; float K1; float K2; float K3; };\n"
++"Texture2D<float4> PrevF : register(t0);\n"
++"Texture2D<float4> CurF : register(t1);\n"
++"Texture2D<uint> Mv : register(t2);\n"
++"SamplerState S : register(s0);\n"
++"float4 vs(uint id : SV_VertexID) : SV_Position {\n"
++"    float2 uv = float2((id << 1) & 2, id & 2);\n"
++"    return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);\n"
++"}\n"
++"float2 mvload(int2 i) { return float2(unpackmv(Mv.Load(int3(clamp(i, int2(0, 0), int2(GQW - 1, GQH - 1)), 0)))); }\n"
++"float4 ps(float4 pos : SV_Position) : SV_Target {\n"
++"    float2 px = pos.xy;\n"
++"    float2 g = px / 16.0 - 0.5;\n"
++"    int2 i0 = int2(floor(g));\n"
++"    float2 f = g - float2(i0);\n"
++"    float2 mv = lerp(lerp(mvload(i0), mvload(i0 + int2(1, 0)), f.x),\n"
++"                     lerp(mvload(i0 + int2(0, 1)), mvload(i0 + int2(1, 1)), f.x), f.y);\n"
++"    float2 inv = float2(1.0 / W, 1.0 / H);\n"
++"    float4 a = PrevF.SampleLevel(S, (px + T * mv) * inv, 0);\n"
++"    float4 b = CurF.SampleLevel(S, (px - (1.0 - T) * mv) * inv, 0);\n"
++"    float d = abs(LUMA(a) - LUMA(b));\n"
++"    float w = lerp(T, 1.0, saturate((d - 0.08) * 6.0));\n"
++"    float3 moved = lerp(a.rgb, b.rgb, w);\n"
++"    /* What is the same in both frames here and around (the HUD, the cockpit, the sky) holds still:\n"
++"     * a block's vector belongs to whatever moves most in it, and would drag fixed text along. */\n"
++"    float3 p0 = PrevF.SampleLevel(S, px * inv, 0).rgb;\n"
++"    float3 c0 = CurF.SampleLevel(S, px * inv, 0).rgb;\n"
++"    float s0 = abs(LUMA(p0) - LUMA(c0));\n"
++"    [unroll] for (int i = 0; i < 4; i++) {\n"
++"        float2 o = float2(i == 0 ? 2 : i == 1 ? -2 : 0, i == 2 ? 2 : i == 3 ? -2 : 0);\n"
++"        s0 = max(s0, abs(LUMA(PrevF.SampleLevel(S, (px + o) * inv, 0)) - LUMA(CurF.SampleLevel(S, (px + o) * inv, 0))));\n"
++"    }\n"
++"    float still = saturate(1.0 - (s0 - 0.01) * 40.0);\n"
++"    float3 o3 = lerp(moved, lerp(p0, c0, T), still);\n"
++"    /* Where a block found no good match (fast, plain or repeating things), warping makes swirls:\n"
++"     * show the newer frame there instead, which only holds that spot for one refresh. */\n"
++"    int3 b0 = int3(clamp(i0, int2(0, 0), int2(GQW - 1, GQH - 1)), 0);\n"
++"    int3 b1 = int3(clamp(i0 + int2(1, 1), int2(0, 0), int2(GQW - 1, GQH - 1)), 0);\n"
++"    uint q = max(max(mvq(Mv.Load(b0)), mvq(Mv.Load(int3(b1.x, b0.y, 0)))),\n"
++"                 max(mvq(Mv.Load(int3(b0.x, b1.y, 0))), mvq(Mv.Load(b1))));\n"
++"    float fb = saturate((float(q) / 2000.0 - 0.035) / 0.035);\n"
++"    return float4(lerp(o3, c0, fb), 1.0);\n"
++"}\n"
++"#endif\n";
++
++static struct {
++    int inited, failed, cur, have, warned_fmt;
++    ID3D12Device* dev;
++    unsigned W, H, QW, QH, SW, SH, GSW, GSH, GQW, GQH;
++    ID3D12Resource* frame[2];
++    D3D12_RESOURCE_STATES fstate[2];
++    ID3D12Resource* lq[2];
++    ID3D12Resource* ls[2];
++    ID3D12Resource *mvs, *mvq, *mvf;
++    ID3D12DescriptorHeap* heap;
++    UINT step;
++    ID3D12RootSignature *crs, *grs;
++    ID3D12PipelineState* cpso[5];
++    ID3D12PipelineState* gpso;
++    D3D12_GPU_DESCRIPTOR_HANDLE ctab[2][5], gtab[2];
++    unsigned long long made, made_rep, frames_rep;
++    ULONGLONG rep_at;
++    /* LD_FRAMEGEN_DUMP */
++    const char* dump_dir;
++    unsigned dump_every, dump_n, dump_files, dump_pending;
++    ID3D12Resource* rb;
++    UINT rb_pitch;
++    ID3D12Fence* fence;
++    UINT64 fence_v;
++    HANDLE fence_ev;
++    /* rsx_fg_present_copy: its own list, on a ring of three allocators */
++    ID3D12CommandAllocator* calloc[3];
++    ID3D12GraphicsCommandList* cl;
++    ID3D12Fence* pf;
++    UINT64 pfv, afence[3];
++    HANDLE pev;
++    unsigned ring;
++} fg;
++
++static int s_on = -1;
++int rsx_fg_enabled(void)
++{
++    if (s_on < 0) {
++        const char* e = getenv("LD_FRAMEGEN");
++        s_on = e && atoi(e) != 0;
++        if (s_on)
++            fprintf(stderr, "[framegen] on: frames that watch mode or 30 fps leave undrawn are made from the "
++                            "drawn ones (LD_FRAMEGEN)\n");
++    }
++    return s_on;
++}
++
++static void fg_fail(const char* what, HRESULT hr)
++{
++    fprintf(stderr, "[framegen] off: %s failed (hr=0x%08lX)\n", what, (unsigned long)hr);
++    fg.failed = 1;
++}
++
++static ID3D12Resource* fg_tex(unsigned w, unsigned h, DXGI_FORMAT f, int uav, D3D12_RESOURCE_STATES st)
++{
++    D3D12_HEAP_PROPERTIES hp = {0};
++    hp.Type = D3D12_HEAP_TYPE_DEFAULT;
++    D3D12_RESOURCE_DESC d = {0};
++    d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
++    d.Width = w; d.Height = h; d.DepthOrArraySize = 1; d.MipLevels = 1;
++    d.Format = f; d.SampleDesc.Count = 1; d.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
++    d.Flags = uav ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
++    ID3D12Resource* r = NULL;
++    HRESULT hr = fg.dev->lpVtbl->CreateCommittedResource(fg.dev, &hp, D3D12_HEAP_FLAG_NONE, &d, st, NULL,
++                                                         &IID_ID3D12Resource, (void**)&r);
++    if (FAILED(hr)) { fg_fail("texture", hr); return NULL; }
++    return r;
++}
++
++static D3D12_CPU_DESCRIPTOR_HANDLE fg_cpu(unsigned slot)
++{
++    D3D12_CPU_DESCRIPTOR_HANDLE h;
++    fg.heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(fg.heap, &h);
++    h.ptr += (SIZE_T)slot * fg.step;
++    return h;
++}
++
++static D3D12_GPU_DESCRIPTOR_HANDLE fg_gpu(unsigned slot)
++{
++    D3D12_GPU_DESCRIPTOR_HANDLE h;
++    fg.heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(fg.heap, &h);
++    h.ptr += (UINT64)slot * fg.step;
++    return h;
++}
++
++/* A NULL resource makes a null descriptor, for the slots a pass does not use. */
++static void fg_srv(unsigned slot, ID3D12Resource* r, DXGI_FORMAT f)
++{
++    D3D12_SHADER_RESOURCE_VIEW_DESC d = {0};
++    d.Format = f;
++    d.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
++    d.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
++    d.Texture2D.MipLevels = 1;
++    fg.dev->lpVtbl->CreateShaderResourceView(fg.dev, r, &d, fg_cpu(slot));
++}
++
++static void fg_uav(unsigned slot, ID3D12Resource* r, DXGI_FORMAT f)
++{
++    D3D12_UNORDERED_ACCESS_VIEW_DESC d = {0};
++    d.Format = f;
++    d.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
++    fg.dev->lpVtbl->CreateUnorderedAccessView(fg.dev, r, NULL, &d, fg_cpu(slot));
++}
++
++static ID3DBlob* fg_compile(int pass, const char* entry, const char* target)
++{
++    static const char* names[13] = { "PASS", "W", "H", "QW", "QH", "SW", "SH", "GSW", "GSH", "GQW", "GQH", "RS", "RQ" };
++    char vals[13][16];
++    const unsigned v[13] = { (unsigned)pass, fg.W, fg.H, fg.QW, fg.QH, fg.SW, fg.SH,
++                             fg.GSW, fg.GSH, fg.GQW, fg.GQH, FG_RS, FG_RQ };
++    D3D_SHADER_MACRO m[14];
++    for (int i = 0; i < 13; i++) {
++        snprintf(vals[i], sizeof vals[i], "%u", v[i]);
++        m[i].Name = names[i];
++        m[i].Definition = vals[i];
++    }
++    m[13].Name = NULL; m[13].Definition = NULL;
++    ID3DBlob* b = NULL;
++    ID3DBlob* err = NULL;
++    HRESULT hr = D3DCompile(k_src, sizeof k_src - 1u, "framegen", m, NULL, entry, target,
++                            D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &b, &err);
++    if (FAILED(hr)) {
++        fprintf(stderr, "[framegen] shader %d (%s) failed to compile: %s\n", pass, entry,
++                err ? (const char*)err->lpVtbl->GetBufferPointer(err) : "?");
++        if (err) err->lpVtbl->Release(err);
++        fg.failed = 1;
++        return NULL;
++    }
++    if (err) err->lpVtbl->Release(err);
++    return b;
++}
++
++static ID3D12RootSignature* fg_rootsig(const D3D12_ROOT_SIGNATURE_DESC* rsd)
++{
++    ID3DBlob* sig = NULL;
++    ID3DBlob* err = NULL;
++    HRESULT hr = D3D12SerializeRootSignature(rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
++    if (err) err->lpVtbl->Release(err);
++    if (FAILED(hr)) { fg_fail("root signature", hr); return NULL; }
++    ID3D12RootSignature* rs = NULL;
++    hr = fg.dev->lpVtbl->CreateRootSignature(fg.dev, 0, sig->lpVtbl->GetBufferPointer(sig),
++                                             sig->lpVtbl->GetBufferSize(sig), &IID_ID3D12RootSignature, (void**)&rs);
++    sig->lpVtbl->Release(sig);
++    if (FAILED(hr)) { fg_fail("root signature", hr); return NULL; }
++    return rs;
++}
++
++static void fg_tables(void)
++{
++    const DXGI_FORMAT F = DXGI_FORMAT_R32_FLOAT, U = DXGI_FORMAT_R32_UINT;
++    for (int n = 0; n < 2; n++) {
++        const int o = n ^ 1;
++        const unsigned base = (unsigned)n * FG_PER_SLOT;
++        ID3D12Resource* const t0[5] = { fg.frame[n], NULL, NULL, NULL, NULL };
++        ID3D12Resource* const u[5][4] = {
++            { fg.lq[n], NULL, NULL, NULL },
++            { fg.lq[n], fg.ls[n], NULL, NULL },
++            { fg.ls[n], fg.ls[o], fg.mvs, NULL },
++            { fg.lq[n], fg.lq[o], fg.mvs, fg.mvq },
++            { fg.mvq, fg.mvf, NULL, NULL },
++        };
++        const DXGI_FORMAT uf[5][4] = { { F, F, F, F }, { F, F, F, F }, { F, F, U, F }, { F, F, U, U }, { U, U, U, U } };
++        for (int i = 0; i < 5; i++) {
++            const unsigned s = base + (unsigned)i * FG_TAB;
++            fg_srv(s, t0[i], DXGI_FORMAT_R8G8B8A8_UNORM);
++            for (int j = 0; j < 4; j++) fg_uav(s + 1u + (unsigned)j, u[i][j], uf[i][j]);
++            fg.ctab[n][i] = fg_gpu(s);
++        }
++        const unsigned g = base + 5u * FG_TAB;
++        fg_srv(g, fg.frame[o], DXGI_FORMAT_R8G8B8A8_UNORM);
++        fg_srv(g + 1u, fg.frame[n], DXGI_FORMAT_R8G8B8A8_UNORM);
++        fg_srv(g + 2u, fg.mvf, U);
++        fg.gtab[n] = fg_gpu(g);
++    }
++}
++
++static int fg_setup(ID3D12Device* dev, unsigned w, unsigned h)
++{
++    if (fg.failed) return 0;
++    if (fg.inited && fg.dev == dev && fg.W == w && fg.H == h) return 1;
++    /* A new size (rare): start over. The old objects may still be in flight on the GPU, so they are
++     * left alone rather than released under it. */
++    memset(&fg, 0, sizeof fg);
++    fg.dev = dev; fg.W = w; fg.H = h;
++    fg.QW = w / 4u; fg.QH = h / 4u; fg.SW = fg.QW / 4u; fg.SH = fg.QH / 4u;
++    fg.GSW = (fg.SW + 3u) / 4u; fg.GSH = (fg.SH + 3u) / 4u;
++    fg.GQW = (fg.QW + 3u) / 4u; fg.GQH = (fg.QH + 3u) / 4u;
++    if (fg.SW < 8u || fg.SH < 8u) { fprintf(stderr, "[framegen] off: window too small\n"); fg.failed = 1; return 0; }
++
++    for (int i = 0; i < 2; i++) {
++        fg.frame[i] = fg_tex(w, h, DXGI_FORMAT_R8G8B8A8_TYPELESS, 0, D3D12_RESOURCE_STATE_COPY_DEST);
++        fg.fstate[i] = D3D12_RESOURCE_STATE_COPY_DEST;
++        fg.lq[i] = fg_tex(fg.QW, fg.QH, DXGI_FORMAT_R32_FLOAT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++        fg.ls[i] = fg_tex(fg.SW, fg.SH, DXGI_FORMAT_R32_FLOAT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++    }
++    fg.mvs = fg_tex(fg.GSW, fg.GSH, DXGI_FORMAT_R32_UINT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++    fg.mvq = fg_tex(fg.GQW, fg.GQH, DXGI_FORMAT_R32_UINT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++    fg.mvf = fg_tex(fg.GQW, fg.GQH, DXGI_FORMAT_R32_UINT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++    if (fg.failed) return 0;
++
++    D3D12_DESCRIPTOR_HEAP_DESC hd = {0};
++    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
++    hd.NumDescriptors = FG_HEAP;
++    hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
++    HRESULT hr = dev->lpVtbl->CreateDescriptorHeap(dev, &hd, &IID_ID3D12DescriptorHeap, (void**)&fg.heap);
++    if (FAILED(hr)) { fg_fail("descriptor heap", hr); return 0; }
++    fg.step = dev->lpVtbl->GetDescriptorHandleIncrementSize(dev, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
++    fg_tables();
++
++    /* Compute: one table, t0 then u0..u3. */
++    D3D12_DESCRIPTOR_RANGE cr[2] = {0};
++    cr[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; cr[0].NumDescriptors = 1;
++    cr[0].OffsetInDescriptorsFromTableStart = 0;
++    cr[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; cr[1].NumDescriptors = 4;
++    cr[1].OffsetInDescriptorsFromTableStart = 1;
++    D3D12_ROOT_PARAMETER cp = {0};
++    cp.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
++    cp.DescriptorTable.NumDescriptorRanges = 2;
++    cp.DescriptorTable.pDescriptorRanges = cr;
++    cp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
++    D3D12_ROOT_SIGNATURE_DESC crsd = {0};
++    crsd.NumParameters = 1; crsd.pParameters = &cp;
++    fg.crs = fg_rootsig(&crsd);
++
++    /* Draw: 4 constants (b0), a table of 3 SRVs, one linear clamp sampler. */
++    D3D12_DESCRIPTOR_RANGE gr = {0};
++    gr.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; gr.NumDescriptors = 3;
++    D3D12_ROOT_PARAMETER gp[2] = {0};
++    gp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
++    gp[0].Constants.Num32BitValues = 4;
++    gp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
++    gp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
++    gp[1].DescriptorTable.NumDescriptorRanges = 1;
++    gp[1].DescriptorTable.pDescriptorRanges = &gr;
++    gp[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
++    D3D12_STATIC_SAMPLER_DESC smp = {0};
++    smp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
++    smp.AddressU = smp.AddressV = smp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
++    smp.MaxLOD = D3D12_FLOAT32_MAX;
++    smp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
++    D3D12_ROOT_SIGNATURE_DESC grsd = {0};
++    grsd.NumParameters = 2; grsd.pParameters = gp;
++    grsd.NumStaticSamplers = 1; grsd.pStaticSamplers = &smp;
++    fg.grs = fg_rootsig(&grsd);
++    if (fg.failed) return 0;
++
++    for (int p = 0; p < 5; p++) {
++        ID3DBlob* cs = fg_compile(p, "main", "cs_5_0");
++        if (!cs) return 0;
++        D3D12_COMPUTE_PIPELINE_STATE_DESC cd = {0};
++        cd.pRootSignature = fg.crs;
++        cd.CS.pShaderBytecode = cs->lpVtbl->GetBufferPointer(cs);
++        cd.CS.BytecodeLength = cs->lpVtbl->GetBufferSize(cs);
++        hr = dev->lpVtbl->CreateComputePipelineState(dev, &cd, &IID_ID3D12PipelineState, (void**)&fg.cpso[p]);
++        cs->lpVtbl->Release(cs);
++        if (FAILED(hr)) { fg_fail("compute pipeline", hr); return 0; }
++    }
++    ID3DBlob* vs = fg_compile(9, "vs", "vs_5_0");
++    ID3DBlob* ps = vs ? fg_compile(9, "ps", "ps_5_0") : NULL;
++    if (!vs || !ps) { if (vs) vs->lpVtbl->Release(vs); return 0; }
++    D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {0};
++    pd.pRootSignature = fg.grs;
++    pd.VS.pShaderBytecode = vs->lpVtbl->GetBufferPointer(vs); pd.VS.BytecodeLength = vs->lpVtbl->GetBufferSize(vs);
++    pd.PS.pShaderBytecode = ps->lpVtbl->GetBufferPointer(ps); pd.PS.BytecodeLength = ps->lpVtbl->GetBufferSize(ps);
++    pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
++    pd.SampleMask = 0xFFFFFFFFu;
++    pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
++    pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
++    pd.RasterizerState.DepthClipEnable = TRUE;
++    pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
++    pd.NumRenderTargets = 1;
++    pd.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;   /* the swap chain's */
++    pd.SampleDesc.Count = 1;
++    hr = dev->lpVtbl->CreateGraphicsPipelineState(dev, &pd, &IID_ID3D12PipelineState, (void**)&fg.gpso);
++    vs->lpVtbl->Release(vs); ps->lpVtbl->Release(ps);
++    if (FAILED(hr)) { fg_fail("draw pipeline", hr); return 0; }
++
++    /* LD_FRAMEGEN_DUMP=<dir> [LD_FRAMEGEN_DUMP_EVERY=n, default 120]: before / made / after as .ppm. */
++    fg.dump_dir = getenv("LD_FRAMEGEN_DUMP");
++    if (fg.dump_dir && fg.dump_dir[0]) {
++        const char* e = getenv("LD_FRAMEGEN_DUMP_EVERY");
++        fg.dump_every = e && atoi(e) > 0 ? (unsigned)atoi(e) : 120u;
++        fg.rb_pitch = (w * 4u + 255u) & ~255u;
++        D3D12_HEAP_PROPERTIES hp = {0};
++        hp.Type = D3D12_HEAP_TYPE_READBACK;
++        D3D12_RESOURCE_DESC bd = {0};
++        bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
++        bd.Width = (UINT64)fg.rb_pitch * h * 3u;
++        bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
++        bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
++        bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
++        if (FAILED(dev->lpVtbl->CreateCommittedResource(dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
++                       D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&fg.rb)) ||
++            FAILED(dev->lpVtbl->CreateFence(dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void**)&fg.fence)))
++            fg.dump_dir = NULL;
++        else
++            fg.fence_ev = CreateEventA(NULL, FALSE, FALSE, NULL);
++    } else {
++        fg.dump_dir = NULL;
++    }
++
++    fg.inited = 1;
++    fprintf(stderr, "[framegen] ready for %ux%u: motion at %ux%u and %ux%u, vectors %ux%u\n",
++            w, h, fg.SW, fg.SH, fg.QW, fg.QH, fg.GQW, fg.GQH);
++    return 1;
++}
++
++static void fg_trans(D3D12_RESOURCE_BARRIER* b, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to)
++{
++    memset(b, 0, sizeof *b);
++    b->Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++    b->Transition.pResource = r;
++    b->Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++    b->Transition.StateBefore = from;
++    b->Transition.StateAfter = to;
++}
++
++static void fg_uav_barrier(ID3D12GraphicsCommandList* l)
++{
++    D3D12_RESOURCE_BARRIER b;
++    memset(&b, 0, sizeof b);
++    b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
++    b.UAV.pResource = NULL;
++    l->lpVtbl->ResourceBarrier(l, 1, &b);
++}
++
++static void fg_dispatch(ID3D12GraphicsCommandList* l, int pass, int slot, unsigned nx, unsigned ny)
++{
++    l->lpVtbl->SetPipelineState(l, fg.cpso[pass]);
++    l->lpVtbl->SetComputeRootDescriptorTable(l, 0, fg.ctab[slot][pass]);
++    l->lpVtbl->Dispatch(l, (nx + 7u) / 8u, (ny + 7u) / 8u, 1);
++}
++
++#define FG_SR (D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
++
++int rsx_fg_begin(ID3D12Device* dev, ID3D12GraphicsCommandList* l, ID3D12Resource* src,
++                 DXGI_FORMAT src_fmt, unsigned src_w, unsigned src_h, unsigned w, unsigned h, int gen)
++{
++    if (!rsx_fg_enabled() || !src) return 0;
++    if (src_fmt != DXGI_FORMAT_R8G8B8A8_UNORM && src_fmt != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB &&
++        src_fmt != DXGI_FORMAT_R8G8B8A8_TYPELESS) {
++        if (!fg.warned_fmt) { fg.warned_fmt = 1; fprintf(stderr, "[framegen] presented surface format %d is not RGBA8: none made\n", (int)src_fmt); }
++        fg.have = 0;
++        return 0;
++    }
++    if (src_w < w || src_h < h) { fg.have = 0; return 0; }   /* the window shows padding: no history */
++    if (!fg_setup(dev, w, h)) return 0;
++
++    const int n = fg.cur ^ 1;
++    D3D12_RESOURCE_BARRIER b[2];
++    UINT nb = 0;
++    fg_trans(&b[nb++], src, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
++    if (fg.fstate[n] != D3D12_RESOURCE_STATE_COPY_DEST)
++        fg_trans(&b[nb++], fg.frame[n], fg.fstate[n], D3D12_RESOURCE_STATE_COPY_DEST);
++    l->lpVtbl->ResourceBarrier(l, nb, b);
++    D3D12_TEXTURE_COPY_LOCATION dst = {0}, s = {0};
++    dst.pResource = fg.frame[n]; dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++    s.pResource = src; s.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++    D3D12_BOX box = {0};
++    box.right = w; box.bottom = h; box.back = 1;
++    l->lpVtbl->CopyTextureRegion(l, &dst, 0, 0, 0, &s, &box);
++    fg_trans(&b[0], src, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
++    fg_trans(&b[1], fg.frame[n], D3D12_RESOURCE_STATE_COPY_DEST, FG_SR);
++    l->lpVtbl->ResourceBarrier(l, 2, b);
++    fg.fstate[n] = FG_SR;
++
++    l->lpVtbl->SetDescriptorHeaps(l, 1, &fg.heap);
++    l->lpVtbl->SetComputeRootSignature(l, fg.crs);
++    fg_dispatch(l, 0, n, fg.QW, fg.QH);
++    fg_uav_barrier(l);
++    fg_dispatch(l, 1, n, fg.SW, fg.SH);
++    fg_uav_barrier(l);
++
++    int ready = 0;
++    if (gen > 0 && fg.have) {
++        fg_dispatch(l, 2, n, fg.GSW, fg.GSH);
++        fg_uav_barrier(l);
++        fg_dispatch(l, 3, n, fg.GQW, fg.GQH);
++        fg_uav_barrier(l);
++        fg_dispatch(l, 4, n, fg.GQW, fg.GQH);
++        fg_trans(&b[0], fg.mvf, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
++        l->lpVtbl->ResourceBarrier(l, 1, b);
++        ready = gen > 3 ? 3 : gen;
++    }
++    fg.cur = n;
++    fg.have = 1;
++
++    fg.frames_rep++;
++    const ULONGLONG now = GetTickCount64();
++    if (!fg.rep_at) fg.rep_at = now;
++    if (now - fg.rep_at >= 5000) {
++        fprintf(stderr, "[framegen] %llu frames made for %llu drawn in %.1f s\n",
++                fg.made - fg.made_rep, fg.frames_rep, (now - fg.rep_at) / 1000.0);
++        fg.made_rep = fg.made; fg.frames_rep = 0; fg.rep_at = now;
++    }
++    return ready;
++}
++
++static void fg_copy_out(ID3D12GraphicsCommandList* l, ID3D12Resource* r, DXGI_FORMAT f, unsigned slot)
++{
++    D3D12_TEXTURE_COPY_LOCATION dst = {0}, s = {0};
++    dst.pResource = fg.rb; dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
++    dst.PlacedFootprint.Offset = (UINT64)fg.rb_pitch * fg.H * slot;
++    dst.PlacedFootprint.Footprint.Format = f;
++    dst.PlacedFootprint.Footprint.Width = fg.W;
++    dst.PlacedFootprint.Footprint.Height = fg.H;
++    dst.PlacedFootprint.Footprint.Depth = 1;
++    dst.PlacedFootprint.Footprint.RowPitch = fg.rb_pitch;
++    s.pResource = r; s.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++    l->lpVtbl->CopyTextureRegion(l, &dst, 0, 0, 0, &s, NULL);
++}
++
++void rsx_fg_draw(ID3D12GraphicsCommandList* l, int k, int n, ID3D12Resource* bb, D3D12_CPU_DESCRIPTOR_HANDLE rtv)
++{
++    if (!fg.inited || fg.failed || n < 1) return;
++    const float c[4] = { (float)k / (float)(n + 1), 0.0f, 0.0f, 0.0f };
++    D3D12_RESOURCE_BARRIER b[3];
++    fg_trans(&b[0], bb, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
++    l->lpVtbl->ResourceBarrier(l, 1, b);
++    l->lpVtbl->SetDescriptorHeaps(l, 1, &fg.heap);
++    l->lpVtbl->SetGraphicsRootSignature(l, fg.grs);
++    l->lpVtbl->SetPipelineState(l, fg.gpso);
++    l->lpVtbl->SetGraphicsRoot32BitConstants(l, 0, 4, c, 0);
++    l->lpVtbl->SetGraphicsRootDescriptorTable(l, 1, fg.gtab[fg.cur]);
++    l->lpVtbl->OMSetRenderTargets(l, 1, &rtv, FALSE, NULL);
++    D3D12_VIEWPORT vp = { 0.0f, 0.0f, (float)fg.W, (float)fg.H, 0.0f, 1.0f };
++    D3D12_RECT sc = { 0, 0, (LONG)fg.W, (LONG)fg.H };
++    l->lpVtbl->RSSetViewports(l, 1, &vp);
++    l->lpVtbl->RSSetScissorRects(l, 1, &sc);
++    l->lpVtbl->IASetPrimitiveTopology(l, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
++    l->lpVtbl->DrawInstanced(l, 3, 1, 0, 0);
++
++    const int dump = fg.dump_dir && !fg.dump_pending && fg.dump_files < 12u && k == 1 &&
++                     (fg.dump_n++ % fg.dump_every) == 0u;
++    if (dump) {
++        fg_trans(&b[0], bb, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
++        fg_trans(&b[1], fg.frame[fg.cur ^ 1], FG_SR, D3D12_RESOURCE_STATE_COPY_SOURCE);
++        fg_trans(&b[2], fg.frame[fg.cur], FG_SR, D3D12_RESOURCE_STATE_COPY_SOURCE);
++        l->lpVtbl->ResourceBarrier(l, 3, b);
++        fg_copy_out(l, fg.frame[fg.cur ^ 1], DXGI_FORMAT_R8G8B8A8_TYPELESS, 0);
++        fg_copy_out(l, bb, DXGI_FORMAT_R8G8B8A8_UNORM, 1);
++        fg_copy_out(l, fg.frame[fg.cur], DXGI_FORMAT_R8G8B8A8_TYPELESS, 2);
++        fg_trans(&b[0], bb, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
++        fg_trans(&b[1], fg.frame[fg.cur ^ 1], D3D12_RESOURCE_STATE_COPY_SOURCE, FG_SR);
++        fg_trans(&b[2], fg.frame[fg.cur], D3D12_RESOURCE_STATE_COPY_SOURCE, FG_SR);
++        l->lpVtbl->ResourceBarrier(l, 3, b);
++        fg.dump_pending = 1;
++    } else {
++        fg_trans(&b[0], bb, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
++        l->lpVtbl->ResourceBarrier(l, 1, b);
++    }
++    if (k == n) {
++        fg_trans(&b[0], fg.mvf, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++        l->lpVtbl->ResourceBarrier(l, 1, b);
++    }
++    fg.made++;
++}
++
++int rsx_fg_present_copy(ID3D12CommandQueue* q, ID3D12Resource* src, ID3D12Resource* bb,
++                        unsigned src_w, unsigned src_h, unsigned w, unsigned h)
++{
++    if (!fg.inited || fg.failed || !q || !src || !bb) return 0;
++    if (!fg.cl) {
++        for (int i = 0; i < 3; i++)
++            if (FAILED(fg.dev->lpVtbl->CreateCommandAllocator(fg.dev, D3D12_COMMAND_LIST_TYPE_DIRECT,
++                           &IID_ID3D12CommandAllocator, (void**)&fg.calloc[i]))) return 0;
++        if (FAILED(fg.dev->lpVtbl->CreateCommandList(fg.dev, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, fg.calloc[0], NULL,
++                       &IID_ID3D12GraphicsCommandList, (void**)&fg.cl))) { fg.cl = NULL; return 0; }
++        fg.cl->lpVtbl->Close(fg.cl);
++        if (FAILED(fg.dev->lpVtbl->CreateFence(fg.dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void**)&fg.pf))) {
++            fg.pf = NULL; fg.cl = NULL; return 0;
++        }
++        fg.pev = CreateEventA(NULL, FALSE, FALSE, NULL);
++        if (!fg.pev) { fg.pf = NULL; fg.cl = NULL; return 0; }
++    }
++    const unsigned k = fg.ring++ % 3u;
++    if (fg.pf->lpVtbl->GetCompletedValue(fg.pf) < fg.afence[k]) {   /* three frames back: rarely waits */
++        fg.pf->lpVtbl->SetEventOnCompletion(fg.pf, fg.afence[k], fg.pev);
++        WaitForSingleObject(fg.pev, INFINITE);
++    }
++    ID3D12CommandAllocator* a = fg.calloc[k];
++    ID3D12GraphicsCommandList* l = fg.cl;
++    if (FAILED(a->lpVtbl->Reset(a)) || FAILED(l->lpVtbl->Reset(l, a, NULL))) return 0;
++    D3D12_RESOURCE_BARRIER b[2];
++    fg_trans(&b[0], src, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
++    fg_trans(&b[1], bb, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
++    l->lpVtbl->ResourceBarrier(l, 2, b);
++    if (src_w == w && src_h == h) {
++        l->lpVtbl->CopyResource(l, bb, src);
++    } else {
++        D3D12_TEXTURE_COPY_LOCATION dst = {0}, s = {0};
++        dst.pResource = bb; dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++        s.pResource = src; s.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++        D3D12_BOX box = {0};
++        box.right = src_w < w ? src_w : w; box.bottom = src_h < h ? src_h : h; box.back = 1;
++        l->lpVtbl->CopyTextureRegion(l, &dst, 0, 0, 0, &s, &box);
++    }
++    fg_trans(&b[0], src, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
++    fg_trans(&b[1], bb, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
++    l->lpVtbl->ResourceBarrier(l, 2, b);
++    if (FAILED(l->lpVtbl->Close(l))) return 0;
++    ID3D12CommandList* ls[1] = { (ID3D12CommandList*)l };
++    q->lpVtbl->ExecuteCommandLists(q, 1, ls);
++    q->lpVtbl->Signal(q, fg.pf, ++fg.pfv);
++    fg.afence[k] = fg.pfv;
++    return 1;
++}
++
++void rsx_fg_after_submit(ID3D12CommandQueue* q)
++{
++    if (!fg.dump_pending || !fg.rb || !fg.fence || !fg.fence_ev) return;
++    fg.dump_pending = 0;
++    const UINT64 v = ++fg.fence_v;
++    if (FAILED(q->lpVtbl->Signal(q, fg.fence, v))) return;
++    if (fg.fence->lpVtbl->GetCompletedValue(fg.fence) < v) {
++        fg.fence->lpVtbl->SetEventOnCompletion(fg.fence, v, fg.fence_ev);
++        WaitForSingleObject(fg.fence_ev, 5000);
++    }
++    unsigned char* p = NULL;
++    D3D12_RANGE rr = { 0, (SIZE_T)fg.rb_pitch * fg.H * 3u };
++    if (FAILED(fg.rb->lpVtbl->Map(fg.rb, 0, &rr, (void**)&p)) || !p) return;
++    static const char* tag[3] = { "a_before", "b_made", "c_after" };
++    unsigned char* row = (unsigned char*)malloc((size_t)fg.W * 3u);
++    for (unsigned i = 0; i < 3 && row; i++) {
++        char path[MAX_PATH * 2];
++        snprintf(path, sizeof path, "%s\\fg_%03u_%s.ppm", fg.dump_dir, fg.dump_files, tag[i]);
++        FILE* f = fopen(path, "wb");
++        if (!f) continue;
++        fprintf(f, "P6\n%u %u\n255\n", fg.W, fg.H);
++        for (unsigned y = 0; y < fg.H; y++) {
++            const unsigned char* src = p + (size_t)fg.rb_pitch * fg.H * i + (size_t)fg.rb_pitch * y;
++            for (unsigned x = 0; x < fg.W; x++) {
++                row[x * 3u + 0u] = src[x * 4u + 0u];
++                row[x * 3u + 1u] = src[x * 4u + 1u];
++                row[x * 3u + 2u] = src[x * 4u + 2u];
++            }
++            fwrite(row, 3, fg.W, f);
++        }
++        fclose(f);
++    }
++    free(row);
++    D3D12_RANGE none = { 0, 0 };
++    fg.rb->lpVtbl->Unmap(fg.rb, 0, &none);
++    fprintf(stderr, "[framegen] dump %u written to %s\n", fg.dump_files, fg.dump_dir);
++    fg.dump_files++;
++}
++#endif /* _WIN32 */
+diff --git a/libs/video/rsx_framegen.h b/libs/video/rsx_framegen.h
+new file mode 100644
+index 00000000..47c4171d
+--- /dev/null
++++ b/libs/video/rsx_framegen.h
+@@ -0,0 +1,48 @@
++/*
++ * ps3recomp - frame generation for the D3D12 live renderer (Windows)
++ *
++ * Watch mode (B-Spec, replays, F9) and the launcher's 30 fps Speed setting leave game frames undrawn
++ * to spare the CPU; the screen then holds each drawn frame for two refreshes. With LD_FRAMEGEN=1 the
++ * renderer fills those refreshes with frames made on the GPU from the drawn frame before and the one
++ * after: a block motion search at 1/16 and 1/4 size, then each pixel taken from both frames halfway
++ * along its motion. The game, its clock and the CPU work are untouched; the extra cost is a few GPU
++ * passes, and the newest frame reaches the screen one refresh later.
++ */
++#ifndef RSX_FRAMEGEN_H
++#define RSX_FRAMEGEN_H
++#ifdef _WIN32
++#include <d3d12.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* LD_FRAMEGEN=1 turns it on (off by default). */
++int  rsx_fg_enabled(void);
++
++/* At a present, before the presented surface is copied to the window: keeps this frame (src, a
++ * RENDER_TARGET surface of src_w x src_h, of which the top-left w x h is what the window shows) and,
++ * when gen > 0 game frames went undrawn since the frame before, estimates the motion between the two.
++ * Returns how many in-between frames are ready to draw (0..3). src stays in RENDER_TARGET. */
++int  rsx_fg_begin(ID3D12Device* dev, ID3D12GraphicsCommandList* list, ID3D12Resource* src,
++                  DXGI_FORMAT src_fmt, unsigned src_w, unsigned src_h, unsigned w, unsigned h, int gen);
++
++/* Draws in-between frame k of n (1..n, evenly spaced) into back buffer bb (PRESENT before and after). */
++void rsx_fg_draw(ID3D12GraphicsCommandList* list, int k, int n, ID3D12Resource* bb,
++                 D3D12_CPU_DESCRIPTOR_HANDLE rtv);
++
++/* After the list holding a draw was submitted to queue: writes LD_FRAMEGEN_DUMP images, if asked. */
++void rsx_fg_after_submit(ID3D12CommandQueue* queue);
++
++/* After the made frames were presented: copies the drawn frame (src, RENDER_TARGET, src_w x src_h) into
++ * back buffer bb (PRESENT) on a command list of its own and submits it to queue. The renderer's list was
++ * submitted for the made frame, and with its two allocators a second submission would wait for the GPU
++ * to finish the whole frame; this one waits for nothing. Returns 1 when done (then present bb). */
++int  rsx_fg_present_copy(ID3D12CommandQueue* queue, ID3D12Resource* src, ID3D12Resource* bb,
++                         unsigned src_w, unsigned src_h, unsigned w, unsigned h);
++
++#ifdef __cplusplus
++}
++#endif
++#endif /* _WIN32 */
++#endif /* RSX_FRAMEGEN_H */
