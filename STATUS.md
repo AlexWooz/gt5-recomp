@@ -132,7 +132,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **15 Nov 2026:** a steering wheel's steering and pedals no longer get stuck in a race when the PC is too
+- **15 Nov 2026:** in the cockpit view, dust and smoke from the cars ahead stay outside instead of covering
+  the dashboard (v0.1.62); a steering wheel's steering and pedals no longer get stuck in a race when the PC is too
   busy for the game to keep up (v0.1.59); the sound chain needs less CPU (its EQ module a third less), for the audio lag on small
   CPUs (v0.1.57); renderer choice in the launcher (Display > Renderer): DirectX 12, the default, or Vulkan,
   experimental and slower on Windows for now, added to `gt5.exe` with a one-time build (v0.1.56);

@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.62](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.62) | 15 Nov 2026 | Cockpit view: dust and smoke from the cars ahead no longer cover the dashboard |
 | [v0.1.61](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.61) | 15 Nov 2026 | Updates recompile only what changed: unchanged runtime files keep their timestamps |
 | [v0.1.60](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.60) | 15 Nov 2026 | Adding Vulkan builds with Visual Studio 18; setup and the installer skip an incomplete Visual Studio |
 | [v0.1.59](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.59) | 15 Nov 2026 | Steering wheels: steering and pedals no longer get stuck in a race when a busy PC falls behind |

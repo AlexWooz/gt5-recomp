@@ -9,6 +9,26 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.62**
+
+💨 **Cockpit view: dust and smoke from the cars ahead no longer cover the dashboard** (Keduboneur78 on Discord,
+Toscana in cockpit view, DirectX 12)
+- GT5 draws dust, smoke and gravel at a lower resolution (640x360 down to 256x144, depending on load). To keep
+  them behind anything closer, it first writes a small copy of the scene's depth into a picture, then
+  uses that picture's memory as the depth buffer for the particles. On the PS3 a depth buffer is just
+  memory, so this works there. The PC version keeps its depth buffers apart from pictures, so that depth
+  never arrived: the particles' depth buffer stayed empty, all the dust passed the depth test, and in the
+  cockpit it was drawn over the dashboard, the wheel and the roof.
+- Now, before a draw tests against a depth buffer whose memory the game last wrote as a picture (same
+  address and row length), the picture is turned into that depth first. `play.err` shows
+  `[zeta-import] ... first time` once for each buffer; `LD_ZETA_IMPORT=0` turns it off.
+- In the second screenshot, the car seen on the right of the windscreen is really there: it's alongside,
+  seen through the glass.
+- Checked here: update 2.17 (the one in his log) and the European disc, Arcade, Toscana, in the Ford Focus
+  RS WRC and the Fiat 500 in cockpit view, at 1080p. Before: a cloud of dust over the dashboard as soon as
+  the leader kicked it up. After: dust visible through the windscreen, the dashboard clear, and the dust
+  still drawn behind the cars in the pre-race flyover. The Vulkan renderer wasn't checked.
+
 🏷️ Released as **v0.1.61**
 
 ⏱️ **Updates recompile only what changed** (from the update after this one: this one is still installed by
