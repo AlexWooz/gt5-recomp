@@ -9,6 +9,28 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 14 Nov 2026
 
+🏷️ Released as **v0.1.51**
+
+📷 **Photo Mode: Auto Focus no longer breaks the viewfinder, and photos after the first are exposed right**
+(brocolison and Arpadiam on Discord: a ghosted viewfinder after Auto Focus, later photos too dark)
+- Auto Focus: GT5 measures the distance at the focus point by copying a small patch of the scene's
+  depth back to the game for a few frames, and it reads that copy straight away. The port delivered it a
+  frame or more late whenever the renderer fell behind (in the viewfinder's first seconds, or with a busy
+  graphics card), so the camera focused on whatever that memory held before. Everything came out far
+  out of focus, and the viewfinder showed a fan of overlapping copies of the car and the scenery. Copies
+  the game asks for only now and then now arrive before it looks; the auto-exposure copy it makes every
+  frame still arrives a little late, as the game expects.
+- Exposure after a photo (1080p): the camera meters a tiny version of the viewfinder image every frame.
+  A photo leaves a large working image in video memory that overlaps where that meter is drawn, and
+  after the first photo the meter's last two steps read that old image instead of the fresh one. So the
+  camera metered a frozen picture and drove the viewfinder, and every later photo, much too bright or
+  too dark. The meter now reads its own fresh image. 720p wasn't affected.
+- Checked on this PC with the European disc in Photo Travel (Kyoto - Gion), at 720p and 1080p: Auto
+  Focus right after the viewfinder opens, and with the renderer slowed down on purpose, now gives a
+  clean, sharp preview, where it showed overlapping copies before. At 1080p the viewfinder keeps its
+  brightness after a photo (before, it climbed to nearly three times as bright within 40 seconds), and
+  three photos in a row came out equally bright. Replay Photo Mode wasn't tried.
+
 🏷️ Released as **v0.1.50**
 
 🐧 **Linux: the game window opens on KDE Plasma under Wayland**
