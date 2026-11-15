@@ -8110,16 +8110,34 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
          u64 cmd = vm_read64(pc);
          u32 op  = (u32)(cmd & 7);
          u32 ext = (u32)(cmd & 127);
-@@ -2775,7 +3108,7 @@
+@@ -2745,7 +3078,13 @@
+         if (cmd != 0 && op == 0) {                    /* JOB */
+             { extern u32 g_spurs_job_ls_handle; g_spurs_job_ls_handle = jc_ea; }
+             int idx = jobs++;
+-            jc_run_one_job((u32)(cmd & ~7ull), idx, size_desc);
++            { /* PS3_FTRACE: one span per job, who = 200 (the chain walker), a = the job's
++               * binary, b = the chain: the report then shows the walker beside the PPU waits. */
++              const uint64_t ft0 = PS3_FT_ON() ? ps3_ft_now() : 0;
++              jc_run_one_job((u32)(cmd & ~7ull), idx, size_desc);
++              if (ft0) ps3_ft_span(PS3_FT_SPU_BUSY, 200u,
++                                   (uint32_t)(vm_read64((u32)(cmd & ~7ull) + JH_EA_BINARY) & ~7ull),
++                                   jc_ea, ft0, ps3_ft_now()); }
+             idle = 0;                    /* real work: the chain is healthy */
+             /* Signal per JOB, not per lap. The application waits once for each
+              * unit of work it queued -- this title notified the guard 7 times
+@@ -2775,7 +3114,10 @@
          }
          if (op == 7 && ext == (7 | (1 << 3))) {           /* GUARD */
              u32 g_ea = (u32)(cmd & ~127ull);
 -            if (!jg_wait(g_ea)) return;                  /* still closed */
-+            if (!jg_wait(g_ea, stop)) return;            /* shut down */
++            { const uint64_t ft0 = PS3_FT_ON() ? ps3_ft_now() : 0;
++              const int ok = jg_wait(g_ea, stop);
++              if (ft0) ps3_ft_span(PS3_FT_SPU_WAIT, 200u, g_ea, jc_ea, ft0, ps3_ft_now());
++              if (!ok) return; }                        /* shut down */
              pc += 8; continue;
          }
          /* NOP(0) / SYNC+LWSYNC(2, one virtual SPU: nothing to wait for) /
-@@ -2791,6 +3124,7 @@
+@@ -2791,6 +3133,7 @@
  {
      int slot = (int)(intptr_t)p;
      ps3_thread_name("spurs jc %d", slot);
@@ -8127,7 +8145,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      /* TIMING PROBE (SPURS_JC_DELAY=ms): the real jm2 chain walker is async and
       * picks up jobs as the PPU appends them + fills their descriptors. Our walk
       * is one-shot; if it reads descriptors before the PPU populates the I/O
-@@ -2799,11 +3133,14 @@
+@@ -2799,11 +3142,14 @@
      { const char* d = getenv("SPURS_JC_DELAY");
        if (d && *d) Sleep((unsigned)atoi(d)); }
      jc_execute(s_jobchains[slot].entry_ea, s_jobchains[slot].jc_ea,
@@ -8146,7 +8164,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      return 0;
  }
  
-@@ -2834,8 +3171,12 @@
+@@ -2834,8 +3180,12 @@
              jc_dump_commands(who, s_jobchains[i].entry_ea, 16);
          }
          if (s_off || !s_jobchains[i].entry_ea) return CELL_OK;
@@ -8159,7 +8177,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
              HANDLE th = CreateThread(NULL, 1u << 20, jc_thread, (LPVOID)(intptr_t)i, 0, NULL);
              if (th) CloseHandle(th);
              else s_jobchains[i].running = 0;
-@@ -2859,8 +3200,12 @@
+@@ -2859,8 +3209,12 @@
   * r3, so the caller reads a garbage result for "did the shutdown take?" and a
   * title that checks it can decide the subsystem failed and tear itself down.
   *
@@ -8174,7 +8192,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
   * Found in Tokyo Jungle, whose sound engine shuts its chain down during init
   * and then reports "failed to recv data from SPU" when the handshake does not
   * complete. */
-@@ -2870,7 +3215,7 @@
+@@ -2870,7 +3224,7 @@
      if (PS3_LOG_FIRST(_n, 8)) printf("[cellSpurs] ShutdownJobChain(jc=0x%08X)\n", (u32)jc_ea);
      for (int i = 0; i < MAX_JOBCHAINS; i++) {
          if (s_jobchains[i].jc_ea == (u32)jc_ea) {
@@ -8378,13 +8396,13 @@ index 30290c73..57780fcf 100644
  }
  #endif
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 298ee7d..6821d92 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
-@@ -103,6 +103,18 @@ u32 cellGcm_flip_request_count(void)
+@@ -102,6 +102,18 @@
+ u32 cellGcm_flip_request_count(void)
  {
      return s_flip_request_count;
- }
++}
 +/* Flips that put a new frame on the display: the ones that set s_flip_pending (a FIFO flip
 + * marker reached, a direct flip). The request count also moves on cellGcmSetPrepareFlip, which
 + * GT5 calls early in every frame, and the present thread's fallback took that for a flip: it
@@ -8396,11 +8414,10 @@ index 298ee7d..6821d92 100644
 +    static int on_prepare = -1;
 +    if (on_prepare < 0) on_prepare = getenv("GCM_PRESENT_ON_PREPARE") ? 1 : 0;
 +    return on_prepare ? s_flip_request_count : s_flip_present_count;
-+}
+ }
  static u32  s_debug_level = CELL_GCM_DEBUG_LEVEL0;
  
- /* Display buffers */
-@@ -135,10 +147,18 @@ static volatile int s_flip_direct_pending = 0;
+@@ -135,10 +147,18 @@
   * second to build its next frame here, then queues the flip, and a beat in
   * between that reported a flip made it take the new one for done. It then
   * rebuilt the command segment the walker was still waiting in. */
@@ -8420,7 +8437,7 @@ index 298ee7d..6821d92 100644
      if (s_flip_direct_pending) { s_flip_direct_pending = 0; return 1; }
      return 0;
  }
-@@ -156,9 +176,37 @@ int cellGcm_take_flip_pending(void)
+@@ -156,9 +176,37 @@
  /* The flip now names this buffer. The shared draw engine presents on the
   * host's call and only learns a buffer from 0xE944 by itself, so it would
   * keep presenting display buffer 0 for a title that flips through 0xFEAD. */
@@ -8458,21 +8475,21 @@ index 298ee7d..6821d92 100644
      if (rsx_draw_engine_enabled())
          rsx_draw_engine_note_flip(bufferId);
  }
-@@ -382,6 +430,13 @@ static u32 s_labels[CELL_GCM_MAX_LABEL_COUNT];
+@@ -381,6 +429,13 @@
+  * every FIFO-space / cellGcmFinish wait would hang. Placed just past the 256
   * label slots (0x03000000..0x03001000). Fields are big-endian (vm_write32). */
  #define GCM_CONTROL_GUEST_ADDR (VM_HLE_INJECT_BASE + 0x2000u)
- 
++
 +/* For timed waits on the RSX (runtime/syscalls/sys_cond.c): put, then get. */
 +static int gcm_rsx_behind(void)
 +{
 +    return vm_read32(GCM_CONTROL_GUEST_ADDR) != vm_read32(GCM_CONTROL_GUEST_ADDR + 4);
 +}
 +extern int (*g_sys_cond_rsx_behind)(void);
-+
+ 
  /* Synthetic guest code EA for the FIFO command-buffer-full callback. The title's
   * inline gcmReserve calls context->callback(context, count) when `current` nears
-  * `end`; we point the context's callback OPD at this EA and register it in the
-@@ -597,6 +652,7 @@ u32 cellGcmSetupContext(u32 ctx_out_addr, u32 cmdSize, u32 ioSize, u32 ioAddress
+@@ -597,6 +652,7 @@
  {
      if (cmdSize < 0x10000)
          cmdSize = 0x10000;
@@ -8480,7 +8497,7 @@ index 298ee7d..6821d92 100644
  
      /* PSL1GHT's gcmInitBody passes ioAddress = 0, expecting gcm to allocate the
       * IO region itself (the official SDK has the app allocate and pass it).
-@@ -775,9 +831,16 @@ static atomic_flag s_gcm_pumping = ATOMIC_FLAG_INIT;
+@@ -775,9 +831,16 @@
   * and mark a vblank+flip tick pending for the main thread to deliver. */
  static u32 s_fifo_getoff;   /* tentative: defined below */
  
@@ -8497,7 +8514,7 @@ index 298ee7d..6821d92 100644
      /* GCM_FLIP_NEEDS_FIFO=1: only mark a flip pending once the walker has
       * actually consumed up to `put`.
       *
-@@ -840,6 +903,13 @@ void* ppu_gcm_wait_pump(void (**pump)(void))
+@@ -840,6 +903,13 @@
  
  void ppu_gcm_pump(void)
  {
@@ -8511,7 +8528,7 @@ index 298ee7d..6821d92 100644
      if (!GCM_PUMP_TRY_ENTER()) return;
      long p = (long)GCM_PENDING_TAKE();
      u64 user = GCM_USER_PENDING_TAKE();
-@@ -850,10 +920,34 @@ void ppu_gcm_pump(void)
+@@ -850,10 +920,34 @@
                 if ((calls % 20000) == 0)
                     fprintf(stderr, "[gcm-pump] calls=%u vblank=%u flip=%u vcount=%u%c",
                             calls, nv, nf, s_vblank_count, 10); } }
@@ -8550,7 +8567,7 @@ index 298ee7d..6821d92 100644
      }
      if (p & 2) {
          /* Delivery waits for a guest thread to reach an HLE call or a timer
-@@ -867,10 +961,18 @@ void ppu_gcm_pump(void)
+@@ -867,10 +961,18 @@
          if (s_flip_tick_seq == s_flip_req_seq)
              s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
          FLIP_UNLOCK();
@@ -8573,7 +8590,7 @@ index 298ee7d..6821d92 100644
      }
      if (user) {
          u32 cmd = (u32)user;
-@@ -882,7 +984,7 @@ void ppu_gcm_pump(void)
+@@ -882,7 +984,7 @@
  
  /* Back-compat: the old direct entry points now just mark a tick pending (so any
   * caller other than the ticker still works) -- delivery stays on the main thread. */
@@ -8582,7 +8599,7 @@ index 298ee7d..6821d92 100644
  /* Only deliver a flip completion when a flip is actually outstanding.
   *
   * Ticking unconditionally at 60 Hz fires the guest's flip handler even when
-@@ -895,15 +997,36 @@ void cellGcmTickVBlank(void) { s_vblank_count++; GCM_PENDING_SET(1); }
+@@ -895,15 +997,36 @@
   * and its handler runs code that puts the status back to WAITING, so the
   * poll never saw DONE and the game never rendered another frame. On hardware
   * the callback IS the flip interrupt -- no flip, no callback. */
@@ -8621,7 +8638,7 @@ index 298ee7d..6821d92 100644
  }
  
  /* Drain the game's GCM FIFO into the RSX backend. Called from the present thread
-@@ -946,6 +1069,14 @@ unsigned long long ps3_ms_now(void)
+@@ -946,6 +1069,14 @@
  static u32 s_sema_offset = 0;   /* NV406E semaphore offset (label window) */
  static int s_sema_blocked_pass = 0;   /* this drain stopped on a semaphore acquire */
  static int s_park_pass = 0;           /* this drain stopped on a self-JUMP park */
@@ -8636,7 +8653,7 @@ index 298ee7d..6821d92 100644
  /* The park the walker is waiting on (0 = none), the `put` it saw there, and
   * since when it has stood with that put: the jump-park grace in the walker. */
  static u32 park_off, park_put;
-@@ -1106,6 +1237,11 @@ static void nv3089_engine_wrote(u32 dst_pitch, u32 x0, u32 y0, u32 x1, u32 y1)
+@@ -1106,6 +1237,11 @@
   * vm_read32/vm_write32 pair does cancel, so the bytes move verbatim. */
  static void gcm_row_copy(u32 d, u32 s, u32 n)
  {
@@ -8648,7 +8665,7 @@ index 298ee7d..6821d92 100644
      extern u8* vm_base;
      const u32 l0 = d & ~127u, l1 = (d + n - 1) & ~127u;
      int reserved = 0;
-@@ -1118,7 +1254,7 @@ static void gcm_row_copy(u32 d, u32 s, u32 n)
+@@ -1118,7 +1254,7 @@
      spu_lockline_unlock();
  }
  
@@ -8657,7 +8674,7 @@ index 298ee7d..6821d92 100644
  {
      u32 out_w = s_nv3089.out_sz & 0xFFFF, out_h = s_nv3089.out_sz >> 16;
      u32 out_x = s_nv3089.out_pt & 0xFFFF, out_y = s_nv3089.out_pt >> 16;
-@@ -1320,6 +1456,138 @@ static void nv3089_blit(void)
+@@ -1320,6 +1456,138 @@
                 out_w, out_h, f, src, in_pitch, dst, dst_pitch, out_x, out_y); } }
  }
  
@@ -8796,7 +8813,7 @@ index 298ee7d..6821d92 100644
  static void gcm_2d_method(u32 subch, u32 method, u32 data)
  {
      /* GCM2D_TRACE=1: histogram of (subchannel, method) actually seen. The
-@@ -1545,9 +1813,14 @@ void gcm_forget_spu_blocks(void)
+@@ -1545,9 +1813,14 @@
      s_spu_blk_w = 0;
  }
  
@@ -8811,7 +8828,7 @@ index 298ee7d..6821d92 100644
      u32 room = 0;
      u32 io = gcm_ea2io_range(ea, &room);
      if (io == 0xFFFFFFFFu || size > room) return;   /* not in RSX-visible memory */
-@@ -1783,8 +2056,99 @@ void* cellGcm_fifo_kick_event(void)
+@@ -1783,8 +2056,99 @@
   * starved guest still paid the full tick. Waiting here instead costs nothing
   * when no one kicks (the timeout is the old sleep) and drains immediately when
   * someone does. */
@@ -8867,9 +8884,9 @@ index 298ee7d..6821d92 100644
 +          const LONGLONG spin = f.QuadPart / 50000;   /* 20 us */
 +          int sleeping = 0;
 +#ifndef _WIN32
-+          /* Linux (the sleep above is Windows only; there ps3_host_sleep_on is a sched_yield): on a
-+           * CPU of 8 logical CPUs or fewer, after 30 us of watching, nap 50 us between looks
-+           * instead of spinning. sched_yield (SwitchToThread here) returns at once when nothing
++          /* POSIX, when the sleep above is off (GCM_WALK_SLEEP=0, PS3_SPIN_SLEEP=0, or the "off"
++           * half of PS3_AB_PERIOD): on a CPU of 8 logical CPUs or fewer, after 30 us of watching,
++           * nap 50 us between looks instead of spinning. sched_yield (SwitchToThread here) returns at once when nothing
 +           * else is queued on the core, so this loop was a spin: on a Steam Deck about a fifth of
 +           * the walker's time, on a core the SPU threads that fill the hole could have had. A
 +           * stop that ends within 30 us is still seen at once, a longer one at most 50 us late.
@@ -8911,7 +8928,7 @@ index 298ee7d..6821d92 100644
      static int on = -1;
      if (on < 0) { const char* e = getenv("GCM_FIFO_KICK"); on = (e && *e == '0') ? 0 : 1; }
      HANDLE ev = on ? (HANDLE)cellGcm_fifo_kick_event() : NULL;
-@@ -1952,7 +2316,29 @@ void cellGcm_rsx_process_fifo(void)
+@@ -1952,7 +2316,29 @@
      g_gcm_drain_tid = GetCurrentThreadId();
      const uint64_t ft_t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
      AcquireSRWLockExclusive(&s_gcm_fifo_lock);
@@ -8942,7 +8959,7 @@ index 298ee7d..6821d92 100644
      ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
      if (ft_t0) {
          const uint64_t t1 = ps3_ft_now();
-@@ -1988,16 +2374,42 @@ static int gcm_get_eq_put(void)
+@@ -1988,14 +2374,40 @@
   * drain: the walker hands every data word through these checks, a million a
   * second in God of War HD gameplay, and it used to test each switch on its
   * own for every word. */
@@ -8960,16 +8977,16 @@ index 298ee7d..6821d92 100644
                getenv("GCM_VAL_WATCH") || getenv("GCM_METHOD_HIST") || getenv("RSX_LIVE_FEED_DBG") ||
 -              rsx_live_draw_enabled() || rsx_draw_engine_enabled()) ? 1 : 0;
 +              getenv("GCM_LIVE_PER_WORD") || rsx_draw_engine_enabled()) ? 1 : 0;
-+    return on;
+     return on;
 +}
 +static int gcm_word_diag(void)
 +{
 +    static int on = -1;
 +    if (on < 0)
 +        on = (gcm_word_diag_env() || rsx_live_draw_enabled()) ? 1 : 0;
-     return on;
- }
- 
++    return on;
++}
++
 +/* With the legacy state off, the 3D methods gcm_3d_method still has to see:
 + * the ones rsx_process_method acts on outside its state, and the two the
 + * walker answers itself (GET_REPORT and its DMA context). */
@@ -8982,12 +8999,10 @@ index 298ee7d..6821d92 100644
 +    default:
 +        return 0;
 +    }
-+}
-+
+ }
+ 
  /* One data word for the 3D engine (subchannel 0, or 1 unless GCM_SUBCH1_2D),
-  * plus the methods whose answer the walker writes itself. */
- static void gcm_3d_method(rsx_state* st, u32 m, u32 v, int legacy_state_live)
-@@ -2074,14 +2486,27 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2074,14 +2486,27 @@
      if (!s_gcm_context_ea && !s_gcm_syscall_mode) return;
      if (!s_inited) { rsx_state_init(&s_state); s_inited = 1; }
      const int wdiag = gcm_word_diag();
@@ -9018,7 +9033,7 @@ index 298ee7d..6821d92 100644
  
  
      /* Walk the FIFO exactly like the RSX: chase the guest-written `put` (an IO
-@@ -2091,6 +2516,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2091,6 +2516,7 @@
       * one flat ring (cellmark), but PSL1GHT/Tiny3D immediately JUMPs into its
       * own command ring, so everything after the jump (including the reference
       * writes its waits spin on) silently never executed. */
@@ -9026,7 +9041,7 @@ index 298ee7d..6821d92 100644
      u32 put = vm_read32(GCM_CONTROL_GUEST_ADDR + 0);
      /* The words behind `put` were stored by another thread (the title, or the
       * recycle below) before it stored `put`. On x86 the hardware keeps loads
-@@ -2257,7 +2683,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2257,7 +2683,7 @@
           * skip is a faster decode, not a bigger tick, and VF5 depends on the
           * walker yielding at the cap (it lost 7 milestones when a whole run
           * cost one word). */
@@ -9035,7 +9050,7 @@ index 298ee7d..6821d92 100644
              const u32 page_end = (s_fifo_getoff | 0xFFFFFu) + 1u;
              const u32 lim = (put > s_fifo_getoff && put < page_end) ? put : page_end;
              u32 off = s_fifo_getoff + 4u, nea = ea + 4u;
-@@ -2302,12 +2728,14 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2302,12 +2728,14 @@
                            flips, 10); }
              if (PS3_FT_ON()) { const uint64_t t = ps3_ft_now();
                                 ps3_ft_span(PS3_FT_FLIP_FIFO, 0, w & 7u, 0, t, t); }
@@ -9051,7 +9066,7 @@ index 298ee7d..6821d92 100644
                  /* Not past `queued`: a resync may already have written off
                   * this flip. */
                  if (s_fifo_flips_reached != s_fifo_flips_queued) s_fifo_flips_reached++;
-@@ -2384,6 +2812,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2384,6 +2812,8 @@
                    }
                    why = "parked";
                    s_park_pass = 1;
@@ -9060,7 +9075,7 @@ index 298ee7d..6821d92 100644
                    break;
                }
                if (tgt < s_fifo_getoff) s_fifo_back_jumps++;
-@@ -2519,21 +2949,34 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2519,21 +2949,34 @@
               * which can match, are skipped. Most of a frame's words come this
               * way (God of War HD: about five million vertex-program microcode and
               * constant words a second). */
@@ -9102,7 +9117,7 @@ index 298ee7d..6821d92 100644
              for (u32 i = 0; i < count; i++) {
                  u32 dea = gcm_io2ea(s_fifo_getoff + 4 + i * 4);
                  if (!dea) break;
-@@ -2680,7 +3123,11 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2680,7 +3123,11 @@
                  if (mfull == 0xEB00u || mfull == 0xEB04u) {
                      cellGcmQueueUserCommand(vm_read32(dea));
                  } else if (mfull == 0xE920u || mfull == 0xE924u) {
@@ -9114,7 +9129,7 @@ index 298ee7d..6821d92 100644
                  } else if (subch == 0 || (subch == 1 && !s1_2d)) {
                      gcm_3d_method(&s_state, m, vm_read32(dea), legacy_state_live);
                  } else
-@@ -2757,6 +3204,10 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2757,6 +3204,10 @@
       * ring start, and the resync dropped them: inFAMOUS 2 stopped presenting
       * for good that way in about one New Marais run in five ("stuck-get" at a
       * self-jump with no "jump-park" before it). */
@@ -9125,7 +9140,7 @@ index 298ee7d..6821d92 100644
      { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
        if (s_sema_blocked_pass || s_park_pass) {
            stuck = 0; last = s_fifo_getoff; s_sema_blocked_pass = 0; s_park_pass = 0; }
-@@ -3102,10 +3553,12 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -3102,10 +3553,12 @@
      /* in_fifo: the flip sits in the command stream as a GCM_FLIP_MARKER, and
       * the drain does this half when it reaches it (see the 0xFEAD case). */
      if (!in_fifo) {
@@ -9139,19 +9154,20 @@ index 298ee7d..6821d92 100644
      }
      /* Flip requested but not yet shown: a subsequent cellGcmSetWaitFlip blocks
       * until the present thread's cellGcmTickFlip marks it done (vsync). */
-@@ -3214,9 +3667,9 @@ s32 cellGcmSetPrepareFlip(void* ctx, u32 bufferId)
+@@ -3214,9 +3667,9 @@
      if (!s_display_buffer_set[bufferId])
          return CELL_GCM_ERROR_INVALID_VALUE;
  
 -    printf("[cellGcmSys] SetPrepareFlip(bufferId=%u)\n", bufferId);
-+    { static int said; if (said < 4) { said++; printf("[cellGcmSys] SetPrepareFlip(bufferId=%u)\n", bufferId); } }
- 
+-
 -    gcm_set_current_display_buffer(bufferId);
++    { static int said; if (said < 4) { said++; printf("[cellGcmSys] SetPrepareFlip(bufferId=%u)\n", bufferId); } }
++
 +    gcm_prepared_push(bufferId);
      s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
      s_flip_request_count++;
      s_last_flip_time = get_timestamp_ns();
-@@ -4231,7 +4684,8 @@ u32 cellGcmGetDefaultSegmentWordSize(void)
+@@ -4231,7 +4684,8 @@
  /* Immediate flip — perform flip right now */
  s32 cellGcmSetFlipImmediate(u32 bufferId)
  {
@@ -17471,10 +17487,9 @@ diff --git a/runtime/ppu/ppu_hle.cpp b/runtime/ppu/ppu_hle.cpp
       * an HLE returning a value outside guest RAM (>= 0x10000000) that is not a
       * CELL_ERROR code (0x8001xxxx / 0x8002xxxx) is leaking a truncated HOST
 diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
-index 9309f2d3..e8692957 100644
 --- a/runtime/ppu/ppu_loader.cpp
 +++ b/runtime/ppu/ppu_loader.cpp
-@@ -862,6 +862,8 @@ extern "C" int  spu_coh_is_reserved(uint32_t addr);
+@@ -862,6 +862,8 @@
  extern "C" void spu_lockline_lock(void);
  extern "C" void spu_lockline_unlock(void);
  extern "C" void spu_coh_notify_write(uint32_t addr);
@@ -17483,7 +17498,7 @@ index 9309f2d3..e8692957 100644
  
  /* ---------------------------------------------------------------------------
   * lwarx/stwcx. cross-thread reservation invalidation.
-@@ -1070,11 +1072,12 @@ extern "C" int ppu_stwcx32(uint64_t ea, uint32_t expected, uint32_t val)
+@@ -1070,11 +1072,12 @@
      int ok = __atomic_compare_exchange_n((uint32_t*)(vm_base + ea), &exp_raw, new_raw,
                                           0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
      if (coh) {
@@ -17497,7 +17512,7 @@ index 9309f2d3..e8692957 100644
      /* PPU_CASWATCH=<hex ea>: log successful stwcx. on that 128-byte line.
       * PPU_WWATCH hooks plain stores only; an atomic counter (a semaphore an SPU
       * spins on) is written exclusively through here and looked untouched. */
-@@ -1143,11 +1146,12 @@ extern "C" int ppu_stdcx64(uint64_t ea, uint64_t expected, uint64_t val)
+@@ -1143,11 +1146,12 @@
      }
      int ok = __atomic_compare_exchange_n((uint64_t*)(vm_base + ea), &exp_raw, new_raw, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
      if (coh) {
@@ -17511,7 +17526,25 @@ index 9309f2d3..e8692957 100644
      if (ok && g_ww_lo && (uint32_t)ea + 4u >= g_ww_lo && (uint32_t)ea < g_ww_hi) {
          /* Report as two words: the watch window is word-granular, and a
           * doubleword CAS on a counter pair is exactly the case worth seeing. */
-@@ -1574,8 +1578,9 @@ extern "C" int* ps3_ppu_vcall_sp_slot(void) { return &g_vcall_sp; }
+@@ -1415,7 +1419,8 @@
+     if (!en) return 0;                                    /* let it land */
+     { static int sweep = -1;
+       if (sweep < 0) { const char* e = getenv("PS3_NULL_SWEEP"); sweep = e ? 1 : 0; }
+-      if (sweep) { g_null_sweep_hi = 1; g_null_sweep_last = a;
++      if (sweep) { if (!g_null_sweep_hi) ppu_st_page_all(PPU_ST_PAGE_SWEEP, 1);
++                   g_null_sweep_hi = 1; g_null_sweep_last = a;
+                    g_null_sweep_tid = g_active_ctx
+                                     ? (unsigned)g_active_ctx->thread_id : 0u; } }
+     { static long n = 0;
+@@ -1477,6 +1482,7 @@
+         return 1;                       /* still the same sweep: drop */
+     }
+     g_null_sweep_hi = 0;                /* pattern broken: it is over */
++    ppu_st_page_all(PPU_ST_PAGE_SWEEP, 0);
+     { static int said = 0;
+       if (!said) { said = 1;
+           fprintf(stderr, "[null-write] sweep contained, ended at 0x%08X\n",
+@@ -1574,8 +1580,9 @@
          if (spu_coh_line_reserved((uint32_t)(a))) {                           \
              spu_lockline_lock();                                              \
              memcpy(vm_base + (uint32_t)(a), (src), (n));                      \
@@ -17522,7 +17555,7 @@ index 9309f2d3..e8692957 100644
          } else {                                                              \
              memcpy(vm_base + (uint32_t)(a), (src), (n));                      \
          }                                                                     \
-@@ -2139,6 +2144,7 @@ typedef void (*ppu_fn)(ppu_context*);
+@@ -2139,6 +2146,7 @@
  static uint32_t g_addr[PPU_HASH_SIZE];
  static ppu_fn   g_fn[PPU_HASH_SIZE];
  static uint32_t g_fn_count = 0;
@@ -17530,7 +17563,7 @@ index 9309f2d3..e8692957 100644
  
  extern "C" void ppu_register_function(uint64_t addr, ppu_fn fn)
  {
-@@ -2147,8 +2153,10 @@ extern "C" void ppu_register_function(uint64_t addr, ppu_fn fn)
+@@ -2147,8 +2155,10 @@
      /* Bounded probe: never loop past the whole table. A full table (function
       * count >= PPU_HASH_SIZE) would otherwise spin forever here at startup. */
      for (uint32_t probes = 0; probes < PPU_HASH_SIZE; probes++) {
@@ -17543,7 +17576,7 @@ index 9309f2d3..e8692957 100644
          i = (i + 1) & PPU_HASH_MASK;
      }
      static int warned = 0;
-@@ -2164,7 +2172,24 @@ extern "C" void ppu_register_function(uint64_t addr, ppu_fn fn)
+@@ -2164,7 +2174,24 @@
   * Built lazily on first use (registration is boot-time-only). */
  static struct { void* host; uint32_t guest; } g_inv[PPU_HASH_SIZE];
  static uint32_t g_inv_n = 0;
@@ -17568,10 +17601,12 @@ index 9309f2d3..e8692957 100644
  {
      if (!g_inv_n) {
          for (uint32_t i = 0; i < PPU_HASH_SIZE; i++)
-@@ -2185,6 +2210,25 @@ extern "C" uint32_t ppu_prof_resolve_host(void* ra)
+@@ -2183,6 +2210,25 @@
+     while (lo < hi) { uint32_t mid = (lo + hi) / 2;
+         if (g_inv[mid].host <= ra) lo = mid + 1; else hi = mid; }
      return lo ? g_inv[lo - 1].guest : 0;
- }
- 
++}
++
 +static ppu_fn ppu_lookup(uint32_t a);
 +
 +/* ppu_lookup for indirect calls. The table and its addresses are 3 MB, so the
@@ -17589,12 +17624,10 @@ index 9309f2d3..e8692957 100644
 +    ppu_fn fn = ppu_lookup(a);
 +    if (fn) { s.addr = a; s.gen = gen; s.fn = fn; }
 +    return fn;
-+}
-+
+ }
+ 
  static ppu_fn ppu_lookup(uint32_t a)
- {
-     uint32_t i = (a * 2654435761u) & PPU_HASH_MASK;
-@@ -2844,7 +2888,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
+@@ -2844,7 +2890,7 @@
          }
      }
  
@@ -17603,7 +17636,7 @@ index 9309f2d3..e8692957 100644
      if (!fn) {
          /* OPD-swap clobber fixup: a malformed memcpy (game func_0036FA74) writes
           * some handler/vtable OPDs as {TOC, func} (code & toc SWAPPED), so lifted
-@@ -3195,6 +3239,14 @@ extern "C" uint32_t g_sc_inflight[PS3_SC_INFLIGHT_MAX] = { 0 };
+@@ -3195,6 +3241,14 @@
  
  extern "C" void lv2_syscall(ppu_context* ctx)
  {
@@ -17618,7 +17651,7 @@ index 9309f2d3..e8692957 100644
      /* One-shot: PPU_GUARD_EA=<hex> arms the page guard on that address without
       * waiting for a store watch to fire. Armed here because lv2_syscall runs
       * early and unconditionally; used to measure how far a guest block clear
-@@ -3310,6 +3362,16 @@ extern "C" void lv2_syscall(ppu_context* ctx)
+@@ -3310,6 +3364,16 @@
          uint32_t len  = (uint32_t)ctx->gpr[5];
          uint32_t pwl  = (uint32_t)ctx->gpr[6];
          uint32_t wlen = len;
@@ -18513,10 +18546,17 @@ index a55afb05..13dd876e 100644
      printf("[boot] VFS root: %s\n", ppu_vfs_root);
  
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 5fc50208..fb6cc166 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
-@@ -144,7 +144,23 @@ void spu_jmp_no_unwind(void* env)
+@@ -14,6 +14,7 @@
+ 
+ #include "spu_dma.h"
+ #include "spu_coherency.h" /* lock-line lock + PPU-write coherence bitmap */
++#include "spu_coh_bitmap.h" /* ppu_st_page_all: the lifted stores' page gate */
+ #include "spu_helpers.h"   /* spu_splat_u32 / spu_ls_read128 (SMC microstep) */
+ #include "spu_lockstep.h"
+ #include "spu_interp.h"    /* spu_lifted_fn / spu_lifted_lookup -- defined below */
+@@ -144,7 +145,23 @@
  {
  #if defined(_WIN64) && defined(_MSC_VER)
      static int s_unwind = -1;
@@ -18541,7 +18581,7 @@ index 5fc50208..fb6cc166 100644
      if (!s_unwind) ((_JUMP_BUFFER*)env)->Frame = 0;
  #else
      (void)env;
-@@ -242,8 +258,11 @@ void spu_stop(spu_context* ctx)
+@@ -242,8 +259,11 @@
   * on entry to spu_run_with_halt and the caller's FPCR is put back on the way out: a run can
   * happen synchronously on a PPU thread (a workload dispatched from the PPU caller), whose
   * lifted floating point must keep round to nearest with denormals. Double precision restores
@@ -18555,7 +18595,7 @@ index 5fc50208..fb6cc166 100644
  static uint64_t spu_float_mode_enter(void)
  {
  #if defined(__aarch64__) && defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
-@@ -260,6 +279,19 @@ static uint64_t spu_float_mode_enter(void)
+@@ -260,6 +280,19 @@
      if (v == SPU_FPCR_RZFZ) return ~0ull;   /* nested run: the outer one restores */
      __asm__ volatile("msr fpcr, %0" :: "r"((uint64_t)SPU_FPCR_RZFZ));
      return v;
@@ -18575,7 +18615,7 @@ index 5fc50208..fb6cc166 100644
  #else
      return ~0ull;
  #endif
-@@ -268,6 +300,8 @@ static void spu_float_mode_leave(uint64_t outer)
+@@ -268,6 +301,8 @@
  {
  #if defined(__aarch64__) && defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
      if (outer != ~0ull) __asm__ volatile("msr fpcr, %0" :: "r"(outer));
@@ -18584,7 +18624,7 @@ index 5fc50208..fb6cc166 100644
  #else
      (void)outer;
  #endif
-@@ -363,6 +397,22 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+@@ -363,6 +398,22 @@
                fflush(stderr); } }
          SPU_DRAIN(ctx);
      }
@@ -18607,7 +18647,7 @@ index 5fc50208..fb6cc166 100644
      yz_lockstep_unregister(ctx);   /* leave the ring; hand the token onward */
      s_spu_halt_armed = outer_armed;
      if (outer_armed) memcpy(s_spu_halt_env, outer_env, sizeof(jmp_buf));
-@@ -432,8 +482,11 @@ static int spu_mfc_cache_enabled(void)
+@@ -432,8 +483,11 @@
      static atomic_int cached;
      int value = atomic_load_explicit(&cached, memory_order_relaxed);
      if (!value) {
@@ -18620,7 +18660,17 @@ index 5fc50208..fb6cc166 100644
          atomic_store_explicit(&cached, value, memory_order_relaxed);
      }
      return value == 2;
-@@ -856,6 +909,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -663,7 +717,8 @@
+       if (s_ae < 0) { const char* e = getenv("SPU_ATOM_EA");
+         s_aea = e ? (uint32_t)strtoul(e, 0, 16) & ~127u : 0; s_ae = s_aea ? 1 : 0;
+         if (s_ae == 1) { extern uint32_t g_barrier_sync_watch;
+-            g_barrier_sync_watch = s_aea; } /* arm PUTLLC OK/FAIL verdict log */ }
++            g_barrier_sync_watch = s_aea;   /* arm PUTLLC OK/FAIL verdict log */
++            ppu_st_page_all(PPU_ST_PAGE_WATCH, 1); } }
+       if (s_ae == 1 && ((uint32_t)ea & ~127u) == s_aea) {
+           static int _n = 0, s_cap = -1;
+           /* SPU_ATOM_EA_MAX=<n>: lines to print (default 48, 0 = unlimited). */
+@@ -856,6 +911,7 @@
               * successful PUTLLC, it does not report it lost. Already under the
               * lock-line lock, which is what spu_coh_notify_write expects. */
              ctx->resv_valid = 0;
@@ -18628,7 +18678,95 @@ index 5fc50208..fb6cc166 100644
              { static int s_w = -1;
                if (s_w < 0) s_w = getenv("SPU_PUTLLC_WHY") ? 1 : 0;
                if (s_w) { static unsigned long long n;
-@@ -2108,6 +2162,38 @@ static void spu_ovl_dump(spu_context* ctx, uint32_t ea, uint32_t lsa, const uint
+@@ -1673,7 +1729,7 @@
+  * read before the walk, so a registration that races the walk leaves the entry
+  * stale and the next lookup redoes it. */
+ typedef struct { uint32_t addr, gen; int image; spu_fn fn; } spu_lookup_memo;
+-#define SPU_LOOKUP_MEMO_SIZE 512   /* power of two */
++#define SPU_LOOKUP_MEMO_SIZE 2048   /* power of two */
+ static SPU_TLS spu_lookup_memo t_lookup_memo[SPU_LOOKUP_MEMO_SIZE];
+ static spu_fn spu_lookup_memoized(uint32_t addr, int image_id)
+ {
+@@ -1763,7 +1819,7 @@
+     uint32_t id, lsa, rgen, residency;
+     int image, ovl, task;
+ } spu_dcache_ent;
+-#define SPU_DCACHE_ENTRIES 512u
++#define SPU_DCACHE_ENTRIES 4096u
+ static SPU_TLS spu_dcache_ent t_dcache[SPU_DCACHE_ENTRIES];
+ static uint32_t s_dcache_next_id;
+ static unsigned long long s_dcache_hits, s_dcache_misses, s_dcache_shadow_bad;
+@@ -1778,7 +1834,33 @@
+     }
+     return m;
+ }
+-static void spu_dcache_residency_changed(spu_context* ctx) { ctx->dcache_residency++; }
++/* The two cache-key words of a context name the CONTENTS of its resident code slots, not when
++ * they last changed: a 64-bit hash of every slot's span, image and verify state, worked out again
++ * (spu_dcache_sign) after any change has zeroed dcache_id. They used to be a lifetime id and a
++ * change counter, so each load of a job's code dropped every entry of the context -- and a job
++ * manager loads a job's code for every job it runs. In a GT5 race the four graphics workers ran
++ * thousands of short jobs a second, each resolving its branch targets from nothing: the resolver
++ * and its registry walks were a tenth of those threads. Keyed by contents, the entries of a job
++ * are still there the next time that job is loaded. */
++static void spu_dcache_residency_changed(spu_context* ctx) { ctx->dcache_id = 0; }
++static uint32_t spu_dcache_sign(spu_context* c)
++{
++    uint64_t h = 0x9E3779B97F4A7C15ull;
++    for (unsigned s = 0; s < 4; ++s) {
++        const uint64_t a = c->resident_code[s].image_id
++            ? ((uint64_t)c->resident_code[s].lsa << 32) | c->resident_code[s].size : 0;
++        const uint64_t b = c->resident_code[s].image_id
++            ? ((uint64_t)(uint32_t)c->resident_code[s].image_id << 32) |
++              (uint32_t)c->resident_code[s].verify_state : 0;
++        h = (h ^ a) * 0xFF51AFD7ED558CCDull; h ^= h >> 33;
++        h = (h ^ b) * 0xC4CEB9FE1A85EC53ull; h ^= h >> 29;
++    }
++    uint32_t id = (uint32_t)(h >> 32);
++    if (!id) id = 1;                       /* 0 means "not signed yet" */
++    c->dcache_residency = (uint32_t)h;
++    c->dcache_id = id;
++    return id;
++}
+ static void spu_dcache_shadow_stats(void)
+ {
+     const unsigned long long n = __atomic_load_n(&s_dcache_hits, __ATOMIC_RELAXED) +
+@@ -1795,10 +1877,7 @@
+     if (!mode || !ctx) return spu_lifted_lookup_full(ctx, lsa);
+     spu_context* c = (spu_context*)ctx;
+     uint32_t id = c->dcache_id;
+-    if (!id) {
+-        do id = __atomic_add_fetch(&s_dcache_next_id, 1, __ATOMIC_RELAXED); while (!id);
+-        c->dcache_id = id;
+-    }
++    if (!id) id = spu_dcache_sign(c);
+     /* Read before the resolver walks the registry: an entry is never keyed by
+      * a count newer than the registry it saw. */
+     const uint32_t rgen = __atomic_load_n(&s_registry_count, __ATOMIC_ACQUIRE);
+@@ -1827,8 +1906,12 @@
+     }
+     const spu_lifted_fn fn = spu_lifted_lookup_full(ctx, lsa);
+     if (fn) {
+-        /* The resolver may have verified a pending slot; the entry records the
+-         * residency it resolved against, read after it. */
++        /* The resolver may have verified a pending slot, which changes the
++         * signature: the entry records the one it resolved against, read
++         * after it, and goes in the slot that signature selects. */
++        id = c->dcache_id;
++        if (!id) id = spu_dcache_sign(c);
++        e = &t_dcache[((lsa >> 2) ^ (id * 0x9E3779B1u)) & (SPU_DCACHE_ENTRIES - 1)];
+         e->fn = fn; e->id = id; e->lsa = lsa; e->rgen = rgen;
+         e->residency = c->dcache_residency; e->image = c->image_id;
+         e->ovl = c->resident_ovl; e->task = c->resident_task;
+@@ -1951,6 +2034,7 @@
+         for (unsigned i = 0; match && i < o->code_count; ++i)
+             match = !memcmp(ctx->ls + o->code[i].lsa, o->code[i].bytes, o->code[i].size);
+         *state = match ? SPU_OVERLAY_VERIFIED : SPU_OVERLAY_REJECTED;
++        spu_dcache_residency_changed(ctx);   /* the verify state is part of the signature */
+     }
+     return *state == SPU_OVERLAY_VERIFIED;
+ }
+@@ -2108,6 +2192,38 @@
      t_next_ea = ea + size; t_next_lsa = lsa + size;
  }
  
@@ -18667,7 +18805,7 @@ index 5fc50208..fb6cc166 100644
  /* SPU_LOCKGUARD=<hex ea>: the word at that EA is a ticket lock (serving,next
   * halfwords). Log any SPU write that moves either halfword by anything other
   * than 0 or +1 -- a stale whole-line store rolling the lock back. `src` is the
-@@ -2133,6 +2219,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -2133,6 +2249,7 @@
  {
      uint32_t lsa = (uint32_t)(ls - ctx->ls);
      spu_ovl_dump(ctx, ea, lsa, ls, size);
@@ -18826,12 +18964,13 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
  
  void spu_coh_reserve(spu_context* ctx, uint32_t ea)
  {
-@@ -149,12 +266,15 @@
+@@ -149,12 +266,16 @@
       * the bitmap byte. */
      uint32_t line = ea >> SPU_COH_LINE_SHIFT;
      const unsigned char bit = (unsigned char)(1u << (line & 7));
 -    if (!(s_coh_bitmap[line >> 3] & bit))
 +    if (!(s_coh_bitmap[line >> 3] & bit)) {
++        ppu_st_page_mark(ea);               /* before the bit: see spu_coh_bitmap.h */
          s_coh_bitmap[line >> 3] |= bit;
 +        s_coh_marked++;
 +    }
@@ -18843,7 +18982,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
      for (spu_coh_entry* entry = s_coh_ctxs; entry; entry = entry->next)
          if (entry->ctx == ctx) { __atomic_store_n(&ctx->coh_listed, 1, __ATOMIC_RELAXED); return; }
      spu_coh_entry* entry = (spu_coh_entry*)malloc(sizeof(*entry));
-@@ -175,6 +295,7 @@
+@@ -175,6 +296,7 @@
      /* Arming the existing bitmap makes PPU stores/CAS and MFC writes use
       * the same serialized commit/notify path as SPU reservations. */
      spu_coh_reserve(NULL, ea);
@@ -18851,7 +18990,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
      watch->line = ea & ~127u;
      watch->wake = wake;
      watch->opaque = opaque;
-@@ -188,6 +309,7 @@
+@@ -188,6 +310,7 @@
          if (*link != watch) continue;
          *link = watch->next;
          watch->next = NULL;
@@ -18859,7 +18998,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
          return;
      }
  }
-@@ -225,6 +347,7 @@
+@@ -225,6 +348,7 @@
          break;
      }
      __atomic_store_n(&ctx->coh_listed, 0, __ATOMIC_RELAXED);
@@ -18867,7 +19006,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
      spu_lockline_unlock();
  }
  
-@@ -245,6 +368,7 @@
+@@ -245,6 +369,7 @@
              if (PS3_LOG_FIRST(_n, 16))
                  fprintf(stderr, "[spu-coh] leaked ctx %p (img=%d) dropped at thread exit\n",
                          (void*)c, entry->ctx->image_id);
@@ -18875,7 +19014,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
              *link = entry->next;
              free(entry);
          } else {
-@@ -343,8 +467,53 @@
+@@ -343,8 +468,53 @@
      __atomic_store_n(&ctx->resv_valid, 0, __ATOMIC_RELAXED);
      __atomic_store_n(&ctx->resv_ea, ea, __ATOMIC_RELAXED);
      __atomic_store_n(&ctx->resv_valid, 1, __ATOMIC_RELAXED);
@@ -18929,7 +19068,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
  }
  
  void spu_coh_notify_write_except(uint32_t ea, const void* self)
-@@ -352,6 +521,7 @@
+@@ -352,6 +522,7 @@
      uint32_t line = ea & ~127u;
      ppu_resv_break_line(ea);
      spu_coh_writer_fence();
@@ -18937,13 +19076,15 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
      spu_coh_wake_watches(line);
      for (spu_coh_entry* entry = s_coh_ctxs; entry; entry = entry->next) {
          spu_context* c = entry->ctx;
-@@ -363,18 +533,85 @@
+@@ -363,18 +534,85 @@
              spu_ch_wake(c);
          }
      }
+-}
+-
 +    spu_coh_maybe_unmark(line, self);
- }
- 
++}
++
 +/* Lines whose PPU stores must reach a host-side scheduler at once: the request
 + * line of each live SPURS instance (wklReadyCount1 and wklSignal1 live there).
 + * The scheduler wakes immediately on an SPU commit to that line (the PUTLLC
@@ -19024,7 +19165,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
              SPU_EVENT_SET(c, SPU_EVENT_LR);
              __atomic_store_n(&c->resv_valid, 0, __ATOMIC_RELAXED);   /* reservation lost, PUTLLC must fail */
              /* SPU_PUTLLC_WHY=1: name the agent that killed it. A PUTLLC that
-@@ -393,8 +630,11 @@
+@@ -393,8 +631,11 @@
              spu_ch_wake(c);
          }
      }
@@ -19157,7 +19298,7 @@ diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
  #elif SPU_LS_FAST
      uint32_t w0 = SPU_BSWAP32(val._u32[0]), w1 = SPU_BSWAP32(val._u32[1]);
      uint32_t w2 = SPU_BSWAP32(val._u32[2]), w3 = SPU_BSWAP32(val._u32[3]);
-@@ -740,6 +777,49 @@
+@@ -740,6 +777,63 @@
      }
  #endif
      if (__builtin_expect(g_spu_ls_wdiag != 0, 0))
@@ -19191,6 +19332,20 @@ diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
 +#endif
 +    return v;
 +}
++/* lqd/lqx in a read-modify-write loop (spu_lifter.py, its store forwarding): fa/fv are the
++ * function's most recent quadword store (fa its 16-byte aligned address, 1 when unknown). A load
++ * of that quadword takes the stored value instead of a round trip through the byte-swapped
++ * local store, which the next pass of a loop that stores the quadword it loads waits on. */
++SPU_LS_INLINE u128 spu_ls_lq_fwd(const spu_context* ctx, const uint8_t* ls, int rdiag, uint32_t lsa,
++                                 uint32_t fa, u128 fv)
++{
++    if ((lsa & (SPU_LS_MASK & ~0xFu)) == fa) {
++        if (__builtin_expect(rdiag != 0, 0))
++            spu_ls_read_diag(ctx, lsa);
++        return fv;
++    }
++    return spu_ls_lq(ctx, ls, rdiag, lsa);
++}
 +SPU_LS_INLINE void spu_ls_sq(spu_context* ctx, uint8_t* ls, int wdiag, uint32_t lsa, u128 val)
 +{
 +    lsa &= SPU_LS_MASK & ~0xFu;
@@ -19207,7 +19362,7 @@ diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
          spu_ls_write_diag(ctx, lsa, val);
  }
  
-@@ -1044,6 +1124,41 @@
+@@ -1044,6 +1138,41 @@
      } while (0)
  #endif
  
@@ -20030,7 +20185,7 @@ index 66eef25c..b7c2e52d 100644
 diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread.c
 --- a/runtime/syscalls/sys_ppu_thread.c
 +++ b/runtime/syscalls/sys_ppu_thread.c
-@@ -26,6 +26,7 @@
+@@ -26,11 +26,14 @@
  #include "ps3emu/ps3_tprof.h"            /* PS3_TPROF: in-process thread samples */
  #include <string.h>
  #include <stdio.h>
@@ -20038,7 +20193,14 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
  #include <stdlib.h>   /* getenv (else return value truncated to int on x64) */
  #include "ps3emu/log_first.h"
  #include "ps3emu/thread_name.h"
-@@ -180,6 +181,12 @@
+ #ifndef _WIN32
+ #include <errno.h>
++#include <unistd.h>         /* sysconf: ppu_small_host */
++#include <sys/resource.h>   /* getrusage: ps3_ab_frame */
+ #endif
+ 
+ /* Host stack reserved per guest thread, for pthread_attr_setstacksize. The
+@@ -180,6 +183,12 @@
  {
      ppu_thread_info* info = (ppu_thread_info*)param;
      ps3_thread_name("ppu %s", info->name);
@@ -20051,7 +20213,7 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
  
  #ifdef _WIN32
      /* Reserve stack for the STACK_OVERFLOW handler, same as main() does for the
-@@ -436,8 +443,14 @@
+@@ -436,8 +445,14 @@
      int slot = find_free_slot();
      if (slot < 0) {
          table_unlock();
@@ -20066,7 +20228,7 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
  
      ppu_thread_info* t = &g_ppu_threads[slot];
      memset(t, 0, sizeof(*t));
-@@ -660,6 +673,10 @@
+@@ -660,6 +675,10 @@
      uint64_t tid          = LV2_ARG_U64(ctx, 0);
      uint32_t status_addr  = LV2_ARG_PTR(ctx, 1);
      { static int n=0; if(PS3_LOG_FIRST(n, 30)) fprintf(stderr,"[WAIT] ppu_thread_join(tid=%llu)\n", (unsigned long long)tid); }
@@ -20077,7 +20239,7 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
      ppu_thread_note_block(ctx->thread_id);   /* PS3_PRIO_START */
  
      table_lock();
-@@ -788,6 +805,183 @@
+@@ -788,6 +807,214 @@
  static unsigned long g_cdl_hits;
  static uint32_t g_yield_ctr;
  static uint32_t g_cdl_v0, g_cdl_s0, g_cdl_s1, g_cdl_s6;
@@ -20107,6 +20269,20 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
 +        checked_ms = now;
 +    }
 +#endif
++    return (int)small_host;
++}
++#else
++/* POSIX: the same small-host test, for ps3_host_spin_sleep (the yield nap above stays Windows only). */
++static int ppu_small_host(void)
++{
++    static volatile long small_host = -1;
++    static volatile long long checked_s = 0;
++    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
++    if (small_host < 0 || (long long)ts.tv_sec - checked_s >= 1) {
++        const long n = sysconf(_SC_NPROCESSORS_ONLN);
++        small_host = (n > 0 && n <= 8) ? 1 : 0;
++        checked_s = (long long)ts.tv_sec;
++    }
 +    return (int)small_host;
 +}
 +#endif
@@ -20210,6 +20386,10 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
 +        { FILETIME a, b, k, u; if (GetProcessTimes(GetCurrentProcess(), &a, &b, &k, &u))
 +              cpu = ((double)(((unsigned long long)k.dwHighDateTime << 32) | k.dwLowDateTime) +
 +                     (double)(((unsigned long long)u.dwHighDateTime << 32) | u.dwLowDateTime)) * 1e-7; }
++#else
++        { struct rusage ru; if (getrusage(RUSAGE_SELF, &ru) == 0)
++              cpu = (double)ru.ru_utime.tv_sec + ru.ru_utime.tv_usec * 1e-6 +
++                    (double)ru.ru_stime.tv_sec + ru.ru_stime.tv_usec * 1e-6; }
 +#endif
 +        if (seg >= 0 && now > seg_t0)
 +            fprintf(stderr, "[ab] %s: %llu game frames in %.2f s, %.2f a second, %.2f cores busy\n",
@@ -20231,7 +20411,15 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
 +    if (forced_nap >= 0) return forced_nap;
 +    return ppu_yield_nap_enabled();
 +#else
-+    return 0;
++    /* The same switches; PS3_YIELD_NAP only steers this here, the yield nap itself being Windows only. */
++    static int forced = -2;
++    if (forced == -2) { const char* e = getenv("PS3_SPIN_SLEEP"); forced = e ? (atoi(e) != 0) : -1; }
++    if (forced >= 0) return forced;
++    { const int ab = ps3_ab_on("spin"); if (ab >= 0) return ab; }
++    static int forced_nap = -2;
++    if (forced_nap == -2) { const char* e = getenv("PS3_YIELD_NAP"); forced_nap = e ? (atoi(e) != 0) : -1; }
++    if (forced_nap >= 0) return forced_nap;
++    return ppu_small_host();
 +#endif
 +}
 +
@@ -20254,14 +20442,19 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
 +    Sleep(1);
 +    return 0;
 +#else
-+    (void)ev; (void)us; sched_yield();
++    /* The shim's event wakes a condition variable, so a SetEvent ends this at once; the timeout is
++     * clock_nanosleep-grade (tens of microseconds of timer slack), not the 1 ms of a Win32 wait. */
++    extern DWORD ps3_wait_object_us(HANDLE h, unsigned us);   /* win32_compat.c */
++    if (ev) return ps3_wait_object_us((HANDLE)ev, us) == WAIT_OBJECT_0;
++    { struct timespec ts = { (time_t)(us / 1000000u), (long)(us % 1000000u) * 1000L };
++      nanosleep(&ts, NULL); }
 +    return 0;
 +#endif
 +}
  
  int64_t sys_ppu_thread_yield(ppu_context* ctx)
  {
-@@ -1182,11 +1376,7 @@
+@@ -1182,11 +1409,7 @@
            }
        } }
      (void)ctx;
@@ -20548,10 +20741,90 @@ index 1ffc9467..00f13b9f 100644
      /* Outside every known window: EINVAL. */
      expect("unmapped 0x3", 0x30000000u, 0x2, E_INVAL);
 diff --git a/tools/find_spu_functions.py b/tools/find_spu_functions.py
-index af16afd8..47d07046 100644
 --- a/tools/find_spu_functions.py
 +++ b/tools/find_spu_functions.py
-@@ -605,7 +605,7 @@ def find_end(start, insns_by_addr, sorted_starts, code_end):
+@@ -381,6 +381,80 @@
+     return targets
+ 
+ 
++def collect_bi_table_targets(insns, code, code_start, code_end, max_entries=64):
++    """Targets of a jump table that sits right after its `bi`, in position-
++    independent code:
++
++        lqx    $r28, $r84, $r30     <- $r84 = the table's address, kept in a register
++        rotqby $r27, $r28, $r29
++        a      $r2, $r27, $r84      <- entry + table base
++        bi     $r2
++        .word  0x4C, 0xFC, 0xFFFFFFB4, 0x144, ...   <- the table
++
++    No il/ila names the table (its address arrives in a register), so
++    collect_jump_table_targets never tries it, and none of the handlers is
++    lifted: GT5's Wws job at 0x015DF100 is a bytecode machine dispatched this
++    way, and ran its 2 KB of handlers in the interpreter, 5 M steps a second.
++
++    Every `bi` is tried: the words after it are a table while each is a small
++    signed offset (or absolute address) landing on an instruction start. Three
++    entries or more qualify; a false positive only adds an entry point at an
++    instruction boundary.
++    """
++    valid_starts = {ins.addr for ins in insns}
++    targets = set()
++    for ins in insns:
++        if ins.mnemonic != "bi":
++            continue
++        tbl = ins.addr + 4
++        off = tbl - code_start
++        entries = set()
++        for k in range(max_entries):
++            o = off + 4 * k
++            if o + 4 > len(code):
++                break
++            wrd = int.from_bytes(code[o:o + 4], "big")
++            if (wrd & 3) or not (wrd < 0x40000 or wrd >= 0xFFFC0000):
++                break
++            rel = (tbl + wrd) & 0x3FFFF
++            if rel in valid_starts and code_start <= rel < code_end and wrd != 0:
++                entries.add(rel)
++            elif wrd in valid_starts and wrd != 0:
++                entries.add(wrd)
++            else:
++                break
++        if len(entries) >= 3:
++            targets.update(entries)
++    return targets
++
++
++def collect_after_bi_targets(insns):
++    """The instruction after an unconditional `bi` (past nop/lnop padding) starts
++    something: `bi` never falls through. Usually a direct branch names it too,
++    but a function called only through a pointer kept in data has no such
++    branch, and position-independent code (GT5's Wws jobs) relocates those
++    pointers at run time, so no table scan can read them. Without a seed the
++    function is folded into the one before it and every call to it misses the
++    lookup and runs in the interpreter (GT5's job at 0x0159C180: LS 0x7938,
++    0x7660, 0x79F8, about 20,000 calls a second each in a race).
++
++    A word below 0x00200000 (the `stop` encodings: jump-table and data words)
++    is not seeded."""
++    by_addr = {ins.addr: ins for ins in insns}
++    targets = set()
++    for ins in insns:
++        if ins.mnemonic != "bi":
++            continue
++        a = ins.addr + 4
++        while a in by_addr and by_addr[a].mnemonic in ("nop", "lnop"):
++            a += 4
++        nxt = by_addr.get(a)
++        if nxt is None or nxt.mnemonic in ("stop", "stopd") or nxt.mnemonic.startswith("."):
++            continue
++        targets.add(a)
++    return targets
++
++
+ def collect_ila_continuation_targets(insns, code_start, code_end):
+     """Continuation addresses materialised as plain immediates:
+ 
+@@ -605,7 +679,7 @@
      return min(next_start, code_end)
  
  
@@ -20560,7 +20833,7 @@ index af16afd8..47d07046 100644
      if raw:
          # A raw local-store image: a SPURS job binary, which the title loads
          # from its own data files as a flat code+data blob rather than as an
-@@ -615,7 +615,7 @@ def detect_functions(buf, base_override=None, verbose=True, raw=False):
+@@ -615,7 +689,7 @@
          # spu_workload's SPU_DUMP_MISS, which is the only place these bytes
          # exist in one piece.
          base = base_override if base_override is not None else 0
@@ -20569,7 +20842,16 @@ index af16afd8..47d07046 100644
                                         "vaddr": base, "filesz": len(buf),
                                         "memsz": len(buf)}], "shs": []}
          text_off, text_va, text_size = 0, base, len(buf)
-@@ -728,12 +728,14 @@ def main():
+@@ -656,6 +730,8 @@
+     for t in (collect_link_register_targets(insns)
+               | collect_computed_branch_targets(insns)
+               | collect_jump_table_targets(insns, code, code_start, code_end)
++              | collect_bi_table_targets(insns, code, code_start, code_end)
++              | collect_after_bi_targets(insns)
+               | collect_ila_continuation_targets(insns, code_start, code_end)
+               | collect_duff_targets(insns, code_start, code_end)
+               | fptr_targets):
+@@ -728,12 +804,14 @@
                          "from the branch analysis")
      p.add_argument("--base", type=lambda x: int(x, 0), default=None,
                     help="Override the .text base address")
@@ -20586,10 +20868,271 @@ index af16afd8..47d07046 100644
      out_obj = [{"start": s, "end": e} for s, e in funcs]
      if args.out:
 diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
-index a657ba61..bda578dd 100644
 --- a/tools/ppu_lifter.py
 +++ b/tools/ppu_lifter.py
-@@ -1334,6 +1334,22 @@ class PPULifter:
+@@ -174,6 +174,7 @@
+ extern uint32_t             g_barrier_sync_watch;
+ extern uint32_t             g_null_sweep_hi;
+ extern const unsigned char* g_spu_coh_bits;   /* SPU-reserved lines, NULL until the first */
++extern unsigned char        g_ppu_st_page[];  /* per 4 KiB page: stores need the checks */
+ #ifdef __cplusplus
+ }
+ #endif
+@@ -191,6 +192,13 @@
+  * one compare. The range is the old checks' or narrower. The one address
+  * they also turned away, the gcm ref-poll word, is only special to vm_read32,
+  * so only the 32-bit load still tests it. */
++/* An aligned load or store is one atomic access (single-copy atomic, as on Cell), an unaligned
++ * one a memcpy. On x86-64 both are the same single mov, so the test is skipped there. */
++#if defined(__x86_64__) || defined(_M_X64)
++#  define PPU_MM_SPLIT 0
++#else
++#  define PPU_MM_SPLIT 1
++#endif
+ typedef struct ppu_mm { uint8_t* vb; int64_t ld_span, st_span; uint32_t poll; } ppu_mm;
+ static inline ppu_mm ppu_mm_take(void)
+ {
+@@ -214,14 +222,24 @@
+ {
+     return vm_mm_in(m->ld_span, ea, n);
+ }
+-static inline int vm_mm_st_ok(const ppu_mm* m, uint32_t ea, uint32_t n)
++/* Is a store to a flagged page still a plain store? Out of line: the lifted code only gets here
++ * on a page an SPU has reserved a line of, or while a store diagnostic is armed. */
++#if defined(__GNUC__)
++__attribute__((noinline, cold))
++#endif
++static int vm_mm_st_ok_page(uint32_t ea)
+ {
+-    if (!__builtin_expect(vm_mm_in(m->st_span, ea, n), 1) ||
+-        __builtin_expect((g_barrier_sync_watch | g_null_sweep_hi) != 0, 0))
+-        return 0;
++    if (g_ppu_st_page[ea >> 12] & 0xC0u) return 0;          /* a diagnostic is armed */
+     const unsigned char* bits = g_spu_coh_bits;
+     if (bits) { const uint32_t line = ea >> 7; if ((bits[line >> 3] >> (line & 7)) & 1u) return 0; }
+     return 1;
++}
++static inline int vm_mm_st_ok(const ppu_mm* m, uint32_t ea, uint32_t n)
++{
++    if (!__builtin_expect(vm_mm_in(m->st_span, ea, n), 1)) return 0;
++    /* One byte per 4 KiB page says whether anything below applies (spu_coh_bitmap.h). */
++    if (__builtin_expect(g_ppu_st_page[ea >> 12] == 0, 1)) return 1;
++    return vm_mm_st_ok_page(ea);
+ }
+ static inline uint8_t vm_read8_mm(const ppu_mm* m, uint64_t a)
+ {
+@@ -234,7 +252,7 @@
+     const uint32_t ea = (uint32_t)a;
+     if (__builtin_expect(vm_mm_ok(m, ea, 2), 1)) {   /* aligned: single-copy atomic, as on Cell */
+         uint16_t v;
+-        if (!(ea & 1u)) v = __atomic_load_n((const uint16_t*)(m->vb + ea), __ATOMIC_RELAXED);
++        if (PPU_MM_SPLIT && !(ea & 1u)) v = __atomic_load_n((const uint16_t*)(m->vb + ea), __ATOMIC_RELAXED);
+         else memcpy(&v, m->vb + ea, 2);
+         return __builtin_bswap16(v); }
+     return vm_read16(a);
+@@ -244,7 +262,7 @@
+     const uint32_t ea = (uint32_t)a;
+     if (__builtin_expect(vm_mm_ok(m, ea, 4), 1) && __builtin_expect(ea != m->poll, 1)) {   /* aligned: single-copy atomic, as on Cell */
+         uint32_t v;
+-        if (!(ea & 3u)) v = __atomic_load_n((const uint32_t*)(m->vb + ea), __ATOMIC_RELAXED);
++        if (PPU_MM_SPLIT && !(ea & 3u)) v = __atomic_load_n((const uint32_t*)(m->vb + ea), __ATOMIC_RELAXED);
+         else memcpy(&v, m->vb + ea, 4);
+         return __builtin_bswap32(v); }
+     return vm_read32(a);
+@@ -254,7 +272,7 @@
+     const uint32_t ea = (uint32_t)a;
+     if (__builtin_expect(vm_mm_ok(m, ea, 8), 1)) {   /* aligned: single-copy atomic, as on Cell */
+         uint64_t v;
+-        if (!(ea & 7u)) v = __atomic_load_n((const uint64_t*)(m->vb + ea), __ATOMIC_RELAXED);
++        if (PPU_MM_SPLIT && !(ea & 7u)) v = __atomic_load_n((const uint64_t*)(m->vb + ea), __ATOMIC_RELAXED);
+         else memcpy(&v, m->vb + ea, 8);
+         return __builtin_bswap64(v); }
+     return vm_read64(a);
+@@ -270,7 +288,7 @@
+     const uint32_t ea = (uint32_t)a;
+     if (__builtin_expect(vm_mm_st_ok(m, ea, 2), 1)) {   /* aligned: single-copy atomic, as on Cell */
+         const uint16_t be = __builtin_bswap16(v);
+-        if (!(ea & 1u)) __atomic_store_n((uint16_t*)(m->vb + ea), be, __ATOMIC_RELAXED);
++        if (PPU_MM_SPLIT && !(ea & 1u)) __atomic_store_n((uint16_t*)(m->vb + ea), be, __ATOMIC_RELAXED);
+         else memcpy(m->vb + ea, &be, 2);
+         return; }
+     vm_write16(a, v);
+@@ -280,7 +298,7 @@
+     const uint32_t ea = (uint32_t)a;
+     if (__builtin_expect(vm_mm_st_ok(m, ea, 4), 1)) {
+         const uint32_t be = __builtin_bswap32(v);
+-        if (!(ea & 3u)) __atomic_store_n((uint32_t*)(m->vb + ea), be, __ATOMIC_RELAXED);
++        if (PPU_MM_SPLIT && !(ea & 3u)) __atomic_store_n((uint32_t*)(m->vb + ea), be, __ATOMIC_RELAXED);
+         else memcpy(m->vb + ea, &be, 4);
+         return; }
+     vm_write32(a, v);
+@@ -290,7 +308,7 @@
+     const uint32_t ea = (uint32_t)a;
+     if (__builtin_expect(vm_mm_st_ok(m, ea, 8), 1)) {
+         const uint64_t be = __builtin_bswap64(v);
+-        if (!(ea & 7u)) __atomic_store_n((uint64_t*)(m->vb + ea), be, __ATOMIC_RELAXED);
++        if (PPU_MM_SPLIT && !(ea & 7u)) __atomic_store_n((uint64_t*)(m->vb + ea), be, __ATOMIC_RELAXED);
+         else memcpy(m->vb + ea, &be, 8);
+         return; }
+     vm_write64(a, v);
+@@ -951,6 +969,156 @@
+         out.append(f"{mbr.group(1)}if {cond_c} goto {target};  /* CR fusion: {mset.group('ta')} cmp, field shift {shift} */")
+         i += 2
+     return out
++
++
++# ---------------------------------------------------------------------------
++# Register cache
++#
++# Every guest load and store has an out-of-line slow path, and the compiler must
++# assume that call can change *ctx: so each ctx->gpr[n] read after a guest memory
++# access is a reload, and each write a store. In a loop that is most of the code.
++# _reg_cache keeps the GPRs, FPRs, CR, XER, LR and CTR in C locals instead. Their
++# address never escapes, so the compiler holds them in host registers across
++# guest memory accesses. *ctx is brought up to date only where something else
++# can look at it:
++#   - a line that passes ctx anywhere (a call, the trampoline drain, a syscall,
++#     an HLE call, a header helper taking ctx) stays exactly as lifted, working
++#     on ctx; the locals that may differ from ctx are written back before it and
++#     every local is reloaded after it (the compiler drops reloads nobody reads);
++#   - a return writes the locals back first.
++# Which locals may differ from ctx at a line is a forward dataflow over the
++# body's labels and gotos. It may include more than needed, which costs a store,
++# never correctness. Off unless PPU_REG_CACHE=1 at lift time: on Windows it made the generated C 43%
++# larger and the build 44% longer with no gain we could measure, so it is opt-in.
++# ---------------------------------------------------------------------------
++_RC_FIELD_RE = re.compile(r"ctx->(?:(gpr|fpr)\[(\d+)\]|(cr|xer|lr|ctr)\b)")
++_RC_ESCAPE_RE = re.compile(r"\bctx\b(?!->)")
++_RC_LABEL_RE = re.compile(r"^\s*(\w+):\s*$")
++_RC_GOTO_RE = re.compile(r"\bgoto\s+(\w+)\s*;")
++_RC_RETURN_RE = re.compile(r"\breturn\s*;")
++_RC_MIN_LINES = 16   # small bodies gain little, and setjmp_patch.py matches TOC stubs by shape
++
++
++def _rc_local(m) -> str:
++    if m.group(1):
++        return ("_g" if m.group(1) == "gpr" else "_fp") + m.group(2)
++    return "_c_" + m.group(3)
++
++
++def _rc_field(local: str) -> str:
++    if local.startswith("_g"):
++        return f"ctx->gpr[{local[2:]}]"
++    if local.startswith("_fp"):
++        return f"ctx->fpr[{local[3:]}]"
++    return "ctx->" + local[3:]
++
++
++def _rc_sort_key(local: str):
++    if local.startswith("_g"):
++        return (0, int(local[2:]))
++    if local.startswith("_fp"):
++        return (1, int(local[3:]))
++    return (2, local)
++
++
++def _rc_writes(text: str, locals_: set) -> set:
++    """Locals the (cache-form) line may assign or hand out the address of."""
++    out = set()
++    for loc in locals_:
++        if loc not in text:
++            continue
++        e = re.escape(loc)
++        if (re.search(r"\b" + e + r"\b\s*(?:<<|>>|[-+*/%&|^])?=(?!=)", text)
++                or re.search(r"&\s*" + e + r"\b", text)
++                or re.search(r"\b" + e + r"\b\s*(?:\+\+|--)", text)
++                or re.search(r"(?:\+\+|--)\s*" + e + r"\b", text)):
++            out.add(loc)
++    return out
++
++
++def _reg_cache(lines: list[str]) -> list[str]:
++    """Cache the scalar register file in locals (see above). `lines` is a body as
++    _function_def_lines emits it, without the PPU_MM_SNAP line or the closing brace.
++    Returns it unchanged when the pass does not apply."""
++    if os.environ.get("PPU_REG_CACHE") != "1" or len(lines) < _RC_MIN_LINES:
++        return lines
++    if re.search(r"ctx->(?:gpr|fpr)\[(?!\d+\])", "\n".join(lines)):
++        return lines   # an index the pass cannot name a local for
++    locals_ = set()
++    for l in lines:
++        for m in _RC_FIELD_RE.finditer(l):
++            locals_.add(_rc_local(m))
++    if not locals_:
++        return lines
++
++    n = len(lines)
++    cache = [_RC_FIELD_RE.sub(_rc_local, l) for l in lines]
++    verbatim = [bool(_RC_ESCAPE_RE.search(c)) for c in cache]
++    writes = [set() if verbatim[i] else _rc_writes(cache[i], locals_) for i in range(n)]
++    labels = {}
++    for i, l in enumerate(lines):
++        m = _RC_LABEL_RE.match(l)
++        if m:
++            labels[m.group(1)] = i
++    gotos = [[labels[t] for t in _RC_GOTO_RE.findall(l) if t in labels] for l in lines]
++    for i, l in enumerate(lines):
++        if any(t not in labels for t in _RC_GOTO_RE.findall(l)):
++            return lines   # a goto the pass cannot follow
++        # A line kept as lifted must leave the locals valid on every goto out of it:
++        # it may not write a field, and its calls must not fall through to a goto.
++        # The jump-table switch qualifies (its call is `default: ...; return;`).
++        if verbatim[i] and gotos[i]:
++            if _rc_writes(cache[i], locals_) or not l.strip().startswith("switch ("):
++                return lines
++
++    # Forward dataflow: which locals may differ from ctx on entry to each line.
++    dirty_in = [None] * n
++    dirty_in[0] = frozenset()
++    work = [0]
++    while work:
++        i = work.pop()
++        d = dirty_in[i]
++        out = frozenset() if verbatim[i] else d | writes[i]
++        succ = list(gotos[i])
++        s = lines[i].strip()
++        if i + 1 < n and s != "return;" and not re.fullmatch(r"goto\s+\w+\s*;", s):
++            succ.append(i + 1)
++        for j in succ:
++            nd = out if dirty_in[j] is None else dirty_in[j] | out
++            if nd != dirty_in[j]:
++                dirty_in[j] = nd
++                work.append(j)
++
++    def flush(ds) -> str:
++        return " ".join(f"{_rc_field(x)} = {x};" for x in sorted(ds, key=_rc_sort_key))
++
++    reload_all = " ".join(f"{x} = {_rc_field(x)};" for x in sorted(locals_, key=_rc_sort_key))
++    out_lines = [f"    auto {x} = {_rc_field(x)};" for x in sorted(locals_, key=_rc_sort_key)]
++    end_dirty = frozenset()
++    for i in range(n):
++        d = dirty_in[i]
++        if d is None:   # unreachable: leave it as lifted, in cache form
++            out_lines.append(cache[i] if not verbatim[i] else lines[i])
++            continue
++        if verbatim[i]:
++            if d:
++                out_lines.append(f"    {{ {flush(d)} }}  /* reg cache: write back */")
++            out_lines.append(lines[i])
++            out_lines.append(f"    {{ {reload_all} }}  /* reg cache: reload */")
++            end_dirty = frozenset()
++            continue
++        c = cache[i]
++        if _RC_RETURN_RE.search(c):
++            ds = d | writes[i]
++            if ds:
++                c = _RC_RETURN_RE.sub(lambda _m: f"{{ {flush(ds)} return; }}", c)
++        out_lines.append(c)
++        end_dirty = d | writes[i]
++    # Falling off the end of the body returns too.
++    s = lines[-1].strip()
++    if end_dirty and s != "return;" and not re.fullmatch(r"goto\s+\w+\s*;", s):
++        out_lines.append(f"    {{ {flush(end_dirty)} }}  /* reg cache: write back at exit */")
++    return out_lines
+ 
+ 
+ @dataclass
+@@ -1334,6 +1502,22 @@
          # _off_escapes misses it too -- and the reload got rewritten to the
          # CALLER's r25, a pointer, which then flowed into the carry chain. Every
          # ECDSA signature the firmware checked failed on that one word.
@@ -20612,7 +21155,7 @@ index a657ba61..bda578dd 100644
          _reg_snap = set()        # regs to snapshot from the register at entry
          _mem_snap = {}           # reg -> offset, snapshot from memory at entry
          for _i, _l in enumerate(func.body_lines):
-@@ -1343,7 +1359,8 @@ class PPULifter:
+@@ -1343,7 +1527,8 @@
                  if (_off, _m.group(1)) in _saved_slots:
                      _reg_snap.add(_reg)
                      func.body_lines[_i] = f"    ctx->gpr[{_reg}] = _cs_{_reg};"
@@ -20622,10 +21165,41 @@ index a657ba61..bda578dd 100644
                          and _reg not in _reg_snap
                          and _is_epilogue_restore(func.body_lines, _i, _reg, _off)
                          and _mem_snap.setdefault(_reg, _off) == _off):
-@@ -4405,6 +4422,46 @@ def _const_base_targets(win, rC, read_u32, text_lo, text_hi, bctr_addr):
-     return None
+@@ -4178,8 +4363,7 @@
+                       f"extern int {g};", "#endif"]
+         lines.append(f"void {weak}{func.name}(ppu_context* ctx) {{")
+         lines.append("    PPU_MM_SNAP")
+-        for bline in _fuse_cr(func.body_lines):
+-            lines.append(f"    {bline}" if not bline.endswith(":") else bline)
++        body = _fuse_cr(func.body_lines)
  
- 
+         # If a function doesn't end with blr/b/bctr (a return or unconditional
+         # branch), PPC execution falls through to the next address. The lifter
+@@ -4207,12 +4391,14 @@
+                     if nxt.start_addr == func.fallthrough_to:
+                         target = nxt.name
+             if target:
+-                lines.append(f"        {{ g_trampoline_fn = (void(*)(void*)){target}; return; }}")
++                body.append(f"    {{ g_trampoline_fn = (void(*)(void*)){target}; return; }}")
+             else:
+                 print(f"  WARNING: {func.name} has no continuation at "
+                       f"0x{func.fallthrough_to:08X}; emitting halt", flush=True)
+-                lines.append(f"        /* missing continuation 0x{func.fallthrough_to:08X}: halt */ return;")
+-
++                body.append(f"    /* missing continuation 0x{func.fallthrough_to:08X}: halt */ return;")
++
++        for bline in _reg_cache(body):
++            lines.append(f"    {bline}" if not bline.endswith(":") else bline)
+         lines.append("}")
+         lines.append("")
+         return lines
+@@ -4402,6 +4588,46 @@
+         # blr, bctr, or `b` without link ends the run
+         if v in (0x4E800020, 0x4E800420) or (v >> 26 == 18 and not v & 1):
+             return targets
++    return None
++
++
 +def _const_value(insns, at, reg, depth=0):
 +    """The constant `reg` holds right after instruction `at`, when its definition chain
 +    is lis/li/addi/ori from immediates within `insns` (in address order); else None."""
@@ -20663,13 +21237,10 @@ index a657ba61..bda578dd 100644
 +        if base is None:
 +            return None
 +        return ((base + v) if m == 'addi' else (base | (v & 0xFFFF))) & 0xFFFFFFFF
-+    return None
-+
-+
- def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts=None):
-     """Find `mtctr rX; bctr` switch dispatchers and read their jump tables.
+     return None
  
-@@ -4730,11 +4787,23 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+ 
+@@ -4730,11 +4956,23 @@
                          if _resolved or _pass:
                              break
                          _scan = _live(_scan_lo(i), i)
@@ -20694,7 +21265,7 @@ index a657ba61..bda578dd 100644
              continue
          toc_candidates = toc if isinstance(toc, (list, tuple)) else [toc]
          best = []
-@@ -4757,7 +4826,13 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+@@ -4757,7 +4995,13 @@
              # unresolved indirect call (0x422CA0) and stalled the loader.
              _idx_reg = p[1] if r_base == p[2] else p[2]
              _raw_idx = _idx_reg
@@ -20709,7 +21280,7 @@ index a657ba61..bda578dd 100644
                  a = [x.strip() for x in w.operands.split(',')]
                  if a and a[0] == _idx_reg:
                      if (w.mnemonic in ('rldic', 'rldicl', 'rldicr', 'rlwinm',
-@@ -4821,8 +4896,9 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+@@ -4821,8 +5065,9 @@
              # with. We don't track per-function TOCs here, so try each candidate
              # and keep the one whose table decodes to the most in-text case
              # targets (a wrong TOC reads unrelated data and validates 0 targets).
@@ -20721,7 +21292,7 @@ index a657ba61..bda578dd 100644
                      continue
                  def _read_ptr(_ea, _is_ld):
                      # ELFv1 TOC entries are 64-bit; a table address always fits the
-@@ -4833,8 +4909,11 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+@@ -4833,8 +5078,11 @@
                      if read_u32(_ea):
                          return None
                      return read_u32((_ea + 4) & 0xFFFFFFFF)
@@ -20735,7 +21306,7 @@ index a657ba61..bda578dd 100644
                      table_base = _read_ptr(table_base + disp2, disp2_is_ld)
                  _dbg(all_insns[i].addr, f"r_base={r_base} cand_toc=0x{cand:X} table_base={None if table_base is None else hex(table_base)} count={count} is_offset={is_offset} text=[0x{text_lo:X},0x{text_hi:X})")
                  if table_base is None:
-@@ -5058,6 +5137,11 @@ def main() -> None:
+@@ -5058,6 +5306,11 @@
                               "instead of its literal .lib.stub trampoline, and "
                               "split out as its own 0x20-byte function so direct "
                               "calls to it dispatch to the HLE handler.")
@@ -20747,7 +21318,7 @@ index a657ba61..bda578dd 100644
      parser.add_argument("--insn-patches", metavar="FILE", default=None,
                          help="JSON list of instruction patches to lift as "
                               "run-time switches: each {addr, orig, new, guard} "
-@@ -5364,6 +5448,10 @@ def main() -> None:
+@@ -5364,6 +5617,10 @@
                  print(f"  TOC candidates: {', '.join(hex(t) for t in toc_candidates)}")
              tables = discover_jump_tables(all_insns, _read_u32, toc_candidates, text_lo, text_hi,
                                            func_starts=sorted(s for s, _ in func_bounds))
@@ -21100,7 +21671,263 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      if (e.handle && evicted) g.be->texture_release(g.be->user, evicted);
      if (e.handle || !evicted) g.textures[index] = e;
      return e.handle;
-@@ -2039,6 +2127,7 @@
+@@ -1698,16 +1786,69 @@
+  * layout and by the pipeline, because they must not disagree: the built-in
+  * program declares all sixteen inputs, so narrowing the layout for it would
+  * leave the pipeline's vertex descriptor short of what the shader reads. */
++/* What a draw derives from the bytes of the two programs alone, kept with a copy of those bytes.
++ * The same few programs come round draw after draw, and each draw parsed its fragment program six
++ * times over (its size twice, the sampled, gamma and sign-expansion units, the inline constants,
++ * the structural hash) and its vertex program four: about a tenth of the RSX thread in a GT5
++ * race. A memo entry answers while the guest bytes still equal its copy, so a program rewritten
++ * in place (an inline constant changed) is parsed again. RSX_ENGINE_PROGRAM_MEMO=0 turns it off.
++ * s_cur_vpm / s_cur_fpm are the entries of the programs eng_guest_programs last returned, NULL
++ * when it found none. */
++typedef struct {
++    u32 start, instrs, ok;
++    u8  copy[RSX_DSP_VP_INSTR * 16];
++    u32 has_branch, branch_used, has_inputs, input_mask, has_hash;
++    u64 hash;                          /* eng_vp_hash from the FNV offset basis */
++} eng_vprog_memo;
++typedef struct {
++    u32 loc, off, size;
++    u8* copy;
++    u32 has_sampled, sampled, has_cand, gamma_cand, expand_cand;
++    u32 has_consts, has_hash;
++    u64 hash_seed, hash;               /* rsx_fp_structural_hash(seed) */
++    rsx_fp_constant_block consts;
++} eng_fprog_memo;
++static eng_vprog_memo  s_vprog_memo[8];
++static eng_fprog_memo  s_fprog_memo[128];
++static eng_vprog_memo* s_cur_vpm;
++static eng_fprog_memo* s_cur_fpm;
++static int eng_program_memo_on(void)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("RSX_ENGINE_PROGRAM_MEMO"); on = !(e && atoi(e) == 0); }
++    return on;
++}
++
+ static int eng_guest_programs(const u8** out_vp, u32* out_vp_instrs,
+                               const u8** out_fp, u32* out_fp_size)
+ {
+     const u8* vp_uc = NULL;
+     u32 vp_instrs = 0;
++    const int memo = eng_program_memo_on();
++    s_cur_vpm = NULL;
++    s_cur_fpm = NULL;
+     const u32 start = rsx_dsp_vp_start(&g.rsx);
+     if (start < RSX_DSP_VP_INSTR) {
+         vp_uc = (const u8*)(g.rsx.vp + start * 4);
+-        vp_instrs = rsx_vp_program_size_instrs(
+-            vp_uc, (RSX_DSP_VP_INSTR - start) * 16u);
++        eng_vprog_memo* m = memo ? &s_vprog_memo[start & 7u] : NULL;
++        if (m && m->ok && m->start == start &&
++            memcmp(m->copy, vp_uc, (size_t)m->instrs * 16u) == 0) {
++            vp_instrs = m->instrs;
++            s_cur_vpm = m;
++        } else {
++            vp_instrs = rsx_vp_program_size_instrs(
++                vp_uc, (RSX_DSP_VP_INSTR - start) * 16u);
++            if (m) {
++                m->ok = 0;
++                if (vp_instrs && vp_instrs <= RSX_DSP_VP_INSTR - start) {
++                    memcpy(m->copy, vp_uc, (size_t)vp_instrs * 16u);
++                    m->start = start; m->instrs = vp_instrs;
++                    m->has_branch = m->has_inputs = m->has_hash = 0;
++                    m->ok = 1;
++                    s_cur_vpm = m;
++                }
++            }
++        }
+     }
+ 
+     /* A zero SET_SHADER_PROGRAM is "none", not "the program at offset 0": the
+@@ -1718,10 +1859,31 @@
+     if (rsx_dsp_reg(&g.rsx, 0x08E4)) {
+         u32 fp_loc = 0;
+         const u32 fp_off = rsx_dsp_fragment_program(&g.rsx, &fp_loc);
+-        fp_uc = eng_guest_ptr(NULL, fp_loc, fp_off, 16);
+-        fp_size = fp_uc ? rsx_fp_program_size(fp_uc, ENG_FP_MAX_BYTES) : 0;
+-        if (fp_size) fp_uc = eng_guest_ptr(NULL, fp_loc, fp_off, fp_size);
+-        if (!fp_uc) fp_size = 0;
++        eng_fprog_memo* m = memo
++            ? &s_fprog_memo[((fp_off >> 4) ^ (fp_off >> 13) ^ (fp_loc * 7u)) & 127u] : NULL;
++        const u8* held = (m && m->copy && m->size && m->loc == fp_loc && m->off == fp_off)
++            ? eng_guest_ptr(NULL, fp_loc, fp_off, m->size) : NULL;
++        if (held && memcmp(held, m->copy, m->size) == 0) {
++            fp_uc = held;
++            fp_size = m->size;
++            s_cur_fpm = m;
++        } else {
++            fp_uc = eng_guest_ptr(NULL, fp_loc, fp_off, 16);
++            fp_size = fp_uc ? rsx_fp_program_size(fp_uc, ENG_FP_MAX_BYTES) : 0;
++            if (fp_size) fp_uc = eng_guest_ptr(NULL, fp_loc, fp_off, fp_size);
++            if (!fp_uc) fp_size = 0;
++            if (m && fp_size && fp_size <= 16384u) {
++                u8* c = (u8*)realloc(m->copy, fp_size);
++                if (c) {
++                    memcpy(c, fp_uc, fp_size);
++                    m->copy = c; m->loc = fp_loc; m->off = fp_off; m->size = fp_size;
++                    m->has_sampled = m->has_cand = m->has_consts = m->has_hash = 0;
++                    s_cur_fpm = m;
++                } else if (m->copy) {
++                    m->size = 0;               /* the old copy no longer describes anything */
++                }
++            }
++        }
+     }
+ 
+     if (out_vp) *out_vp = vp_uc;
+@@ -1739,10 +1901,16 @@
+     const u8* uc = NULL;
+     u32 instrs = 0;
+     if (eng_guest_programs(&uc, &instrs, NULL, NULL)) {
+-        rsx_vp_input_analysis analysis = { 0xFFFFu, 0 };
+-        if (rsx_vp_analyze_inputs(uc, instrs * 16u, &analysis) == (int)instrs &&
+-            analysis.exact && analysis.input_mask)
+-            mask = analysis.input_mask;
++        eng_vprog_memo* const vpm = s_cur_vpm;
++        if (vpm && vpm->has_inputs) {
++            mask = vpm->input_mask;
++        } else {
++            rsx_vp_input_analysis analysis = { 0xFFFFu, 0 };
++            if (rsx_vp_analyze_inputs(uc, instrs * 16u, &analysis) == (int)instrs &&
++                analysis.exact && analysis.input_mask)
++                mask = analysis.input_mask;
++            if (vpm) { vpm->input_mask = mask; vpm->has_inputs = 1; }
++        }
+     }
+     rsx_vertex_layout_plan_init(layout, mask);
+ }
+@@ -1924,6 +2092,8 @@
+     u32 vp_instrs = 0, fp_size = 0;
+     /* No resident program pair means the built-in one; see kEngFixedVS. */
+     const int fixed = !eng_guest_programs(&vp_uc, &vp_instrs, &fp_uc, &fp_size);
++    eng_vprog_memo* const vpm = fixed ? NULL : s_cur_vpm;
++    eng_fprog_memo* const fpm = fixed ? NULL : s_cur_fpm;
+ 
+     const u32 fp_ctrl  = rsx_dsp_shader_control(&g.rsx);
+     const u32 srgb_output = !fixed && rsx_fp_srgb_output_enabled(
+@@ -1934,13 +2104,34 @@
+     const u32 vtex_mask = eng_vtex_mask();
+     /* BRB/CLB outcomes are baked into the program: the branch bits are
+      * identity only for a program that tests them. */
+-    const int vp_branch_bits_used = !fixed && rsx_vp_uses_branch_bits(vp_uc, vp_instrs * 16u);
++    int vp_branch_bits_used = 0;
++    if (vpm && vpm->has_branch) {
++        vp_branch_bits_used = (int)vpm->branch_used;
++    } else if (!fixed) {
++        vp_branch_bits_used = rsx_vp_uses_branch_bits(vp_uc, vp_instrs * 16u);
++        if (vpm) { vpm->branch_used = (u32)vp_branch_bits_used; vpm->has_branch = 1; }
++    }
+     const u32 vp_branch_bits = vp_branch_bits_used ? rsx_dsp_reg(&g.rsx, 0x1FF8u) : 0;
+     const u32 ucp = fixed ? 0 : eng_user_clip_key();
+ 
+     rsx_fp_shadow_desc shadow[RSX_DSP_NUM_TEXTURES] = {{0}};
+     u32 shadow_mask = 0;
+-    const u32 sampled_units = fixed ? 0 : rsx_fp_texture_units(fp_uc, fp_size);
++    u32 sampled_units = 0;
++    if (fpm && fpm->has_sampled) {
++        sampled_units = fpm->sampled;
++    } else if (!fixed) {
++        sampled_units = rsx_fp_texture_units(fp_uc, fp_size);
++        if (fpm) { fpm->sampled = sampled_units; fpm->has_sampled = 1; }
++    }
++    /* Each of the two walks below accepts a unit when the program fetches it suitably AND its
++     * mask byte is set; the walk does not depend on the masks, so with every mask set it gives the
++     * candidates, and the answer for a draw is the candidates whose mask is set. */
++    if (fpm && !fpm->has_cand) {
++        static const u8 all_units[RSX_DSP_NUM_TEXTURES] = {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1};
++        fpm->gamma_cand = rsx_fp_texture_gamma_units(fp_uc, fp_size, all_units);
++        fpm->expand_cand = rsx_fp_texture_expand_units(fp_uc, fp_size, all_units);
++        fpm->has_cand = 1;
++    }
+     for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
+         if (!(sampled_units & (1u << u))) continue;
+         rsx_dsp_texture t;
+@@ -1954,7 +2145,14 @@
+         rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
+         if (t.enabled) gamma_masks[u] = rsx_texture_gamma_mask(t.format, t.remap, t.filter, t.wrap);
+     }
+-    const u32 gamma_units = fixed ? 0 : rsx_fp_texture_gamma_units(fp_uc, fp_size, gamma_masks);
++    u32 gamma_units = 0;
++    if (fpm) {
++        for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
++            if (gamma_masks[u]) gamma_units |= 1u << u;
++        gamma_units &= fpm->gamma_cand;
++    } else if (!fixed) {
++        gamma_units = rsx_fp_texture_gamma_units(fp_uc, fp_size, gamma_masks);
++    }
+     for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
+         if (!(gamma_units & (1u << u))) gamma_masks[u] = 0;
+     /* Texture sign expansion: SET_TEXTURE_ADDRESS's UNSIGNED_REMAP_BIASED
+@@ -1965,7 +2163,14 @@
+         rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
+         if (t.enabled) expand_masks[u] = rsx_texture_expand_mask(t.format, t.remap, t.filter, t.wrap);
+     }
+-    const u32 expand_units = fixed ? 0 : rsx_fp_texture_expand_units(fp_uc, fp_size, expand_masks);
++    u32 expand_units = 0;
++    if (fpm) {
++        for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
++            if (expand_masks[u]) expand_units |= 1u << u;
++        expand_units &= fpm->expand_cand;
++    } else if (!fixed) {
++        expand_units = rsx_fp_texture_expand_units(fp_uc, fp_size, expand_masks);
++    }
+     for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
+         if (!(expand_units & (1u << u))) expand_masks[u] = 0;
+ 
+@@ -1979,8 +2184,20 @@
+             unnorm_dim[u][0] = unnorm_dim[u][1] = unnorm_dim[u][2] = 0;
+ 
+     g.fp_constants.count = 0;
+-    if (!fixed && rsx_fp_collect_constants(fp_uc, fp_size, &g.fp_constants) < 0)
+-        return 0;
++    if (fpm && fpm->has_consts) {
++        g.fp_constants.count = fpm->consts.count;
++        if (fpm->consts.count)
++            memcpy(g.fp_constants.values, fpm->consts.values, (size_t)fpm->consts.count * 16u);
++    } else if (!fixed) {
++        if (rsx_fp_collect_constants(fp_uc, fp_size, &g.fp_constants) < 0)
++            return 0;
++        if (fpm) {
++            fpm->consts.count = g.fp_constants.count;
++            if (g.fp_constants.count)
++                memcpy(fpm->consts.values, g.fp_constants.values, (size_t)g.fp_constants.count * 16u);
++            fpm->has_consts = 1;
++        }
++    }
+ 
+     /* An antialiased target is held at its sample grid; WPOS must still count
+      * pixels (rsx_fp_apply_wpos_grid). */
+@@ -1999,9 +2216,23 @@
+         static const u32 fixed_tag = 0x4E464958u;   /* "XIFN" */
+         key = eng_fnv1a(&fixed_tag, sizeof fixed_tag, key);
+     } else {
+-        key = eng_vp_hash(vp_uc, vp_instrs * 16u, key);
++        /* `key` is still the offset basis here, so the hash of the vertex program is the same
++         * every draw; the fragment program is seeded with what came before it, which for one
++         * pair of programs is the same too. */
++        if (vpm && vpm->has_hash) {
++            key = vpm->hash;
++        } else {
++            key = eng_vp_hash(vp_uc, vp_instrs * 16u, key);
++            if (vpm) { vpm->hash = key; vpm->has_hash = 1; }
++        }
+         if (vp_branch_bits_used) key = eng_fnv1a(&vp_branch_bits, sizeof vp_branch_bits, key);
+-        key = rsx_fp_structural_hash(fp_uc, fp_size, key);
++        if (fpm && fpm->has_hash && fpm->hash_seed == key) {
++            key = fpm->hash;
++        } else {
++            const u64 seed = key;
++            key = rsx_fp_structural_hash(fp_uc, fp_size, key);
++            if (fpm) { fpm->hash_seed = seed; fpm->hash = key; fpm->has_hash = 1; }
++        }
+         if (!key) return 0;
+         const u32 fp_ctrl_key = fp_ctrl & 0x4Eu; /* colour width and fragment depth export */
+         key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
+@@ -2039,6 +2270,7 @@
          }
      }
      if (g.n_pipelines >= ENG_MAX_PIPELINES) return 0;
@@ -21108,7 +21935,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
  
      u32 handle = 0;
      int vi = 1, fi = 1;
-@@ -2130,6 +2219,7 @@
+@@ -2130,6 +2362,7 @@
      g.pipeline_index[slot] = (u16)(g.n_pipelines + 1u);
      g.n_pipelines++;
      *out_fixed = fixed;
@@ -21116,7 +21943,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      return handle;
  }
  
-@@ -2465,6 +2555,267 @@
+@@ -2465,6 +2698,267 @@
      return ENG_INVALID;
  }
  
@@ -21384,7 +22211,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
  static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
                                u32 current_zslot, u32 tex_used,
                                u32 textures[RSX_BE_MAX_TEXTURES],
-@@ -2492,6 +2843,57 @@
+@@ -2492,6 +2986,57 @@
           * target in Resistance: Fall of Man). Neither colour nor depth
           * surfaces are looked up for it. */
          const u32 base_fmt = t.format & RSX_TEX_FMT_BASE_MASK & ~(u32)RSX_TEX_FMT_UNNORM;
@@ -21442,7 +22269,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          const int compressed = base_fmt == RSX_TEX_FMT_DXT1 ||
                                 base_fmt == RSX_TEX_FMT_DXT23 ||
                                 base_fmt == RSX_TEX_FMT_DXT45;
-@@ -2575,12 +2977,51 @@
+@@ -2575,12 +3120,51 @@
              continue;
          }
          if (sampled >= 0) {
@@ -21496,7 +22323,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          }
          if (base_fmt == RSX_TEX_FMT_DEPTH24_D8) {
              for (u32 i = 0; i < g.n_zdepths; i++)
-@@ -2597,6 +3038,42 @@
+@@ -2597,6 +3181,42 @@
                                         t.width, t.height, t.mipmaps, t.pitch,
                                         (int)t.cubemap, t.remap & 0xFFFFu,
                                         (t.dimension == 3 && !t.cubemap) ? t.depth : 1u);
@@ -21539,7 +22366,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      }
      return mask;
  }
-@@ -2691,6 +3168,22 @@
+@@ -2691,6 +3311,22 @@
      if (s_pd.state == 1 && s_pd.after_s &&
          difftime(time(NULL), s_pd.start) >= (double)s_pd.after_s && pd_open_index())
          fprintf(s_pd.index, "from a draw of frame %u, %u s in\n", g.frames, s_pd.after_s);
@@ -21562,7 +22389,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      return s_pd.state == 2;
  }
  
-@@ -3022,10 +3515,120 @@
+@@ -3022,10 +3658,124 @@
                  what, rc[0], rc[1], rc[2], rc[3], w, h);
  }
  
@@ -21618,6 +22445,10 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
 +
 +static void w_frame_boundary(void)
 +{
++#ifndef _WIN32
++    /* PS3_AB_PERIOD's per-segment report; the D3D12 path counts frames in rsx_live_draw.c. */
++    { extern void ps3_ab_frame(void); ps3_ab_frame(); }
++#endif
 +    if (w.mode < 0) {
 +        const char* e = getenv("LD_WATCH"); w.mode = e ? atoi(e) : 0;
 +        e = getenv("LD_WATCH_DRAW"); if (e && atoi(e) >= 1) w.draw_n = atoi(e);
@@ -21683,7 +22514,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      /* Mixed geometry sources have no defined concatenation here. Reject the
       * whole group instead of drawing partial/misordered geometry. */
      if (dc.n_immediate && (dc.n_arr || dc.n_idx || dc.inl_bytes ||
-@@ -3236,6 +3839,12 @@
+@@ -3236,6 +3986,12 @@
      if (zslot != ENG_INVALID && rs.depth_test && rs.depth_write) {
          g.zdepths[zslot].had_write = 1;
          eng_zdepth_wrote(zslot, &sf);
@@ -21696,7 +22527,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      }
  }
  
-@@ -3243,6 +3852,7 @@
+@@ -3243,6 +3999,7 @@
  {
      (void)user; (void)r;
      if (!g.ready) return;
@@ -21704,7 +22535,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      u32 targets[RSX_BE_MAX_COLOR_TARGETS];
      const u32 n_targets = eng_current_target_set(targets);
      if (!n_targets) return;
-@@ -3340,6 +3950,8 @@
+@@ -3340,6 +4097,8 @@
              if (!partial) g.zdepths[zslot].had_write = 0;
              g.zdepths[zslot].snapshot_valid = 0;
              eng_zdepth_wrote(zslot, &sf);
@@ -21713,7 +22544,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          }
      }
  }
-@@ -3360,9 +3972,12 @@
+@@ -3360,9 +4119,12 @@
      return eng_current_surface();
  }
  
@@ -21726,7 +22557,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      const u32 target = eng_present_surface(buffer_id);
      if (target == ENG_INVALID) return;
      g.surfaces[target].last_use = g.frames;
-@@ -3377,7 +3992,14 @@
+@@ -3377,7 +4139,14 @@
      }
      pd_present(target);
      g.last_present_surface = target;
@@ -21742,7 +22573,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      g.frames++;
      g.last_guest_draws = g.guest_draws;
      g.guest_draws = 0;
-@@ -3466,12 +4088,19 @@
+@@ -3466,12 +4235,19 @@
          if (g.pipelines[i].handle) g.be->pipeline_release(g.be->user, g.pipelines[i].handle);
      for (u32 i = 0; i < g.n_surfaces; i++) {
          if (g.surfaces[i].feedback) g.be->texture_release(g.be->user, g.surfaces[i].feedback);
@@ -24715,10 +25546,9 @@ index db64302e..a03ff089 100644
 -#endif /* !_WIN32 */
 +#endif /* !_WIN32 || PS3RECOMP_RSX_VULKAN */
 diff --git a/runtime/platform/win32_compat.c b/runtime/platform/win32_compat.c
-index 11a74804..38447ab5 100644
 --- a/runtime/platform/win32_compat.c
 +++ b/runtime/platform/win32_compat.c
-@@ -453,7 +453,13 @@ static void apply_priority(pthread_t pt, DWORD tid, int level, int is_self)
+@@ -453,7 +453,13 @@
  
  static void apply_affinity(pthread_t pt, DWORD_PTR mask)
  {
@@ -24733,7 +25563,45 @@ index 11a74804..38447ab5 100644
      cpu_set_t set; CPU_ZERO(&set);
      for (unsigned i = 0; i < 8 * sizeof mask && i < CPU_SETSIZE; i++)
          if (mask & ((DWORD_PTR)1 << i)) CPU_SET(i, &set);
-
+@@ -1260,11 +1266,11 @@
+ }
+ 
+ /* --- waits ----------------------------------------------------------------- */
+-DWORD WaitForSingleObject(HANDLE h, DWORD ms)
++/* One object, until `deadline` (monotonic ns; 0 = forever) or, with `poll`, not at all. */
++static DWORD wait_single(HANDLE h, unsigned long long deadline, int poll)
+ {
+     ps3_obj* o = obj_of(h);
+     if (!o) { SetLastError(ERROR_INVALID_HANDLE); return WAIT_FAILED; }
+-    unsigned long long deadline = deadline_from_ms(ms);
+     DWORD result = WAIT_TIMEOUT;
+ 
+     pthread_mutex_lock(&s_lock);
+@@ -1272,7 +1278,7 @@
+     for (;;) {
+         unsigned long long now = mono_ns();
+         if (obj_signaled_locked(o, now)) { obj_consume_locked(o, now); result = WAIT_OBJECT_0; break; }
+-        if (ms == 0) break;
++        if (poll) break;
+         if (wait_until_locked(&o->cv, deadline, obj_next_due_locked(o)) == ETIMEDOUT) {
+             /* One last look: the state may have changed exactly at the deadline. */
+             now = mono_ns();
+@@ -1285,6 +1291,15 @@
+     if (result == WAIT_TIMEOUT) SetLastError(ERROR_TIMEOUT);
+     return result;
+ }
++
++DWORD WaitForSingleObject(HANDLE h, DWORD ms)
++{ return wait_single(h, deadline_from_ms(ms), ms == 0); }
++
++/* Not Win32: WaitForSingleObject with a timeout in microseconds, for pollers that sleep in slices
++ * shorter than a millisecond (ps3_host_sleep_on, sys_ppu_thread.c). Same return values. */
++DWORD ps3_wait_object_us(HANDLE h, unsigned us);
++DWORD ps3_wait_object_us(HANDLE h, unsigned us)
++{ return wait_single(h, mono_ns() + (unsigned long long)us * 1000ull, 0); }
+ 
+ DWORD WaitForSingleObjectEx(HANDLE h, DWORD ms, BOOL alertable)
+ { (void)alertable; return WaitForSingleObject(h, ms); }
 diff --git a/runtime/ppu/ppu_vmx.h b/runtime/ppu/ppu_vmx.h
 --- a/runtime/ppu/ppu_vmx.h
 +++ b/runtime/ppu/ppu_vmx.h
@@ -24865,7 +25733,7 @@ diff --git a/runtime/ppu/ppu_vmx.h b/runtime/ppu/ppu_vmx.h
 diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
 --- a/tools/spu_lifter.py
 +++ b/tools/spu_lifter.py
-@@ -494,6 +494,206 @@
+@@ -494,6 +494,265 @@
  
  
  
@@ -24927,6 +25795,65 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
 +        out.append(ln)
 +    if names:
 +        out.insert(0, "    uint32_t " + ", ".join(names) + ";")
++    return out
++
++
++_LQ_RE = re.compile(r"^(\s*ctx->gpr\[\d+\] = )spu_ls_lq\(ctx, _ls, _rd, (.+)\);$")
++_SQ_RE = re.compile(r"^(\s*)spu_ls_sq\(ctx, _ls, _wd, (.+), (ctx->gpr\[\d+\])\);$")
++
++
++def _store_forward(lines):
++    """Store-to-load forwarding for read-modify-write loops (SPULifter.store_forward).
++
++    GT5's sound filters walk a buffer one word at a time: lqd the quadword, take the word out, work
++    on it, put the result back in with cwd + shufb, stqd -- and the next pass loads the quadword it
++    has just stored. On the host that store and load round-trip through memory (byte swap, store,
++    store forwarding, byte swap), and each pass waits on the previous one's store: about a third of
++    such a loop's time. Here a function that has such a loop keeps the last quadword it stored in
++    two locals, _fa (its local-store address, 16-byte aligned) and _fv (the value), and the loop's
++    load of the same address expression takes _fv when it reads that quadword (spu_ls_lq_fwd).
++    Exact: every store in the function updates the pair, so it is always the most recent store;
++    before anything else that may write the local store (a call, a channel op, a stop: any line
++    with a call that gets ctx and is not a local-store access, or a @SY@/@RL@ mark) the pair is
++    cleared, and the call cannot make it valid again. Only loads inside a loop that also stores to
++    the same address expression are changed (a compare and a well-predicted branch each)."""
++    label_at = {ln[:-1]: i for i, ln in enumerate(lines) if ln.startswith("loc_") and ln.endswith(":")}
++    want = set()
++    for i, ln in enumerate(lines):
++        for t in re.findall(r"goto (loc_[0-9A-F]{8});", ln):
++            h = label_at.get(t)
++            if h is None or h > i:
++                continue
++            body = lines[h:i + 1]
++            st = {m.group(2) for m in map(_SQ_RE.match, body) if m}
++            for k, b in enumerate(body):
++                m = _LQ_RE.match(b)
++                if m and m.group(2) in st:
++                    want.add(h + k)
++    if not want:
++        return lines
++    pure = _PURE_CTX_CALLS | {"spu_ls_lq_fwd"}
++    out = ["    uint32_t _fa = 1u; u128 _fv = spu_zero();"]
++    for i, ln in enumerate(lines):
++        if ln.startswith("loc_") and ln.endswith(":"):
++            out.append(ln)
++            continue
++        if "@SY@" in ln or "@RL@" in ln or any(f not in pure for f in _CTX_CALL_RE.findall(ln)):
++            out.append("    _fa = 1u;")
++            out.append(ln)
++            continue
++        if i in want:
++            m = _LQ_RE.match(ln)
++            out.append(f"{m.group(1)}spu_ls_lq_fwd(ctx, _ls, _rd, {m.group(2)}, _fa, _fv);")
++            continue
++        m = _SQ_RE.match(ln)
++        if m:
++            ind, a, v = m.groups()
++            out.append(f"{ln.rstrip()} _fa = ({a}) & (SPU_LS_MASK & ~0xFu); _fv = {v};")
++            continue
++        if "spu_ls_sq(" in ln:          # a store in another form: forget the pair
++            out.append("    _fa = 1u;")
++        out.append(ln)
 +    return out
 +
 +
@@ -25072,7 +25999,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
  # lv2 stop-and-signal syscalls that resume at the next instruction (the same
  # set as find_spu_functions.LV2_RESUMING_STOPS, which decides function extents).
  LV2_RESUMING_STOPS = {0x100, 0x110, 0x111}
-@@ -529,6 +729,19 @@
+@@ -529,6 +788,22 @@
          # compute_link_returns(). Emitted as `return;` so they compose with the
          # brsl->C-call nesting instead of branching to an unregistered PC.
          self.link_return: set = set()
@@ -25089,10 +26016,13 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
 +        # shufb with a cbd/chd/cwd/cdd control from the same block -> a lane insert (_insert_peephole);
 +        # off from the command line with --no-insert-peephole.
 +        self.insert_peephole = False
++        # A read-modify-write loop's load of the quadword it just stored takes the stored value
++        # (_store_forward); off from the command line with --no-store-forward.
++        self.store_forward = False
  
      # ------------------------------------------------------------------ #
      def lift_function(self, insns: list[SPUInstruction],
-@@ -550,6 +763,7 @@
+@@ -550,6 +825,7 @@
          # for its interrupt handler (DMA-list stall-and-notify) never wakes. So
          # each merged chunk entry hands back to the drain when one is pending.
          merged_starts = {a for a in getattr(self, "func_starts", ()) if start < a < end}
@@ -25100,7 +26030,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
          last_insn = None
          for insn in insns:
              if insn.addr < start or insn.addr >= end:
-@@ -559,7 +773,7 @@
+@@ -559,7 +835,7 @@
              if insn.addr in merged_starts:
                  func.body_lines.append(
                      f"    if (ctx->int_enable && (ctx->event_status & ctx->event_mask)) "
@@ -25109,7 +26039,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      f"{self.prefix}spu_func_{insn.addr:08X}; return; }}")
              c = self._translate(insn, func)
              if c:
-@@ -583,7 +797,7 @@
+@@ -583,7 +859,7 @@
                           and (last_insn.raw & 0x3FFF) in LV2_RESUMING_STOPS))
                  and end in getattr(self, "func_starts", set())):
              func.body_lines.append(
@@ -25118,18 +26048,20 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
  
          # Infinite no-op self-loop (the SPU `br .` halt idiom): a function whose
          # whole body is nops + an unconditional branch back into itself does
-@@ -603,6 +817,10 @@
+@@ -603,6 +879,12 @@
                      "    spu_halt(ctx); return;",
                  ]
  
 +        if self.insert_peephole:
 +            func.body_lines = _insert_peephole(func.body_lines)
++        if self.store_forward and self.reg_locals:
++            func.body_lines = _store_forward(func.body_lines)
 +        if self.reg_locals:
 +            func.body_lines = _localize(func.body_lines)
          self.functions.append(func)
          return func
  
-@@ -648,6 +866,15 @@
+@@ -648,6 +930,15 @@
          def ra(): return _reg(ops[1])
          def rb(): return _reg(ops[2])
          def g(i): return f"ctx->gpr[{i}]"
@@ -25145,7 +26077,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
  
          # ---- nop / sync / stop ----
          if mn in ("nop", "lnop"):
-@@ -670,10 +897,10 @@
+@@ -670,10 +961,10 @@
                  # lv2 services these and resumes at the next instruction (the
                  # reply is read from the inbound mailbox right after the stop).
                  # spu_stop puts the context back to RUNNING when it serviced it.
@@ -25159,7 +26091,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      f"ctx->status = SPU_STATUS_STOPPED_BY_STOP; spu_stop(ctx); return;")
  
          # ---- immediate loaders ----
-@@ -714,14 +941,14 @@
+@@ -714,14 +1005,14 @@
                  cond = f"(int32_t){pw(ra())} > (int32_t){pw(rb())}"
              else:  # hlgt
                  cond = f"{pw(ra())} > {pw(rb())}"
@@ -25176,7 +26108,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      "ctx->status = SPU_STATUS_STOPPED_BY_STOP; spu_stop(ctx); return;")
  
          # ---- integer arithmetic (register) ----
-@@ -857,33 +1084,42 @@
+@@ -857,33 +1148,42 @@
              return f"{g(rt())} = spu_{mn}({g(ra())}, {g(rb())}, {g(rt())});"
  
          # ---- quadword loads / stores ----
@@ -25228,7 +26160,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
  
          # ---- branches ----
          if mn in ("br", "bra"):
-@@ -893,7 +1129,7 @@
+@@ -893,7 +1193,7 @@
              # `goto loc_self` busy-spins the host thread forever; stop the SPU
              # instead (same halt path the lifter emits for a `stop` instruction).
              if tgt == addr:
@@ -25237,7 +26169,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
              return self._uncond_branch(tgt, func)
          if mn in ("brsl", "brasl"):
              # The disassembler drops the link register from brsl operands, so
-@@ -910,7 +1146,7 @@
+@@ -910,7 +1210,7 @@
              # boot in cri_audio_00023C58). Set the link, then stop the SPU (same
              # halt path the lifter emits for a `stop` instruction).
              if tgt == addr:
@@ -25246,7 +26178,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
              # PC-GETTER IDIOM: `brsl rX, .+4` (target == next instruction) just
              # loads PC+4 into rX for PC-relative addressing / computed jump tables;
              # it is NOT a real call. Emitting a host call here imbalances the C
-@@ -927,9 +1163,9 @@
+@@ -927,9 +1227,9 @@
                  # `bi $r0` returns via host return) + SPU_DRAIN (drains the
                  # callee's own tail-chains so they don't grow the caller frame)
                  # + image save/restore (adopt-on-serve cannot leak upward).
@@ -25259,7 +26191,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
              return f"{link} /* TODO spu: brsl unresolved target */;"
          if mn in _COND_BR:
              tgt = self._branch_target(insn)
-@@ -943,7 +1179,7 @@
+@@ -943,7 +1243,7 @@
              # Cross-function conditional branch = conditional tail: a direct
              # tail call when the drain has nothing to do on this step, else
              # the trampoline and unwind (SPU_DIRECT, spu_context.h).
@@ -25268,7 +26200,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      f"{self.prefix}spu_func_{tgt:08X}); }}")
          # Interrupt enable/disable bits on the bi family (bie/bid, irete/iretd,
          # bisle(d)...): bit 0x40000 = E (enable), 0x80000 = D (disable), taking
-@@ -969,14 +1205,14 @@
+@@ -969,14 +1269,14 @@
                  # publish THAT register as the return PC: SPU_RET publishes r0,
                  # and spu_drain_call restarts dispatch when pc != return_pc.
                  if tgt_reg != "0":
@@ -25287,7 +26219,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      "g_spu_trampoline_fn = spu_indirect_branch; return;")
          if mn in ("bisl",):
              # `bisl rt, ra`: rt = link, ra = TARGET. The disassembler emits BOTH
-@@ -992,10 +1228,10 @@
+@@ -992,10 +1292,10 @@
              # here and its `bi $r0` returns via host return.
              # read the target BEFORE writing the link: rt may be the same register as ra
              return (f"{{ uint32_t _tg = {g(tgt_reg)}._u32[0]; {g(link_rt)} = spu_link(0x{(addr + 4) & 0x3FFFC:X}); "
@@ -25300,7 +26232,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
          # bisled: set link, branch to RA only if an external event is pending.
          if mn in ("bisled",):
              link_rt = insn.raw & 0x7F            # rt = link
-@@ -1003,7 +1239,7 @@
+@@ -1003,7 +1303,7 @@
              # read the target before writing the link: rt may alias ra
              return (f"{{ uint32_t _tg = {g(tgt_reg)}._u32[0]; {g(link_rt)} = spu_link(0x{(addr + 4) & 0x3FFFC:X}); "
                      f"if ((ctx->event_status & ctx->event_mask) != 0) {{ "
@@ -25309,7 +26241,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      f"g_spu_trampoline_fn = spu_indirect_branch; return; }} }}")
          # biz/binz/bihz/bihnz: ops[0] = condition reg, ops[1] = target reg.
          if mn in ("biz", "binz", "bihz", "bihnz"):
-@@ -1017,9 +1253,9 @@
+@@ -1017,9 +1317,9 @@
              if (tgt_reg == "0" and addr not in self.bi_r0_jump) \
                      or addr in self.link_return:
                  if tgt_reg != "0":
@@ -25322,7 +26254,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      f"g_spu_trampoline_fn = spu_indirect_branch; return; }}")
  
          # hint-for-branch: pure performance hint, safe to drop
-@@ -1035,6 +1271,13 @@
+@@ -1035,6 +1335,13 @@
                  f'spu_unsupported(0x{insn.addr:X}, "{mn}");')
  
      # ------------------------------------------------------------------ #
@@ -25336,7 +26268,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
      def _cond(self, mn: str, reg: str) -> str:
          """Condition expression on preferred slot for conditional branches."""
          word = f"ctx->gpr[{reg}]._u32[0]"
-@@ -1057,17 +1300,22 @@
+@@ -1057,17 +1364,22 @@
          # drain has nothing to do on this step, else hand the target to the
          # trampoline and unwind so the enclosing SPU_DRAIN re-enters (no
          # host-stack growth either way; SPU_DIRECT, spu_context.h).
@@ -25360,7 +26292,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
          lines.append("")
          lines.append("/* Runtime glue (runtime/spu/spu_channels.c) */")
          lines.append("void spu_register_function(uint32_t addr, void (*fn)(spu_context*));")
-@@ -1081,10 +1329,14 @@
+@@ -1081,10 +1393,14 @@
          lines = [SOURCE_PREAMBLE.format(header_name=header_name), ""]
          weak = "__attribute__((weak)) " if getattr(self, "weak_emit", False) else ""
          for f in self.functions:
@@ -25376,7 +26308,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
              lines.append("")
  
          # Stubs for cross-function branch/call targets the function-boundary
-@@ -1100,10 +1352,14 @@
+@@ -1100,10 +1416,14 @@
              lines.append(" * function detector did not seed (typically conditional")
              lines.append(" * branches that escape a function's range). */")
              for t in externs:
@@ -25392,7 +26324,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
              lines.append("")
  
          lines.append("/* Function table */")
-@@ -1188,6 +1444,18 @@
+@@ -1188,6 +1508,21 @@
                          "changes speed, not which code can be reached.")
      p.add_argument("--max-group-insns", type=int, default=4000,
                     help="Cap on instructions per merged group (keeps clang fast).")
@@ -25402,6 +26334,9 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
 +    p.add_argument("--no-insert-peephole", action="store_true",
 +                   help="Lift every shufb as a general shuffle, also where its control is an "
 +                        "insertion control (cbd/chd/cwd/cdd or the x forms) from the same block.")
++    p.add_argument("--no-store-forward", action="store_true",
++                   help="Lift a read-modify-write loop's load of the quadword it just stored as a "
++                        "plain load from the local store (the old output).")
 +    p.add_argument("--no-reg-locals", action="store_true",
 +                   help="Keep every SPU register in ctx->gpr[] at every instruction "
 +                        "(the old output). By default each function holds the "
@@ -25411,12 +26346,13 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
      p.add_argument("--force-indirect", default="",
                     help="Comma-separated `bi $rN` addresses to emit as GENERIC "
                          "indirect dispatch, overriding the link-register-return "
-@@ -1311,6 +1579,10 @@
+@@ -1311,6 +1646,11 @@
      insns = disassemble_spu(data, base)
  
      lifter = SPULifter(trace=args.trace, prefix=args.symbol_prefix)
 +    lifter.reg_locals = not (args.no_reg_locals or args.trace)
 +    lifter.insert_peephole = not (args.no_insert_peephole or args.trace)
++    lifter.store_forward = not (args.no_store_forward or args.trace)
 +    global LOOP_HEAD_LOADS
 +    LOOP_HEAD_LOADS = not args.no_loop_head_loads
      lifter.bi_r0_jump = compute_bi_r0_jumps(insns, bounds)
@@ -27138,3 +28074,46 @@ index 00000000..5768a014
 +#endif
 +#endif /* _WIN32 */
 +#endif /* RSX_FRAMEGEN_H */
+diff --git a/runtime/spu/spu_coh_bitmap.h b/runtime/spu/spu_coh_bitmap.h
+--- a/runtime/spu/spu_coh_bitmap.h
++++ b/runtime/spu/spu_coh_bitmap.h
+@@ -41,6 +41,39 @@
+     return (bits[line >> 3] >> (line & 7)) & 1;
+ }
+ 
++/* The lifted PPU code's store gate: one byte per 4 KiB guest page, non-zero when a store to the
++ * page cannot be a plain store. A lifted store used to make three checks of its own -- two
++ * diagnostic watches and the bitmap above, four loads and four branches -- which made a guest
++ * store about twenty host instructions. It now reads this one byte; only on a flagged page does
++ * it go on to the exact test (ppu_recomp.h, vm_mm_st_ok_page).
++ *   PPU_ST_PAGE_COH    a line of the page has been marked in the bitmap. Set just before the
++ *                      line's bit and never cleared, so whoever sees the bit sees the byte.
++ *   PPU_ST_PAGE_SWEEP  the null-store sweep is on (g_null_sweep_hi): every page.
++ *   PPU_ST_PAGE_WATCH  the barrier watch is armed (g_barrier_sync_watch): every page.
++ * Shared like g_spu_coh_bits: untouched pages of it are never committed. */
++#define PPU_ST_PAGE_SHIFT  12
++#define PPU_ST_PAGE_COH    0x01u
++#define PPU_ST_PAGE_WATCH  0x40u
++#define PPU_ST_PAGE_SWEEP  0x80u
++SPU_COH_SHARED unsigned char g_ppu_st_page[1u << (32 - PPU_ST_PAGE_SHIFT)];
++
++static inline void ppu_st_page_mark(uint32_t addr)
++{
++    unsigned char* b = &g_ppu_st_page[addr >> PPU_ST_PAGE_SHIFT];
++    if (!(__atomic_load_n(b, __ATOMIC_RELAXED) & PPU_ST_PAGE_COH))
++        __atomic_or_fetch(b, PPU_ST_PAGE_COH, __ATOMIC_SEQ_CST);
++}
++
++/* Turn a diagnostic flag on or off for every page. Rare (a diagnostic arming), so the megabyte
++ * walk does not matter; atomic because ppu_st_page_mark may run beside it. */
++static inline void ppu_st_page_all(unsigned char flag, int on)
++{
++    for (uint32_t i = 0; i < (1u << (32 - PPU_ST_PAGE_SHIFT)); i++) {
++        if (on) __atomic_or_fetch(&g_ppu_st_page[i], flag, __ATOMIC_SEQ_CST);
++        else    __atomic_and_fetch(&g_ppu_st_page[i], (unsigned char)~flag, __ATOMIC_SEQ_CST);
++    }
++}
++
+ #ifdef __cplusplus
+ }
+ #endif

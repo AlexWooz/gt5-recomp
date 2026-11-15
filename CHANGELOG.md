@@ -9,6 +9,86 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+⚡ **Less CPU for every frame: the Steam Deck work from a community pull request** (by AlexWooz, #33;
+one re-lift of the game's code and SPU jobs, done by `update.ps1`)
+- The pull request's six changes, measured on Linux by AlexWooz (a Steam Deck, about 4%: 109.5 to 105.2 ms
+  a frame with the race paused on the grid) and here on Windows. Each has its own entry below. Five are on;
+  the sixth, keeping PPU registers in host locals, is in but off.
+- Windows, the tested rig limited to 4 of its efficient cores, with the same race paused on the grid,
+  runs of the old and new builds back to back: **8% and 17% fewer** CPU cycles a frame in the two clean
+  pairs (1,620 to 1,484 million, and 1,747 to 1,443), most of it in the SPU job threads. Another game and
+  other test builds were running on the PC the whole time, so the frame rate moved too much between runs
+  of the same build (4 to 12 fps) to show a gain of this size.
+
+🧩 **Two kinds of SPU code no longer run in the interpreter** (#33, AlexWooz)
+- A jump table placed right after its `bi`, with the table's address held in a register
+  (position-independent code), had no `il`/`ila` naming it, so its handlers were never lifted. The Wws
+  job at `0x015DF100` is a bytecode machine dispatched this way: 2 KB of handlers ran in the
+  interpreter on every dispatch. `find_spu_functions.py` now tries the words after every `bi` as a
+  table (three or more small offsets landing on instructions).
+- A function that starts right after another's `bi` and is only called through a pointer kept in data
+  was folded into the function before it, so every call missed the lookup. The instruction after an
+  unconditional `bi` is now an entry.
+- 38 Wws jobs: 27,624 to 27,910 entries, 9 KB more code lifted in five jobs. In a race on the Steam
+  Deck the interpreter went from 6-8 million steps a second to 0.8 million (`SPU_INTERP_STATS=5`).
+
+🔀 **The SPU dispatch cache outlives a job's code being loaded again** (#33, AlexWooz)
+- The cache of resolved indirect-branch targets was keyed by a counter bumped on every change to a
+  context's resident code, and a job manager loads a job's code for every job it runs: each short job
+  resolved its branch targets from nothing, through the registry walks (`spu_lifted_lookup_full`,
+  `spu_lookup`: about 4% of each of GT5's four graphics workers in a race).
+- The key is now a 64-bit hash of what is resident (each slot's span, image and verify state), so a
+  job's entries are still valid the next time it is loaded. 4,096 entries a thread, from 512, and the
+  per-thread registry memo 2,048 from 512.
+- Steam Deck, race paused on the grid: 105.2 ms a frame, from 107.3 (about 2%).
+
+✍️ **A lifted guest store reads one byte before storing, not three globals** (#33, AlexWooz)
+- Every lifted PPU store made its own three checks (the null-sweep and barrier-watch diagnostics and
+  the SPU reserved-line bitmap): four loads and four branches, about twenty host instructions a store.
+- A table with one byte per 4 KiB guest page (`g_ppu_st_page`, `spu_coh_bitmap.h`) now says whether a
+  page needs any of that: an SPU has reserved a line of it (set just before the line's bit, never
+  cleared), or a store diagnostic is armed (every page). A store reads that byte; only on a flagged
+  page does it go on to the exact test, out of line.
+- On x86-64 a lifted load or store also no longer tests whether its address is aligned: the atomic
+  and the memcpy path are the same single `mov` there.
+- Steam Deck, race paused on the grid: 106.5 ms a frame, from 109.5 (about 3%).
+
+🎨 **Vulkan renderer: a draw no longer re-parses its two programs** (#33, AlexWooz)
+- Every draw parsed its fragment program six times (its size twice, the sampled, gamma and
+  sign-expansion units, the inline constants, the structural hash) and its vertex program four. The
+  draw engine now keeps those answers with a copy of each program's bytes and reuses them while the
+  guest's bytes still equal the copy (`RSX_ENGINE_PROGRAM_MEMO=0` parses every draw, as before).
+  DirectX 12, the default renderer, already did this.
+- `PS3_FTRACE` records the SPURS job chain: a span per job (who 200) and per guard wait.
+- Steam Deck, race paused on the grid: the RSX thread works 755 ms of each second, from 800.
+
+🐧 **Linux: the command-buffer walker sleeps and is woken, as on Windows** (#33, AlexWooz)
+- On a CPU of 8 logical CPUs or fewer, v0.1.41's sleep-after-spin now works on Linux too: the walker
+  spins 20 us, then waits on the kick event, which an SPU job writing the word it is parked on sets.
+  Before, `ps3_host_sleep_on` was a `sched_yield` there. `PS3_SPIN_SLEEP`, `PS3_YIELD_NAP` and
+  `GCM_WALK_SLEEP` work as on Windows; with the sleep off, Linux keeps its 50 us nap (`GCM_FIFO_NAP`).
+- `PS3_AB_PERIOD` now works with the Vulkan renderer and reports CPU use on Linux (from `getrusage`).
+
+⚙️ **PPU registers in host locals: in, but off** (#33, AlexWooz)
+- The lifter can keep the GPRs, FPRs, CR, XER, LR and CTR a function uses in locals instead of in
+  `ctx`, writing them back only before a call or a return. The compiler otherwise has to reload them
+  after nearly every guest load and store, since each has an out-of-line slow path.
+- It's off unless `PPU_REG_CACHE=1` is set for a re-lift. On Windows it made the generated code 43%
+  larger (345 to 492 MB), the lift twice as long (229 to 479 s), a full build 44% longer (17.5 to 25
+  minutes on 6 jobs) and gt5.exe 249 to 287 MB, and the paused-grid test found no gain: the game's PPU
+  threads are about a tenth of a frame's CPU cycles here, and in two back-to-back pairs they used 6% more
+  and 7% fewer cycles a frame with it: run-to-run noise. On the Steam Deck it measured about 7%, close to
+  that race's run-to-run noise too.
+
+⚡ **SPU lifter: GT5's sound filters no longer wait on their own memory writes**
+- A loop that writes back the 16-byte block it just read now gets the written block straight from a
+  register: exact, the same bytes memory holds.
+- The sound mixer's job is about 4% cheaper per audio block (1.59 to 1.53 ms on this PC, two back-to-back
+  pairs of races, and -4% in three earlier pairs; another game and other test games running); its biquad filter
+  loop alone runs 17-22% faster.
+- Checked with the differential lift test on every SPU image in the build except one (72,600 runs, 0
+  mismatches) and in races with all SPU code re-lifted.
+
 🏷️ Released as **v0.1.62**
 
 💨 **Cockpit view: dust and smoke from the cars ahead no longer cover the dashboard** (Keduboneur78 on Discord,
