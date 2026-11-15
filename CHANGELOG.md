@@ -9,6 +9,26 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.59**
+
+🎮 **Steering wheels: the steering and pedals no longer get stuck in a race on a busy PC**
+(brocolison on Discord: on his laptop at about 20 fps the car kept turning the way it was last steered, with
+the throttle or brake held on)
+- GT5's wheel driver gets each report from the wheel through a queue of 40 events on its own USB thread, and
+  asks for the next report once it has handled one. On a small PC at full load that thread falls behind, the
+  queue fills up with force-feedback completions, and a report's event can be dropped. The game then never
+  asked for another report and kept the last one, so the car steered and accelerated (or braked) on its own.
+- Now a report the game hasn't taken within 1.5 s is sent again, and the wheel comes back by itself. Only one
+  report at a time waits to be taken, and the port's two wheel threads run ahead of the game's busy threads.
+- If the PC wheel itself stops answering for a quarter of a second (its driver stuck, or the PC too busy to
+  read it), the rim is centred and the pedals released until it answers again.
+- `PS3_WHEEL_TRACE=1` now also writes, every 10 s, how far the PC wheel moved, how many reports the game took
+  and how often it read them, so a log shows where the input stops.
+- Checked with a simulated wheel that never rests, like a real rim, with the game on 4 small cores (10-15 fps
+  in the race): the queue overflowed as on the laptop. With one report's event thrown away on purpose every
+  few seconds, the wheel came back 1.5 s later each time, in the menus and in the race. Not tried on a real
+  wheel.
+
 🏷️ Released as **v0.1.58**
 
 🪟 **Vulkan's window takes the window size, resizes, and survives being minimised** (Arpadiam on Discord: the

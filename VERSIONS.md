@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.59](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.59) | 15 Nov 2026 | Steering wheels: steering and pedals no longer get stuck in a race when a busy PC falls behind |
 | [v0.1.58](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.58) | 15 Nov 2026 | Vulkan window: opens at the window size, resizes and maximises, and survives being minimised |
 | [v0.1.57](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.57) | 15 Nov 2026 | Sound on small CPUs: the audio chain a little cheaper, its EQ module a third cheaper |
 | [v0.1.56](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.56) | 15 Nov 2026 | Renderer choice in the launcher: DirectX 12 (default) or Vulkan (experimental, added with a one-time build) |

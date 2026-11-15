@@ -78,8 +78,9 @@ performance matters more than the graphics card.
   ([#29](https://github.com/MormonFTP-hub/gt5-recomp/pull/29)); since 13 Nov it's found by itself and
   its pedal axis splits into throttle and brake: on v0.1.39 the player raced a full 16-car field with it,
   using the keyboard for the menus. Since 15 Nov a wheel with no d-pad moves through the menus itself
-  (rim for left / right, throttle and brake for down / up), checked with a simulated wheel, not yet on
-  that one. **Force feedback is still untried on a real wheel.** Wheel owners:
+  (rim for left / right, throttle and brake for down / up), which works on that wheel now, and since
+  v0.1.59 the steering and pedals no longer stay stuck in a race when a busy PC falls behind (checked
+  with a simulated wheel). **Force feedback is still untried on a real wheel.** Wheel owners:
   [tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml),
   with `GT5\logs\play.err` attached (settings are in the README's FAQ).
 - **The picture can freeze on one screen at the first start** while the game carries on behind it
@@ -131,7 +132,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **15 Nov 2026:** the sound chain needs less CPU (its EQ module a third less), for the audio lag on small
+- **15 Nov 2026:** a steering wheel's steering and pedals no longer get stuck in a race when the PC is too
+  busy for the game to keep up (v0.1.59); the sound chain needs less CPU (its EQ module a third less), for the audio lag on small
   CPUs (v0.1.57); renderer choice in the launcher (Display > Renderer): DirectX 12, the default, or Vulkan,
   experimental and slower on Windows for now, added to `gt5.exe` with a one-time build (v0.1.56);
   Esc asks before it quits the game (v0.1.55); frame generation (beta, launcher Display): 30 fps and watch mode look like 60, frames made
