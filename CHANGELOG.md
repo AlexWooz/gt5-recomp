@@ -9,6 +9,25 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.54**
+
+🎞️ **Frame generation (beta): 30 fps and watch mode look like 60**
+- The launcher's **Speed: 30 fps** and **watch mode** (B-Spec, replays, F9) leave every other game frame
+  undrawn to spare the CPU, so the picture moved at 30. Tick **Display > Frame generation (beta)**
+  (`set "LD_FRAMEGEN=1"` in `play.bat`) and the graphics card makes those frames from the drawn ones before
+  and after: it finds how each part of the picture moved and places it halfway. What holds still (the HUD,
+  the cockpit, the sky) stays sharp, and where it can't find a good match (very fast or repeating things)
+  it shows the newer frame instead of smearing it. It does nothing while every frame is drawn.
+- Presenting now happens on a thread of its own, so the game never waits for the screen. The version in
+  v0.1.53 (switched off) presented on the game's render thread and slowed the game from 60 frames a second
+  to about 24; now, switching it on and off every 10 s in one run on the title scene, the game ran the same
+  either way (18.3 / 18.2, 19.7 / 21.0, 20.2 / 19.5, 17.4 / 17.0 frames a second, with another game
+  running on the PC). `set "LD_FRAMEGEN_AB=1"` runs that comparison.
+- The cost: a few small passes on the graphics card, and the newest frame reaches the screen one refresh
+  later. Checked on this PC (European disc, watch mode always on): one made frame for every drawn one, none
+  dropped, saved made frames compared with the frames around them. Windows only for now. Please tell us how
+  it looks and feels on your PC.
+
 🏷️ Released as **v0.1.53**
 
 💾 **Saves over 2 MB load again** (brocolison and Keduboneur78 on Discord: after a long session, or after

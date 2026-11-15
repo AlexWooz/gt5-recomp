@@ -128,7 +128,9 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **15 Nov 2026:** saves over 2 MB (`GT5.0` + `GT5.1`, a big garage on 2.xx) load again instead of the
+- **15 Nov 2026:** frame generation (beta, launcher Display): 30 fps and watch mode look like 60, frames made
+  on the graphics card, presented on a thread of its own so the game keeps its speed (v0.1.54);
+  saves over 2 MB (`GT5.0` + `GT5.1`, a big garage on 2.xx) load again instead of the
   game closing at every start; a steering wheel with no d-pad moves through the menus: the rim for left / right,
   throttle and brake for down / up, and spare buttons can be the d-pad (v0.1.53).
 - **14 Nov 2026:** Photo Mode: Auto Focus no longer fills the viewfinder with ghost copies, and photos after the first keep the right exposure, and new cars get a proper Garage picture instead of a black square (v0.1.51); Linux: the game window opens on KDE Plasma under Wayland (v0.1.50); no more freezes when new shaders are needed (they build in the background), and
