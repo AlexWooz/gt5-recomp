@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.50](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.50) | 14 Nov 2026 | Linux: the game window opens on KDE Plasma under Wayland (#32) |
 | [v0.1.49](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.49) | 14 Nov 2026 | Linux: no more freezes when something new comes on screen, and road markings sit on the road (#20) |
 | [v0.1.48](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.48) | 14 Nov 2026 | Photo Mode pictures have their real colours again: no more yellow-green tint or coloured ghost copies |
 | [v0.1.47](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.47) | 14 Nov 2026 | The game starts with Windows' Control Flow Guard forced on (#31), and Options > Display no longer crashes it |

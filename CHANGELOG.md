@@ -9,6 +9,23 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 14 Nov 2026
 
+🏷️ Released as **v0.1.50**
+
+🐧 **Linux: the game window opens on KDE Plasma under Wayland**
+([#32](https://github.com/MormonFTP-hub/gt5-recomp/issues/32), lotushomerun: the game ran, with sound,
+but no window ever appeared; Arch Linux, Radeon RX 5500 XT)
+- To open its window the Vulkan renderer asks the graphics driver which picture formats the window
+  can take. It made room for 64 answers. KDE Plasma on Wayland, with Mesa's driver, pairs every format
+  with several colour spaces (for HDR) and gives well over 64. The driver then fills the 64 and says
+  "there are more", which is a normal answer, but the renderer took it for an error, gave up on the
+  window and carried on without one. It now takes all of them, and picks the ordinary (non-HDR) colour
+  space when a format comes in several.
+- If the window still can't be opened, `play.err` now says so in plain words, and that Ctrl+C in the
+  terminal stops the game. On Wayland, `SDL_VIDEODRIVER=x11 bash GT5/play.sh` (through XWayland) is a
+  way around it.
+- Checked: with the same renderer on Windows the window still opens as before. There's no Plasma
+  Wayland session here, so the case with more than 64 formats itself is untested.
+
 🏷️ Released as **v0.1.49**
 
 🐧 **Linux: no more freezes when something new comes on screen, and road markings sit on the road**
