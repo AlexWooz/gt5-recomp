@@ -19599,10 +19599,90 @@ index 1ffc9467..00f13b9f 100644
      /* Outside every known window: EINVAL. */
      expect("unmapped 0x3", 0x30000000u, 0x2, E_INVAL);
 diff --git a/tools/find_spu_functions.py b/tools/find_spu_functions.py
-index af16afd8..47d07046 100644
 --- a/tools/find_spu_functions.py
 +++ b/tools/find_spu_functions.py
-@@ -605,7 +605,7 @@ def find_end(start, insns_by_addr, sorted_starts, code_end):
+@@ -381,6 +381,80 @@
+     return targets
+ 
+ 
++def collect_bi_table_targets(insns, code, code_start, code_end, max_entries=64):
++    """Targets of a jump table that sits right after its `bi`, in position-
++    independent code:
++
++        lqx    $r28, $r84, $r30     <- $r84 = the table's address, kept in a register
++        rotqby $r27, $r28, $r29
++        a      $r2, $r27, $r84      <- entry + table base
++        bi     $r2
++        .word  0x4C, 0xFC, 0xFFFFFFB4, 0x144, ...   <- the table
++
++    No il/ila names the table (its address arrives in a register), so
++    collect_jump_table_targets never tries it, and none of the handlers is
++    lifted: GT5's Wws job at 0x015DF100 is a bytecode machine dispatched this
++    way, and ran its 2 KB of handlers in the interpreter, 5 M steps a second.
++
++    Every `bi` is tried: the words after it are a table while each is a small
++    signed offset (or absolute address) landing on an instruction start. Three
++    entries or more qualify; a false positive only adds an entry point at an
++    instruction boundary.
++    """
++    valid_starts = {ins.addr for ins in insns}
++    targets = set()
++    for ins in insns:
++        if ins.mnemonic != "bi":
++            continue
++        tbl = ins.addr + 4
++        off = tbl - code_start
++        entries = set()
++        for k in range(max_entries):
++            o = off + 4 * k
++            if o + 4 > len(code):
++                break
++            wrd = int.from_bytes(code[o:o + 4], "big")
++            if (wrd & 3) or not (wrd < 0x40000 or wrd >= 0xFFFC0000):
++                break
++            rel = (tbl + wrd) & 0x3FFFF
++            if rel in valid_starts and code_start <= rel < code_end and wrd != 0:
++                entries.add(rel)
++            elif wrd in valid_starts and wrd != 0:
++                entries.add(wrd)
++            else:
++                break
++        if len(entries) >= 3:
++            targets.update(entries)
++    return targets
++
++
++def collect_after_bi_targets(insns):
++    """The instruction after an unconditional `bi` (past nop/lnop padding) starts
++    something: `bi` never falls through. Usually a direct branch names it too,
++    but a function called only through a pointer kept in data has no such
++    branch, and position-independent code (GT5's Wws jobs) relocates those
++    pointers at run time, so no table scan can read them. Without a seed the
++    function is folded into the one before it and every call to it misses the
++    lookup and runs in the interpreter (GT5's job at 0x0159C180: LS 0x7938,
++    0x7660, 0x79F8, about 20,000 calls a second each in a race).
++
++    A word below 0x00200000 (the `stop` encodings: jump-table and data words)
++    is not seeded."""
++    by_addr = {ins.addr: ins for ins in insns}
++    targets = set()
++    for ins in insns:
++        if ins.mnemonic != "bi":
++            continue
++        a = ins.addr + 4
++        while a in by_addr and by_addr[a].mnemonic in ("nop", "lnop"):
++            a += 4
++        nxt = by_addr.get(a)
++        if nxt is None or nxt.mnemonic in ("stop", "stopd") or nxt.mnemonic.startswith("."):
++            continue
++        targets.add(a)
++    return targets
++
++
+ def collect_ila_continuation_targets(insns, code_start, code_end):
+     """Continuation addresses materialised as plain immediates:
+ 
+@@ -605,7 +679,7 @@
      return min(next_start, code_end)
  
  
@@ -19611,7 +19691,7 @@ index af16afd8..47d07046 100644
      if raw:
          # A raw local-store image: a SPURS job binary, which the title loads
          # from its own data files as a flat code+data blob rather than as an
-@@ -615,7 +615,7 @@ def detect_functions(buf, base_override=None, verbose=True, raw=False):
+@@ -615,7 +689,7 @@
          # spu_workload's SPU_DUMP_MISS, which is the only place these bytes
          # exist in one piece.
          base = base_override if base_override is not None else 0
@@ -19620,7 +19700,16 @@ index af16afd8..47d07046 100644
                                         "vaddr": base, "filesz": len(buf),
                                         "memsz": len(buf)}], "shs": []}
          text_off, text_va, text_size = 0, base, len(buf)
-@@ -728,12 +728,14 @@ def main():
+@@ -656,6 +730,8 @@
+     for t in (collect_link_register_targets(insns)
+               | collect_computed_branch_targets(insns)
+               | collect_jump_table_targets(insns, code, code_start, code_end)
++              | collect_bi_table_targets(insns, code, code_start, code_end)
++              | collect_after_bi_targets(insns)
+               | collect_ila_continuation_targets(insns, code_start, code_end)
+               | collect_duff_targets(insns, code_start, code_end)
+               | fptr_targets):
+@@ -728,12 +804,14 @@
                          "from the branch analysis")
      p.add_argument("--base", type=lambda x: int(x, 0), default=None,
                     help="Override the .text base address")

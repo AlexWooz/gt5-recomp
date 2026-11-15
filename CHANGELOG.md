@@ -9,6 +9,20 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 14 Nov 2026
 
+🧩 **Two kinds of SPU code no longer run in the interpreter** (needs a re-lift of the SPU jobs)
+- A jump table placed right after its `bi`, with the table's address held in a register
+  (position-independent code), had no `il`/`ila` naming it, so its handlers were never lifted. The Wws
+  job at `0x015DF100` is a bytecode machine dispatched this way: 2 KB of handlers ran in the
+  interpreter on every dispatch. `find_spu_functions.py` now tries the words after every `bi` as a
+  table (three or more small offsets landing on instructions).
+- A function that starts right after another's `bi` and is only called through a pointer kept in data
+  was folded into the function before it, so every call missed the lookup. The instruction after an
+  unconditional `bi` is now an entry.
+- 38 Wws jobs: 27,624 → 27,910 entries, 9 KB more code lifted in five jobs. In a race on the Steam
+  Deck the interpreter went from 6–8 million steps a second to 0.8 million (`SPU_INTERP_STATS=5`).
+- The frame rate did not change (8–12 fps in that race): a `PS3_FTRACE` timeline shows the race is
+  bound by the game's main PPU thread, busy about 80 ms of each 117 ms frame, not by SPU work.
+
 ⚙️ **The game's translated code keeps PPU registers in host registers** (needs a re-lift)
 - Every guest load and store has an out-of-line slow path, so the compiler had to assume `*ctx` changed
   after each one: registers were reloaded after nearly every memory access and stored after every
