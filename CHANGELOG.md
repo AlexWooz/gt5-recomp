@@ -80,6 +80,114 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
   nap, at the same 4.5 cores busy. Within the noise of the replay, so no loss, and the same code path
   as Windows.
 
+🏷️ Released as **v0.1.50**
+
+🐧 **Linux: the game window opens on KDE Plasma under Wayland**
+([#32](https://github.com/MormonFTP-hub/gt5-recomp/issues/32), lotushomerun: the game ran, with sound,
+but no window ever appeared; Arch Linux, Radeon RX 5500 XT)
+- To open its window the Vulkan renderer asks the graphics driver which picture formats the window
+  can take. It made room for 64 answers. KDE Plasma on Wayland, with Mesa's driver, pairs every format
+  with several colour spaces (for HDR) and gives well over 64. The driver then fills the 64 and says
+  "there are more", which is a normal answer, but the renderer took it for an error, gave up on the
+  window and carried on without one. It now takes all of them, and picks the ordinary (non-HDR) colour
+  space when a format comes in several.
+- If the window still can't be opened, `play.err` now says so in plain words, and that Ctrl+C in the
+  terminal stops the game. On Wayland, `SDL_VIDEODRIVER=x11 bash GT5/play.sh` (through XWayland) is a
+  way around it.
+- Checked: with the same renderer on Windows the window still opens as before. There's no Plasma
+  Wayland session here, so the case with more than 64 formats itself is untested.
+
+🏷️ Released as **v0.1.49**
+
+🐧 **Linux: no more freezes when something new comes on screen, and road markings sit on the road**
+([#20](https://github.com/MormonFTP-hub/gt5-recomp/issues/20), melroy89: single frames of 0.3 to 0.7 s,
+once 1.7 s, in races and licence tests on a Radeon RX 7900 XTX)
+- The Vulkan renderer (the Linux build's) made every shader the game hadn't used before on the spot,
+  while the game waited: translated into Vulkan's form, then compiled by the graphics driver. A new
+  car, track or menu asks for 100 to 300 of them at once, so the picture stopped for up to seconds.
+  Now they're built on spare CPU cores while the game keeps running (`PS3RECOMP_VK_ASYNC_SHADERS`, on
+  in `play.sh`). The cost: something can be missing for its first few frames on screen.
+  `export PS3RECOMP_VK_ASYNC_SHADERS=0` in `GT5/settings.sh` goes back to the old way.
+- Checked on this PC with the Windows build of the same Vulkan renderer (NVIDIA card), from the title
+  screen to the B-1 licence test with no shaders cached yet. Before: 16 frames of 250 ms or more, 10 s
+  frozen in all, the worst 2.2 s (and 5.9 s with the driver's own cache empty too). Now: none of
+  250 ms or more, the worst 210 ms, and the pictures were complete once the shaders were built.
+- GT5 moves road markings, skid marks and its shadow maps a tiny step towards or away from the camera
+  (the PS3's polygon offset), so they don't flicker against the surface under them. The Vulkan
+  renderer ignored that and now applies it (`PS3RECOMP_VK_DEPTH_BIAS=0` turns it off). Whether it is
+  also what made the car bodies flicker on the 7900 XTX isn't known yet: that didn't show here.
+- `play.err` now has a `[slow-frame]` line for every frame of 250 ms or more, as the Windows build
+  does, splitting it into new shaders (translation and driver), textures, waiting for the GPU and the
+  rest (`PS3RECOMP_VK_HITCH_MS` sets the limit, 0 turns it off). A texture the renderer can't create
+  is now logged too.
+- Not seen on this PC yet (NVIDIA, European disc): the flickering car bodies, the see-through road in
+  the B-2 intro, the missing textures in a braking test and the dark title-screen scene. With
+  `PS3_SKIP_INTRO=1` (play.sh's default) the scene behind the title is GT5's own replay of a race at
+  dusk or at night, drawn live, and it is just as dark in the Windows build. Questions for those are
+  on #20.
+
+🏷️ Released as **v0.1.48**
+
+📷 **Photo Mode pictures have their real colours again: no more yellow-green tint or coloured ghost copies**
+(brocolison and Arpadiam on Discord: tinted, ghosted and very dark photos)
+- GT5 builds a photo from about 50 slightly shifted renders, averaged one after another into a
+  high-precision image (that gives photos their smooth edges and depth of field). Each render is blended
+  in with a weight the game sets as a constant blend colour. For this kind of image the PS3 keeps that
+  constant in two registers, and the port read its second half (blue and alpha) from the wrong one, so
+  blue was blended with a weight of 0 and kept whatever the image held before: black, which gave the
+  yellow-green tint, or part of an older render, which gave the coloured ghost copies. The weight was
+  also taken per colour channel where the PS3 uses the alpha value for all of them.
+- Checked on this PC with the European disc in Photo Travel (Kyoto - Gion): before, the saved photo had
+  no blue at all (pink blossom came out yellow, the night sky green); now its colours match the
+  viewfinder, and a 3840 x 2160 photo (16:9, x2) has no ghost copies.
+- Not fixed yet: after a photo is taken, the viewfinder and the next photos can come out much darker.
+  That happened before this change too and is being looked into. Auto Focus did not show ghost copies
+  on this PC.
+
+🏷️ Released as **v0.1.47**
+
+🛡️ **The game starts on PCs where Windows forces Control Flow Guard on every program**
+([#31](https://github.com/MormonFTP-hub/gt5-recomp/issues/31), Fantomas3228: the game closed a second
+after Play, with a log that just stopped)
+- Windows Security's *Exploit protection* can turn Control Flow Guard (CFG) on for all programs. With it
+  on, Windows checks every `longjmp` the program makes, and the SPU code's fast jumps (which skip
+  unwinding, for speed) failed that check: Windows ended the game on the spot (fast fail, exit code
+  `0xC0000409`) as the first SPU job ran.
+- Now the game asks Windows whether CFG is on for it, and if so makes those jumps the standard way.
+  play.err then says `[spu] Control Flow Guard is on for this process`. PCs without CFG forced on keep
+  the faster jumps.
+- Checked on this PC by starting the game with CFG switched on for that one run: before, it closed
+  after 2 s with `0xC0000409` at the same line as in #31; now it runs normally. No Windows setting needs
+  changing any more (Fantomas3228's workaround, `Set-ProcessMitigation -Name gt5.exe -Disable CFG`,
+  can stay or be undone).
+
+📺 **Options > Display no longer crashes the game** (reported by Arpadiam on Discord: the Resolution
+list was empty, and leaving the screen with OK closed the game)
+- The port described the TV's video modes to the game with a block of data missing (the TV's colour
+  information comes before the list of modes), so GT5 read its list 20 bytes too early, found a mode
+  with resolution 0, showed an empty Resolution list and failed when the screen was confirmed.
+- The list now has the layout the PS3 uses, with one mode: the one the port draws (1080p or 720p, as
+  set in the launcher), at 59.94/60 Hz, the way RPCS3 reports it.
+- Checked on this PC with the European disc: Display Settings shows *1920 x 1080 59.94p*, and OK
+  returns to Options with the game still running. The 2.11 update's Resolution row is not tested here.
+
+🏷️ Released as **v0.1.46**
+
+☀️ **Races at 1080p get the right brightness: no more blown-out white or too-dark tracks** (reported by
+Keduboneur78 on Discord: Speed Test's track near-white even at −1.0 EV)
+- GT5 sets each frame's exposure from a small 16x8 copy of the scene that it reads back from the
+  graphics chip. In 1080p mode that copy sits in memory that a bigger image left over from an earlier
+  scene also covers, and the Windows renderer read it from that leftover image. So auto-exposure judged
+  every race by a frozen patch of whatever was shown before (often the title screen's white city), and
+  a race came out as bright or as dark as that patch suggested: Speed Test blown out to white, or High
+  Speed Ring almost black on this PC.
+- It now reads the image the game actually measures into, as the Linux and Android renderer already
+  did. 720p mode was never affected.
+- Checked on this PC with the European disc: High Speed Ring at 1080p averages a brightness of 81, like
+  the same start at 720p (84); before, with the leftover patch, it was 17. The play.err now says which
+  image feeds the exposure (`[blit-readback] source now ...`). `LD_RECT_PICK=0` brings back the old
+  behaviour. Speed Test itself is a DLC course not tested here.
+
 🏷️ Released as **v0.1.45**
 
 📦 **Install game updates and DLC from their .pkg files** (asked for by Keduboneur78 on Discord: "just

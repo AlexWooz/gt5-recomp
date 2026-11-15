@@ -468,8 +468,8 @@ shared (see below).
 A native x86-64 build using Vulkan and SDL2. See [Requirements](#requirements) for hardware and
 build dependencies, and [Which copy of GT5](#which-copy-of-gt5) for supported game releases.
 
-**Experimental:** menus have been tested with software rendering; races on a real Linux GPU are
-still untested. See [Linux testing status](#linux-testing-status).
+**Experimental:** it runs, races included, on a Radeon RX 7900 XTX, but with picture bugs there that
+are still open. See [Linux testing status](#linux-testing-status).
 
 ### Set it up
 
@@ -596,6 +596,14 @@ Still wrong there at first: races drew in the top half of the picture, the intro
 white, and sound effects played late. The squashed races and the late sound are fixed since 13 Nov
 (see the changelog); the white city is how GT5 draws that scene.
 
+**Second report (14 Nov 2026, melroy89, v0.1.43, the same PC):** races and licence tests run, mostly
+at a steady 60 frames per second. Wrong there: freezes of 0.3 to 0.7 s (once 1.7 s) whenever something
+new came on screen, fixed since 14 Nov (new shaders now build in the background); car bodies whose
+lighting flickers; in the B-2 licence intro on Tokyo R246, flickering parts and a road you can see
+through; most textures missing in a braking licence test; a dark title-screen scene. None of those
+last four showed on an NVIDIA card here, so they may be specific to AMD's driver: being looked into
+on #20.
+
 If you have a Linux PC with a graphics card, please
 [tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml)
 (attach `GT5/logs/play.err`).
@@ -607,6 +615,9 @@ If you have a Linux PC with a graphics card, please
 - Ultrawide (21:9, 32:9): the Linux renderer draws 16:9.
 - The Vulkan renderer is younger than the Windows one; picture bugs the Windows build fixed may
   still show here. Please report them with a screenshot.
+- The first time a car, track or menu needs new shaders, something can be missing for a few frames
+  while they build (instead of the whole game freezing). `export PS3RECOMP_VK_ASYNC_SHADERS=0` in
+  `GT5/settings.sh` goes back to freezing.
 - The title screen's white model city is meant to be white (the Windows build draws it the same),
   but its depth-of-field blur and darker roads may still be missing on Linux.
 - Movies and the on-screen keyboard (naming a save, Course Maker) are untried on Linux.
