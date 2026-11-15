@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.48](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.48) | 14 Nov 2026 | Photo Mode pictures have their real colours again: no more yellow-green tint or coloured ghost copies |
 | [v0.1.47](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.47) | 14 Nov 2026 | The game starts with Windows' Control Flow Guard forced on (#31), and Options > Display no longer crashes it |
 | [v0.1.46](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.46) | 14 Nov 2026 | Races at 1080p get the right brightness: auto-exposure read a leftover image (Speed Test blown out to white, some tracks far too dark) |
 | [v0.1.45](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.45) | 14 Nov 2026 | Install game updates and DLC from their .pkg files (launcher, Help), through RPCS3 |

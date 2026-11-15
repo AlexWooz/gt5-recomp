@@ -9,6 +9,24 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 14 Nov 2026
 
+🏷️ Released as **v0.1.48**
+
+📷 **Photo Mode pictures have their real colours again: no more yellow-green tint or coloured ghost copies**
+(brocolison and Arpadiam on Discord: tinted, ghosted and very dark photos)
+- GT5 builds a photo from about 50 slightly shifted renders, averaged one after another into a
+  high-precision image (that gives photos their smooth edges and depth of field). Each render is blended
+  in with a weight the game sets as a constant blend colour. For this kind of image the PS3 keeps that
+  constant in two registers, and the port read its second half (blue and alpha) from the wrong one, so
+  blue was blended with a weight of 0 and kept whatever the image held before: black, which gave the
+  yellow-green tint, or part of an older render, which gave the coloured ghost copies. The weight was
+  also taken per colour channel where the PS3 uses the alpha value for all of them.
+- Checked on this PC with the European disc in Photo Travel (Kyoto - Gion): before, the saved photo had
+  no blue at all (pink blossom came out yellow, the night sky green); now its colours match the
+  viewfinder, and a 3840 x 2160 photo (16:9, x2) has no ghost copies.
+- Not fixed yet: after a photo is taken, the viewfinder and the next photos can come out much darker.
+  That happened before this change too and is being looked into. Auto Focus did not show ghost copies
+  on this PC.
+
 🏷️ Released as **v0.1.47**
 
 🛡️ **The game starts on PCs where Windows forces Control Flow Guard on every program**
