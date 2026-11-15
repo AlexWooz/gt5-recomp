@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.58](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.58) | 15 Nov 2026 | Vulkan window: opens at the window size, resizes and maximises, and survives being minimised |
 | [v0.1.57](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.57) | 15 Nov 2026 | Sound on small CPUs: the audio chain a little cheaper, its EQ module a third cheaper |
 | [v0.1.56](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.56) | 15 Nov 2026 | Renderer choice in the launcher: DirectX 12 (default) or Vulkan (experimental, added with a one-time build) |
 | [v0.1.55](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.55) | 15 Nov 2026 | Esc asks before it quits the game |

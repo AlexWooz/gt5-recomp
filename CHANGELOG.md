@@ -9,6 +9,22 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.58**
+
+🪟 **Vulkan's window takes the window size, resizes, and survives being minimised** (Arpadiam on Discord: the
+Vulkan window didn't open at 1920x1080 windowed)
+- The Vulkan window now opens at the launcher's **Display > Window size** (`PS3_WINDOW_SIZE`), as the
+  DirectX 12 one does, and can be resized and maximised, with the picture stretched to fit. It was held at
+  1280x720: SDL keeps a window that isn't marked resizable at its first size, so the setting and the
+  maximise button did nothing (borderless worked, as it changes the window's style).
+- Minimising the Vulkan window gave it up for good: Windows gives a minimised window no drawing area, the
+  backend couldn't make its swapchain for that, and it went on with no window. Now nothing is shown while
+  it's minimised and the window draws again when it's back (`play.err`: "window minimised" / "window back").
+- Checked on this PC with the window at 1920x1080 windowed: it opened at 1920x1080, a resize to 1600x900
+  rebuilt the swapchain at the new size with the picture in it, and after 8 s minimised it came back drawing.
+  The v0.1.56 entry's "kept drawing after the window was resized" was wrong: that test's resize didn't
+  happen, for the same reason.
+
 🏷️ Released as **v0.1.57**
 
 🔊 **Sound on small CPUs: GT5's audio chain a little cheaper, its EQ a third cheaper**
@@ -50,11 +66,11 @@ flat out on 4 small cores)
   hasn't, so it's there to try and compare, and reports help it catch up.
 - With Vulkan, frame generation, the F9 watch-mode key and the window size setting are DirectX 12 only
   (watch mode by itself and Speed: 30 fps are in Vulkan's draw path too, not yet tried with it on
-  Windows). The window can still be maximised or made borderless.
+  Windows). The window can be made borderless. (The window size and maximising came the same day, below.)
   Its shaders go in `GT5\shadercache` (ClearShaders.bat clears them too). Esc asks before quitting, as in
   the DirectX 12 window.
 - Checked on this PC: Vulkan picked → the game came up on Vulkan (`[RSX vulkan] using device 0`, window
-  "Gran Turismo 5 - Vulkan") and kept drawing after the window was resized; Vulkan picked with `SDL2.dll`
+  "Gran Turismo 5 - Vulkan"); Vulkan picked with `SDL2.dll`
   missing → DirectX 12; Esc → the question, No kept playing, Yes quit. Adding Vulkan to a build here
   rebuilt 167 files (the runtime and the link), none of the generated code.
 

@@ -366,8 +366,8 @@ and spreads it sideways. Rendering above the PS3's resolutions is on the list.
 **A: Yes, as an experiment: the [launcher](#launcher)'s Display > Renderer.** DirectX 12 is the port's main
 renderer and stays the default. Vulkan is the renderer the Linux build and the Android work use. On
 Windows it's slower for now (see the numbers in [CHANGELOG.md](CHANGELOG.md), 15 Nov), some effects may
-look different, and frame generation, the F9 watch-mode key and the window size setting are DirectX 12
-only. The first time you pick Vulkan, the launcher offers to add it to your `gt5.exe`: it
+look different, and frame generation and the F9 watch-mode key are DirectX 12 only. The first time you
+pick Vulkan, the launcher offers to add it to your `gt5.exe`: it
 fetches the source code of SDL2 and glslang (about 60 MB, from GitHub, checked against the exact
 releases) and rebuilds the game's runtime with them, 10 to 20 minutes in a window that shows the
 progress; the game's generated code isn't rebuilt. Without the launcher: run
