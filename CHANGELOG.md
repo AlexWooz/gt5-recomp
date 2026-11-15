@@ -9,6 +9,8 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.63**
+
 ⚡ **Less CPU for every frame: the Steam Deck work from a community pull request** (by AlexWooz, #33;
 one re-lift of the game's code and SPU jobs, done by `update.ps1`)
 - The pull request's six changes, measured on Linux by AlexWooz (a Steam Deck, about 4%: 109.5 to 105.2 ms

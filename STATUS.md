@@ -132,7 +132,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **15 Nov 2026:** in the cockpit view, dust and smoke from the cars ahead stay outside instead of covering
+- **15 Nov 2026:** less CPU for every frame on small CPUs and the Steam Deck, from AlexWooz's pull request #33,
+  and the sound mixer's filters a little cheaper (v0.1.63, one re-lift); in the cockpit view, dust and smoke from the cars ahead stay outside instead of covering
   the dashboard (v0.1.62); a steering wheel's steering and pedals no longer get stuck in a race when the PC is too
   busy for the game to keep up (v0.1.59); the sound chain needs less CPU (its EQ module a third less), for the audio lag on small
   CPUs (v0.1.57); renderer choice in the launcher (Display > Renderer): DirectX 12, the default, or Vulkan,

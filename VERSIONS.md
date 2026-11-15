@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.63](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.63) | 15 Nov 2026 | Less CPU for every frame on small CPUs and the Steam Deck (community pull request #33), the sound filters a little cheaper; one re-lift |
 | [v0.1.62](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.62) | 15 Nov 2026 | Cockpit view: dust and smoke from the cars ahead no longer cover the dashboard |
 | [v0.1.61](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.61) | 15 Nov 2026 | Updates recompile only what changed: unchanged runtime files keep their timestamps |
 | [v0.1.60](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.60) | 15 Nov 2026 | Adding Vulkan builds with Visual Studio 18; setup and the installer skip an incomplete Visual Studio |
