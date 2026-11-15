@@ -295,9 +295,13 @@ $VsParts = @("Microsoft.VisualStudio.Workload.VCTools", "Microsoft.VisualStudio.
              "Microsoft.VisualStudio.Component.VC.Llvm.Clang", "Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset",
              "Microsoft.VisualStudio.Component.VC.CMake.Project")
 function Find-VsClang {
+    # Both clang-cl and vcvars64.bat (the build calls it): a copy an uninstall left behind can keep
+    # clang-cl alone, and the build then stopped with "The system cannot find the path specified" (#35).
     if (-not (Test-Path $VsWhere)) { return $null }
-    $p = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath
-    if ($p -and (Test-Path (Join-Path $p "VC\Tools\Llvm\x64\bin\clang-cl.exe"))) { return $p }
+    foreach ($p in @(& $VsWhere -sort -products * -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath)) {
+        if ($p -and (Test-Path (Join-Path $p "VC\Tools\Llvm\x64\bin\clang-cl.exe")) -and
+            (Test-Path (Join-Path $p "VC\Auxiliary\Build\vcvars64.bat"))) { return $p }
+    }
     return $null
 }
 

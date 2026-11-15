@@ -9,6 +9,24 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.60**
+
+🛠️ **Adding Vulkan works with Visual Studio 18; setup no longer picks an incomplete Visual Studio**
+- Adding Vulkan stopped at SDL2's link with Visual Studio 18 (clang 22): `undefined symbol: strlen` and
+  `wcslen` (reported by brocolison on Discord). SDL2 was built without a C library, and newer clang turns
+  its own string loops into calls to those functions. It's now built with the C runtime gt5.exe already
+  uses, so nothing more needs installing. Run **Display > Renderer: Vulkan** again: the sources already
+  fetched are reused.
+- The build could stop at once with "The system cannot find the path specified" (#35). Setup, the
+  installer and `build.cmd` took any Visual Studio folder with `clang-cl.exe` in it, and a copy left behind
+  by an uninstall can keep that without `vcvars64.bat`, which the build calls first. All three now look for
+  one with both, checking every Visual Studio installed, newest first. When none is complete, the
+  installer installs the Build Tools as it does on a PC without Visual Studio. `build.cmd` now says which
+  Visual Studio it builds with.
+- Checked here: SDL2 builds with the C runtime (its DLL needs only what gt5.exe already loads), and a
+  Visual Studio folder with `clang-cl.exe` but no `vcvars64.bat` is passed over for the complete one.
+  Visual Studio 18 itself isn't on this PC.
+
 🏷️ Released as **v0.1.59**
 
 🎮 **Steering wheels: the steering and pedals no longer get stuck in a race on a busy PC**

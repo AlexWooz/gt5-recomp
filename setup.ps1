@@ -74,12 +74,18 @@ elseif ($pyCmd) {
 }
 
 # ---- Visual Studio with the Clang tools (what GT5\scripts\build.cmd needs), or get-toolchain.ps1's tools ----
-$vsOk = Test-Path "$env:ProgramFiles\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-cl.exe"
+# A usable Visual Studio has both clang-cl and vcvars64.bat (build.cmd calls it): a folder an uninstall left
+# behind can keep clang-cl alone, and then the build stopped with "The system cannot find the path specified" (#35).
+function Test-VsFolder([string]$p) {
+    $p -and (Test-Path (Join-Path $p "VC\Tools\Llvm\x64\bin\clang-cl.exe")) -and (Test-Path (Join-Path $p "VC\Auxiliary\Build\vcvars64.bat"))
+}
+$vsOk = Test-VsFolder "$env:ProgramFiles\Microsoft Visual Studio\2022\Community"
 if (-not $vsOk) {
     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
     if (Test-Path $vswhere) {
-        $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath
-        $vsOk = $vsPath -and (Test-Path (Join-Path $vsPath "VC\Tools\Llvm\x64\bin\clang-cl.exe"))
+        foreach ($vsPath in @(& $vswhere -sort -products * -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath)) {
+            if (Test-VsFolder $vsPath) { $vsOk = $true; break }
+        }
     }
 }
 # The same tools without Visual Studio, where build.cmd looks: the folder get-toolchain.ps1 recorded, else

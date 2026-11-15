@@ -9,15 +9,18 @@ set "PATH=%PATH%;%ProgramFiles(x86)%\Microsoft Visual Studio\Installer"
 set "TOOLARGS="
 set "TC=%GT5_TOOLCHAIN%"
 if defined GT5_TOOLCHAIN goto portable
-REM Visual Studio: 2022 Community where it usually is, else any edition vswhere finds that has the
-REM Clang tools (Professional, Enterprise, Build Tools, newer versions).
+REM Visual Studio: 2022 Community where it usually is, else the newest edition vswhere finds that has the
+REM Clang tools (Professional, Enterprise, Build Tools, newer versions). Each must have both clang-cl and
+REM vcvars64.bat: a folder left behind by an uninstall (or a half-finished install) can keep clang-cl
+REM without vcvars64.bat, and calling that stopped the build with "The system cannot find the path
+REM specified" (#35).
 set "VS=%ProgramFiles%\Microsoft Visual Studio\2022\Community"
-if exist "%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe" goto have_vs
+if exist "%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe" if exist "%VS%\VC\Auxiliary\Build\vcvars64.bat" goto have_vs
 set "VS="
-if exist "%VSWHERE%" for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath`) do set "VS=%%i"
+if exist "%VSWHERE%" for /f "usebackq delims=" %%i in (`"%VSWHERE%" -sort -products * -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath`) do if not defined VS if exist "%%i\VC\Tools\Llvm\x64\bin\clang-cl.exe" if exist "%%i\VC\Auxiliary\Build\vcvars64.bat" set "VS=%%i"
 if not defined VS goto no_vs
-if not exist "%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe" goto no_vs
 :have_vs
+echo Building with the Visual Studio in "%VS%"
 call "%VS%\VC\Auxiliary\Build\vcvars64.bat" >nul
 if errorlevel 1 exit /b 1
 set "CLANGCL=%VS:\=/%/VC/Tools/Llvm/x64/bin/clang-cl.exe"
@@ -57,7 +60,8 @@ if defined TC if exist "%TC%\gt5-toolchain.txt" goto portable
 set "TC=%~dp0..\..\..\toolchain"
 if exist "%TC%\gt5-toolchain.txt" goto portable
 echo Visual Studio with "Desktop development with C++" and "C++ Clang tools for Windows" was not found,
-echo and neither were the portable tools from get-toolchain.ps1.
+echo and neither were the portable tools from get-toolchain.ps1. (A Visual Studio folder with clang-cl.exe
+echo but no VC\Auxiliary\Build\vcvars64.bat is incomplete: repair it in the Visual Studio Installer.)
 echo Install them with the Visual Studio Installer (see Requirements in README.md), or, to keep C: free,
 echo run get-toolchain.ps1 in the gt5-recomp folder. Then run this again.
 exit /b 1

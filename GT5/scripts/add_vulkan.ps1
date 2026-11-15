@@ -109,7 +109,10 @@ $sdl = $src['SDL2-2.32.10']; $gls = $src['glslang-15.4.0']
 # ---- SDL2 and glslang, into GT5\deps\vulkan\prefix ------------------------------------------------------
 if ($needSdl) {
     $b = Join-Path $deps 'build\sdl2'
-    Step 'SDL2: configure' { cmake -S $sdl -B $b @common -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF }
+    # SDL_LIBC=ON: with the C runtime. Without it SDL2 builds against no C library at all, and newer
+    # clang (Visual Studio 18's clang 22) turns its own string loops into strlen / wcslen calls that
+    # then don't link. gt5.exe uses the same C runtime DLLs, so this adds nothing to install.
+    Step 'SDL2: configure' { cmake -S $sdl -B $b @common -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF -DSDL_LIBC=ON }
     Step "SDL2: build ($jobs jobs)" { cmake --build $b --target install -j $jobs }
 }
 if ($needGls) {
