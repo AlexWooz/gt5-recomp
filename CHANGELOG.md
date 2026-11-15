@@ -7,6 +7,24 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 > or repeated frames (fixed on 4 Nov and 9 Nov), so treat them as rough before-and-after comparisons.
 > From 9 Nov on, numbers are the game's own frames.
 
+## 15 Nov 2026
+
+🏷️ Released as **v0.1.52**
+
+🐧 **Linux and the Vulkan renderer: new shaders are handed over a little faster on scene changes**
+- Since v0.1.49 new shaders build in the background. A scene change brings a few hundred at once, and
+  the renderer still did two slow searches for each one before handing it over: one through every
+  shader made so far, for a free place in its table, and one through the shader's text sixteen times
+  over, for cube-map textures. Each is now a single quick step. On this PC that saves about 18
+  microseconds per shader, or a few milliseconds on a big scene change; slower processors save more.
+  The Android port's measurements in the Android emulator pointed at it.
+- When the renderer shuts down, shaders still waiting in the queue are dropped instead of built first.
+  GT5 doesn't run that code when it quits, so players won't see a difference; the runtime's own test
+  program does.
+- Checked: the new cube-map search gives the same answers as the old one on 200,000 generated
+  shader texts and on GT5's own; the Windows Vulkan test copy builds and runs, with shaders built in
+  the background.
+
 ## 14 Nov 2026
 
 🏷️ Released as **v0.1.51**

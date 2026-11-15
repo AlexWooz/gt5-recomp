@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.52](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.52) | 15 Nov 2026 | Vulkan renderer: new shaders are handed over faster on scene changes |
 | [v0.1.51](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.51) | 14 Nov 2026 | Photo Mode: Auto Focus no longer ghosts the viewfinder; exposure after a photo stays right at 1080p |
 | [v0.1.50](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.50) | 14 Nov 2026 | Linux: the game window opens on KDE Plasma under Wayland (#32) |
 | [v0.1.49](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.49) | 14 Nov 2026 | Linux: no more freezes when something new comes on screen, and road markings sit on the road (#20) |
