@@ -9,6 +9,31 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.56**
+
+🧪 **Renderer choice: DirectX 12 or Vulkan (experimental)** (asked about by Arpadiam and brocolison on Discord)
+- The launcher's **Display > Renderer** picks DirectX 12 (the default) or Vulkan, the renderer the Linux
+  build and the Android work use. `set "GT5_RENDERER=vulkan"` in `GT5\settings.bat` does the same.
+- A normal build has no Vulkan in it. The first time you pick it, the launcher offers to add it
+  (`GT5\scripts\add_vulkan.ps1`). It fetches the source code of SDL2 2.32.10 and glslang 15.4.0 with git
+  (about 60 MB, each checked against its release's commit), builds them into `GT5\deps\vulkan` with the
+  game's own compiler, and rebuilds the runtime: 10 to 20 minutes, and the game's generated code isn't
+  rebuilt. DirectX 12 keeps working whatever happens: `gt5.exe` loads SDL2 only when Vulkan runs, and
+  without `build\SDL2.dll` play.bat stays on DirectX 12. `add_vulkan.ps1 -Remove` takes Vulkan out again.
+- **Slower on Windows for now.** Same race and save, alternating runs from the same `gt5.exe` on the
+  tested rig, with other programs open: DirectX 12 about 31 fps, using about 34 ms of CPU time per frame;
+  Vulkan 17 to 22 fps, about 55 ms per frame. DirectX 12 has had months of speed work on Windows and Vulkan
+  hasn't, so it's there to try and compare, and reports help it catch up.
+- With Vulkan, frame generation, the F9 watch-mode key and the window size setting are DirectX 12 only
+  (watch mode by itself and Speed: 30 fps are in Vulkan's draw path too, not yet tried with it on
+  Windows). The window can still be maximised or made borderless.
+  Its shaders go in `GT5\shadercache` (ClearShaders.bat clears them too). Esc asks before quitting, as in
+  the DirectX 12 window.
+- Checked on this PC: Vulkan picked → the game came up on Vulkan (`[RSX vulkan] using device 0`, window
+  "Gran Turismo 5 - Vulkan") and kept drawing after the window was resized; Vulkan picked with `SDL2.dll`
+  missing → DirectX 12; Esc → the question, No kept playing, Yes quit. Adding Vulkan to a build here
+  rebuilt 167 files (the runtime and the link), none of the generated code.
+
 🏷️ Released as **v0.1.55**
 
 ⌨️ **Esc asks before it quits the game** (asked for by Arpadiam on Discord: with the keyboard it is easy to

@@ -147,6 +147,14 @@ namespace Gt5Launcher
             { "watch.help", new[] { "Comes on after 10 s without input (B-Spec, replays): draws fewer frames (see the next setting) and lowers the game's priority. F9 toggles it any time.", "10 秒无操作后自动开启（B-Spec、回放）：减少绘制的帧数（见下一项）并降低游戏优先级。随时可按 F9 切换。" } },
             { "framegen", new[] { "Frame generation (beta)", "帧生成（测试版）" } },
             { "framegen.help", new[] { "Fills the frames that 30 fps and watch mode leave out with frames made on the graphics card, so the picture stays at 60. The game and its CPU work are unchanged; the newest frame reaches the screen one refresh later. Off: only drawn frames are shown.", "用显卡生成的帧补上 30 fps 和观看模式省略的帧，让画面保持 60 帧。游戏本身和 CPU 负载不变；最新的一帧会晚一次刷新显示。关闭时只显示实际绘制的帧。" } },
+            { "renderer", new[] { "Renderer", "渲染器" } },
+            { "renderer.help", new[] { "DirectX 12 is the port's main renderer and the fastest. Vulkan (the Linux and Android renderer) is here to try: on Windows it's slower for now, some effects may look different, and frame generation, the F9 watch-mode key and the window size setting are DirectX 12 only. Picking Vulkan the first time adds it to your gt5.exe (a one-time build).", "DirectX 12 是本移植的主要渲染器，也是最快的。Vulkan（Linux 和 Android 版使用的渲染器）可供试用：目前在 Windows 上较慢，部分效果可能不同，帧生成、F9 观看模式快捷键和窗口大小设置只在 DirectX 12 下可用。第一次选择 Vulkan 时会把它编译进 gt5.exe（只需一次）。" } },
+            { "renderer.dx12", new[] { "DirectX 12 (recommended)", "DirectX 12（推荐）" } },
+            { "renderer.vk", new[] { "Vulkan (experimental)", "Vulkan（实验性）" } },
+            { "vk.add", new[] { "Vulkan isn't in your gt5.exe yet. Add it now?\n\nThis downloads the source code of SDL2 and glslang (about 60 MB, from GitHub) and rebuilds the game's runtime with them: about 10 to 20 minutes, in a window that shows the progress. DirectX 12 keeps working either way.", "你的 gt5.exe 里还没有 Vulkan。现在添加吗？\n\n这会从 GitHub 下载 SDL2 和 glslang 的源代码（约 60 MB），并用它们重新编译游戏的运行库：约 10 到 20 分钟，进度会显示在一个窗口中。无论如何 DirectX 12 都能继续使用。" } },
+            { "vk.adding", new[] { "Adding Vulkan to gt5.exe (see the other window)...", "正在把 Vulkan 加入 gt5.exe（见另一个窗口）……" } },
+            { "vk.added", new[] { "Vulkan is ready: the next Play uses it.", "Vulkan 已就绪：下次开始游戏时使用。" } },
+            { "vk.failed", new[] { "Vulkan couldn't be added (the other window said why), so the renderer is DirectX 12 again.", "未能添加 Vulkan（原因见另一个窗口），渲染器已改回 DirectX 12。" } },
             { "wdraw", new[] { "Watch mode draws", "观看模式绘制" } },
             { "wdraw.help", new[] { "B-Spec mode for laptops: while you only watch, fewer frames are drawn and the race keeps full speed, so more of the CPU is left for the game. The window title shows FPS: x (game y); y is how fast the game runs.", "笔记本的 B-Spec 模式：只观看时绘制更少的帧，比赛保持全速，把更多 CPU 留给游戏。窗口标题显示 FPS: x (game y)；y 是游戏实际运行的速度。" } },
             { "wdraw.2", new[] { "1 frame in 2", "每 2 帧绘制 1 帧" } },
@@ -238,7 +246,7 @@ namespace Gt5Launcher
             new[] { "GT5_LAUNCH_WINDOW", "windowed" }, new[] { "GT5_LAUNCHER_LANG", "" },
             new[] { "GT5_LAUNCHER_HIDE", "1" }, new[] { "GT5_LAUNCHER_AUTOCHECK", "1" },
             new[] { "GT5_SPEED", "" }, new[] { "PS3_SKIP_INTRO", "1" }, new[] { "LD_WATCH_DRAW", "" },
-            new[] { "LD_FRAMEGEN", "" },
+            new[] { "LD_FRAMEGEN", "" }, new[] { "GT5_RENDERER", "" },
         };
         // True when there was no settings.bat yet: the launcher's first start on this install.
         public bool Fresh;
@@ -532,6 +540,9 @@ namespace Gt5Launcher
             cb.SelectedIndex = sel;
             cb.SelectedIndexChanged += delegate
             {
+                // Vulkan picked but not built into gt5.exe yet: offer the one-time build, or go back to DirectX 12.
+                if (key == "GT5_RENDERER" && ((Choice)cb.SelectedItem).Value == "vulkan" && !VulkanBuilt() && !AddVulkan(cb))
+                { cb.SelectedIndex = 0; return; }
                 S.Set(key, ((Choice)cb.SelectedItem).Value); SaveQuiet();
                 if (key == "GT5_LAUNCHER_LANG")   // the launcher's own language: redraw everything in it
                     BeginInvoke((MethodInvoker)delegate { T.Zh = S.Get(key) == "zh"; string pg = page; Build(); ShowPage(pg); if (latestTag != "") CheckForUpdates(false); });
@@ -620,6 +631,7 @@ namespace Gt5Launcher
         {
             var p = NewPage(); int y = 0;
             y = AddHeading(p, T.Get("nav.display"), y);
+            y = AddCombo(p, "renderer", "renderer.help", "GT5_RENDERER", new[] { new Choice("", T.Get("renderer.dx12")), new Choice("vulkan", T.Get("renderer.vk")) }, y);
             y = AddCombo(p, "res", "res.help", "PS3_VIDEO_MODE", new[] { new Choice("1080", T.Get("res.1080")), new Choice("720", T.Get("res.720")) }, y);
             y = AddCombo(p, "speed", "speed.help", "GT5_SPEED", new[] { new Choice("", T.Get("speed.full")), new Choice("30", T.Get("speed.30")) }, y);
             y = AddCombo(p, "shape", "shape.help", "PS3_ASPECT", new[] { new Choice("auto", T.Get("shape.auto")), new Choice("16:9", "16:9"), new Choice("21:9", "21:9"), new Choice("32:9", "32:9") }, y);
@@ -915,6 +927,47 @@ namespace Gt5Launcher
             }
             catch { }
             return false;
+        }
+
+        // build\SDL2.dll next to gt5.exe: the exe has the Vulkan renderer (GT5's CMakeLists copies it in when it
+        // does and removes it when it doesn't).
+        bool VulkanBuilt() { return File.Exists(Path.Combine(Path.GetDirectoryName(P.Exe), "SDL2.dll")); }
+
+        // Runs scripts\add_vulkan.ps1 in its own window. True when it started; the renderer combo goes back to
+        // DirectX 12 by itself if the build doesn't end with Vulkan in.
+        bool AddVulkan(ComboBox cb)
+        {
+            string script = Path.Combine(P.Gt5, "scripts", "add_vulkan.ps1");
+            if (!File.Exists(script) || !File.Exists(P.Exe)) { MessageBox.Show(this, T.Get("notbuilt"), "GT5"); return false; }
+            if (GameRunning() || running) { MessageBox.Show(this, T.Get("upd.running"), "GT5"); return false; }
+            if (MessageBox.Show(this, T.Get("vk.add"), "GT5", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
+            Process pr;
+            try
+            {
+                var psi = new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"");
+                psi.WorkingDirectory = P.Gt5; psi.UseShellExecute = true;
+                pr = Process.Start(psi);
+            }
+            catch (Exception e) { MessageBox.Show(this, e.Message, "GT5"); return false; }
+            running = true;   // no Play while gt5.exe is rebuilt
+            playButton.Enabled = false; cb.Enabled = false;
+            status.Text = T.Get("vk.adding");
+            var th = new Thread(delegate ()
+            {
+                try { pr.WaitForExit(); } catch { }
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        running = false; playButton.Enabled = true; cb.Enabled = true;
+                        if (VulkanBuilt()) status.Text = T.Get("vk.added");
+                        else { status.Text = T.Get("vk.failed"); cb.SelectedIndex = 0; }
+                    });
+                }
+                catch { }
+            });
+            th.IsBackground = true; th.Start();
+            return true;
         }
 
         void RunUpdate()

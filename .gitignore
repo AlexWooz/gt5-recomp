@@ -59,6 +59,8 @@ GT5/build-linux/
 build/
 ps3recomp/
 ffmpeg/
+# add_vulkan.ps1: SDL2 and glslang for the Vulkan renderer
+GT5/deps/
 # GT5-Installer.bat's helpers (RPCS3, the shortcut icon)
 tools/
 # The launcher, built on your PC by launcher\build-launcher.ps1, and the settings it saves

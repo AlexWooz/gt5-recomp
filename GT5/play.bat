@@ -70,6 +70,23 @@ for /d %%G in ("%PS3_HDD0_ROOT%\game\*") do if exist "%%G\USRDIR\vou\*.edat" set
 REM The launcher (GT5Launcher.exe in the install folder) saves its settings in settings.bat; they win
 REM over the lines above. Without the launcher there's no settings.bat and the lines above count.
 if exist "%HERE%settings.bat" call "%HERE%settings.bat"
+REM Renderer: DirectX 12 unless GT5_RENDERER=vulkan (the launcher's Display > Renderer). Vulkan needs its
+REM parts built in once (scripts\add_vulkan.ps1, which the launcher runs; then build\SDL2.dll is there).
+REM It's experimental on Windows: frame generation and the F9 watch-mode key are DirectX 12 only.
+if /i not "%GT5_RENDERER%"=="vulkan" goto renderer_set
+if not exist "%HERE%build\SDL2.dll" goto renderer_set
+set "RSX_LIVE_DRAW="
+set "PS3RECOMP_VK_WINDOW=1"
+set "PS3RECOMP_VK_GUEST_PROGRAMS=1"
+set "VK_DRAW_BATCH=1"
+set "PS3RECOMP_VK_ASYNC_SHADERS=1"
+set "PS3RECOMP_VK_NO_READBACK=1"
+set "PS3RECOMP_SPIRV_CACHE=%HERE%shadercache"
+REM Present every flip: the DirectX 12 engine's "nothing new to show" test doesn't apply to Vulkan.
+set "LD_SKIP_EMPTY_PRESENT=0"
+set "PS3_TITLE=%PS3_TITLE% - Vulkan"
+if not exist "%HERE%shadercache" mkdir "%HERE%shadercache"
+:renderer_set
 if not exist "%HERE%hdd0" mkdir "%HERE%hdd0"
 if not exist "%HERE%hdd1" mkdir "%HERE%hdd1"
 if not exist "%HERE%logs" mkdir "%HERE%logs"

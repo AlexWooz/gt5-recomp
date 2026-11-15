@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.56](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.56) | 15 Nov 2026 | Renderer choice in the launcher: DirectX 12 (default) or Vulkan (experimental, added with a one-time build) |
 | [v0.1.55](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.55) | 15 Nov 2026 | Esc asks before it quits the game |
 | [v0.1.54](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.54) | 15 Nov 2026 | Frame generation (beta): 30 fps and watch mode look like 60, made on the graphics card |
 | [v0.1.53](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.53) | 15 Nov 2026 | Saves over 2 MB load again instead of the game closing at every start; wheels without a d-pad move through the menus |

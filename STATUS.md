@@ -63,6 +63,9 @@ performance matters more than the graphics card.
 
 ## 🔧 Being worked on
 
+- **Vulkan on Windows, experimental** (v0.1.56): the launcher's Display > Renderer offers it next to
+  DirectX 12, which stays the default. Picking it the first time adds it to `gt5.exe` with a one-time
+  build (README, FAQ). Frame generation and the F9 watch-mode key are DirectX 12 only.
 - **Linux, new and early** (a native build: Vulkan, SDL2, `setup.sh`; README, Linux). Its first test
   ran on Ubuntu 24.04 with no graphics card (software Vulkan): menus, GT Mode and Arcade up to the
   pre-race screen work, the race itself stayed black there. Not yet tried on a real Linux PC with a
@@ -128,7 +131,9 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **15 Nov 2026:** Esc asks before it quits the game (v0.1.55); frame generation (beta, launcher Display): 30 fps and watch mode look like 60, frames made
+- **15 Nov 2026:** renderer choice in the launcher (Display > Renderer): DirectX 12, the default, or Vulkan,
+  experimental and slower on Windows for now, added to `gt5.exe` with a one-time build (v0.1.56);
+  Esc asks before it quits the game (v0.1.55); frame generation (beta, launcher Display): 30 fps and watch mode look like 60, frames made
   on the graphics card, presented on a thread of its own so the game keeps its speed (v0.1.54);
   saves over 2 MB (`GT5.0` + `GT5.1`, a big garage on 2.xx) load again instead of the
   game closing at every start; a steering wheel with no d-pad moves through the menus: the rim for left / right,

@@ -22,6 +22,8 @@ call "%VS%\VC\Auxiliary\Build\vcvars64.bat" >nul
 if errorlevel 1 exit /b 1
 set "CLANGCL=%VS:\=/%/VC/Tools/Llvm/x64/bin/clang-cl.exe"
 :configure
+REM add_vulkan.ps1 builds SDL2 and glslang with this same compiler: it asks for the environment alone.
+if defined GT5_ENV_ONLY exit /b 0
 REM A build folder set up with a compiler that's gone (Visual Studio uninstalled for the portable tools,
 REM say) is set up again from scratch.
 set "OLDCC="

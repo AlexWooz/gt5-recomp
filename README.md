@@ -258,6 +258,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Version 1.02, or a game update (2.xx)? | 🧪 New: game updates run: 2.17 (the last) tested on the US and European releases, 2.01 on the Asian one, 2.11 with the Master Mod on the US one by a player ([how to set one up](#game-updates)); 1.02 untried |
 | Settings without editing files? | ✅ New: the [launcher](#launcher) |
 | Full screen? | ✅ New: borderless full screen in the launcher (Alt+Enter is switched off since v0.1.17: it used to freeze the picture) |
+| Vulkan instead of DirectX 12? | 🧪 New: the launcher's Display > Renderer, experimental and slower than DirectX 12 for now ([more](#faq)) |
 | Higher than 1080p (4K)? | ⚠️ The game's top mode is its 1080p one (races drawn at 1728x972), scaled up to your window; drawing above that isn't there yet |
 | Japanese or Asian release (BCJS, BCAS)? | ✅ Hong Kong / Asia (BCAS20108) runs, reported by a player, and its disc 01.00 and update 2.01 race in tests too; Japanese untried, please report |
 | Slow PC or laptop? | 🛠️ Laptops now use their dedicated graphics card. On most PCs the CPU sets the pace (the game's own threads), so the launcher's **Speed: 30 fps** rarely helps: it's for a graphics card at its limit. **On a laptop:** plug it in and set Windows' power mode to *Best performance* (and the maker's performance mode, e.g. in HP Command Center or Lenovo Vantage): a tester's i5-1135G7 ran into its power limit 88% of the time, which held its cores at 2.9 GHz instead of 4.2, while its graphics were only 30% busy. Speed-ups for 4-6 core CPUs are being worked on |
@@ -359,6 +360,20 @@ graphics 720 may be faster, but often the CPU is the limit there too (an Iris Xe
 part of the picture; v0.1.11 went back to 720 until v0.1.12 fixed it.) On an ultrawide monitor the 720p
 mode draws the wider view pixel for pixel (about 1700×720), and the 1080p mode draws it into 1920×1080
 and spreads it sideways. Rendering above the PS3's resolutions is on the list.
+
+**Q: Can I use Vulkan instead of DirectX 12?**
+
+**A: Yes, as an experiment: the [launcher](#launcher)'s Display > Renderer.** DirectX 12 is the port's main
+renderer and stays the default. Vulkan is the renderer the Linux build and the Android work use. On
+Windows it's slower for now (see the numbers in [CHANGELOG.md](CHANGELOG.md), 15 Nov), some effects may
+look different, and frame generation, the F9 watch-mode key and the window size setting are DirectX 12
+only. The first time you pick Vulkan, the launcher offers to add it to your `gt5.exe`: it
+fetches the source code of SDL2 and glslang (about 60 MB, from GitHub, checked against the exact
+releases) and rebuilds the game's runtime with them, 10 to 20 minutes in a window that shows the
+progress; the game's generated code isn't rebuilt. Without the launcher: run
+`powershell -File GT5\scripts\add_vulkan.ps1` once, then `set "GT5_RENDERER=vulkan"` in
+`GT5\settings.bat`. `add_vulkan.ps1 -Remove` builds `gt5.exe` without it again. Vulkan's shaders are kept
+in `GT5\shadercache` (cleared by ClearShaders.bat with the rest).
 
 **Q: Which controllers work?**
 
