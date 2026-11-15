@@ -19637,10 +19637,165 @@ index af16afd8..47d07046 100644
      out_obj = [{"start": s, "end": e} for s, e in funcs]
      if args.out:
 diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
-index a657ba61..bda578dd 100644
 --- a/tools/ppu_lifter.py
 +++ b/tools/ppu_lifter.py
-@@ -1334,6 +1334,22 @@ class PPULifter:
+@@ -953,6 +953,155 @@
+     return out
+ 
+ 
++# ---------------------------------------------------------------------------
++# Register cache
++#
++# Every guest load and store has an out-of-line slow path, and the compiler must
++# assume that call can change *ctx: so each ctx->gpr[n] read after a guest memory
++# access is a reload, and each write a store. In a loop that is most of the code.
++# _reg_cache keeps the GPRs, FPRs, CR, XER, LR and CTR in C locals instead. Their
++# address never escapes, so the compiler holds them in host registers across
++# guest memory accesses. *ctx is brought up to date only where something else
++# can look at it:
++#   - a line that passes ctx anywhere (a call, the trampoline drain, a syscall,
++#     an HLE call, a header helper taking ctx) stays exactly as lifted, working
++#     on ctx; the locals that may differ from ctx are written back before it and
++#     every local is reloaded after it (the compiler drops reloads nobody reads);
++#   - a return writes the locals back first.
++# Which locals may differ from ctx at a line is a forward dataflow over the
++# body's labels and gotos. It may include more than needed, which costs a store,
++# never correctness. PPU_NO_REG_CACHE=1 at lift time turns the pass off.
++# ---------------------------------------------------------------------------
++_RC_FIELD_RE = re.compile(r"ctx->(?:(gpr|fpr)\[(\d+)\]|(cr|xer|lr|ctr)\b)")
++_RC_ESCAPE_RE = re.compile(r"\bctx\b(?!->)")
++_RC_LABEL_RE = re.compile(r"^\s*(\w+):\s*$")
++_RC_GOTO_RE = re.compile(r"\bgoto\s+(\w+)\s*;")
++_RC_RETURN_RE = re.compile(r"\breturn\s*;")
++_RC_MIN_LINES = 16   # small bodies gain little, and setjmp_patch.py matches TOC stubs by shape
++
++
++def _rc_local(m) -> str:
++    if m.group(1):
++        return ("_g" if m.group(1) == "gpr" else "_fp") + m.group(2)
++    return "_c_" + m.group(3)
++
++
++def _rc_field(local: str) -> str:
++    if local.startswith("_g"):
++        return f"ctx->gpr[{local[2:]}]"
++    if local.startswith("_fp"):
++        return f"ctx->fpr[{local[3:]}]"
++    return "ctx->" + local[3:]
++
++
++def _rc_sort_key(local: str):
++    if local.startswith("_g"):
++        return (0, int(local[2:]))
++    if local.startswith("_fp"):
++        return (1, int(local[3:]))
++    return (2, local)
++
++
++def _rc_writes(text: str, locals_: set) -> set:
++    """Locals the (cache-form) line may assign or hand out the address of."""
++    out = set()
++    for loc in locals_:
++        if loc not in text:
++            continue
++        e = re.escape(loc)
++        if (re.search(r"\b" + e + r"\b\s*(?:<<|>>|[-+*/%&|^])?=(?!=)", text)
++                or re.search(r"&\s*" + e + r"\b", text)
++                or re.search(r"\b" + e + r"\b\s*(?:\+\+|--)", text)
++                or re.search(r"(?:\+\+|--)\s*" + e + r"\b", text)):
++            out.add(loc)
++    return out
++
++
++def _reg_cache(lines: list[str]) -> list[str]:
++    """Cache the scalar register file in locals (see above). `lines` is a body as
++    _function_def_lines emits it, without the PPU_MM_SNAP line or the closing brace.
++    Returns it unchanged when the pass does not apply."""
++    if os.environ.get("PPU_NO_REG_CACHE") == "1" or len(lines) < _RC_MIN_LINES:
++        return lines
++    if re.search(r"ctx->(?:gpr|fpr)\[(?!\d+\])", "\n".join(lines)):
++        return lines   # an index the pass cannot name a local for
++    locals_ = set()
++    for l in lines:
++        for m in _RC_FIELD_RE.finditer(l):
++            locals_.add(_rc_local(m))
++    if not locals_:
++        return lines
++
++    n = len(lines)
++    cache = [_RC_FIELD_RE.sub(_rc_local, l) for l in lines]
++    verbatim = [bool(_RC_ESCAPE_RE.search(c)) for c in cache]
++    writes = [set() if verbatim[i] else _rc_writes(cache[i], locals_) for i in range(n)]
++    labels = {}
++    for i, l in enumerate(lines):
++        m = _RC_LABEL_RE.match(l)
++        if m:
++            labels[m.group(1)] = i
++    gotos = [[labels[t] for t in _RC_GOTO_RE.findall(l) if t in labels] for l in lines]
++    for i, l in enumerate(lines):
++        if any(t not in labels for t in _RC_GOTO_RE.findall(l)):
++            return lines   # a goto the pass cannot follow
++        # A line kept as lifted must leave the locals valid on every goto out of it:
++        # it may not write a field, and its calls must not fall through to a goto.
++        # The jump-table switch qualifies (its call is `default: ...; return;`).
++        if verbatim[i] and gotos[i]:
++            if _rc_writes(cache[i], locals_) or not l.strip().startswith("switch ("):
++                return lines
++
++    # Forward dataflow: which locals may differ from ctx on entry to each line.
++    dirty_in = [None] * n
++    dirty_in[0] = frozenset()
++    work = [0]
++    while work:
++        i = work.pop()
++        d = dirty_in[i]
++        out = frozenset() if verbatim[i] else d | writes[i]
++        succ = list(gotos[i])
++        s = lines[i].strip()
++        if i + 1 < n and s != "return;" and not re.fullmatch(r"goto\s+\w+\s*;", s):
++            succ.append(i + 1)
++        for j in succ:
++            nd = out if dirty_in[j] is None else dirty_in[j] | out
++            if nd != dirty_in[j]:
++                dirty_in[j] = nd
++                work.append(j)
++
++    def flush(ds) -> str:
++        return " ".join(f"{_rc_field(x)} = {x};" for x in sorted(ds, key=_rc_sort_key))
++
++    reload_all = " ".join(f"{x} = {_rc_field(x)};" for x in sorted(locals_, key=_rc_sort_key))
++    out_lines = [f"    auto {x} = {_rc_field(x)};" for x in sorted(locals_, key=_rc_sort_key)]
++    end_dirty = frozenset()
++    for i in range(n):
++        d = dirty_in[i]
++        if d is None:   # unreachable: leave it as lifted, in cache form
++            out_lines.append(cache[i] if not verbatim[i] else lines[i])
++            continue
++        if verbatim[i]:
++            if d:
++                out_lines.append(f"    {{ {flush(d)} }}  /* reg cache: write back */")
++            out_lines.append(lines[i])
++            out_lines.append(f"    {{ {reload_all} }}  /* reg cache: reload */")
++            end_dirty = frozenset()
++            continue
++        c = cache[i]
++        if _RC_RETURN_RE.search(c):
++            ds = d | writes[i]
++            if ds:
++                c = _RC_RETURN_RE.sub(lambda _m: f"{{ {flush(ds)} return; }}", c)
++        out_lines.append(c)
++        end_dirty = d | writes[i]
++    # Falling off the end of the body returns too.
++    s = lines[-1].strip()
++    if end_dirty and s != "return;" and not re.fullmatch(r"goto\s+\w+\s*;", s):
++        out_lines.append(f"    {{ {flush(end_dirty)} }}  /* reg cache: write back at exit */")
++    return out_lines
++
++
+ @dataclass
+ class LiftedFunction:
+     """A single lifted C function."""
+@@ -1334,6 +1483,22 @@
          # _off_escapes misses it too -- and the reload got rewritten to the
          # CALLER's r25, a pointer, which then flowed into the carry chain. Every
          # ECDSA signature the firmware checked failed on that one word.
@@ -19663,7 +19818,7 @@ index a657ba61..bda578dd 100644
          _reg_snap = set()        # regs to snapshot from the register at entry
          _mem_snap = {}           # reg -> offset, snapshot from memory at entry
          for _i, _l in enumerate(func.body_lines):
-@@ -1343,7 +1359,8 @@ class PPULifter:
+@@ -1343,7 +1508,8 @@
                  if (_off, _m.group(1)) in _saved_slots:
                      _reg_snap.add(_reg)
                      func.body_lines[_i] = f"    ctx->gpr[{_reg}] = _cs_{_reg};"
@@ -19673,10 +19828,41 @@ index a657ba61..bda578dd 100644
                          and _reg not in _reg_snap
                          and _is_epilogue_restore(func.body_lines, _i, _reg, _off)
                          and _mem_snap.setdefault(_reg, _off) == _off):
-@@ -4405,6 +4422,46 @@ def _const_base_targets(win, rC, read_u32, text_lo, text_hi, bctr_addr):
-     return None
+@@ -4178,8 +4344,7 @@
+                       f"extern int {g};", "#endif"]
+         lines.append(f"void {weak}{func.name}(ppu_context* ctx) {{")
+         lines.append("    PPU_MM_SNAP")
+-        for bline in _fuse_cr(func.body_lines):
+-            lines.append(f"    {bline}" if not bline.endswith(":") else bline)
++        body = _fuse_cr(func.body_lines)
  
- 
+         # If a function doesn't end with blr/b/bctr (a return or unconditional
+         # branch), PPC execution falls through to the next address. The lifter
+@@ -4207,12 +4372,14 @@
+                     if nxt.start_addr == func.fallthrough_to:
+                         target = nxt.name
+             if target:
+-                lines.append(f"        {{ g_trampoline_fn = (void(*)(void*)){target}; return; }}")
++                body.append(f"    {{ g_trampoline_fn = (void(*)(void*)){target}; return; }}")
+             else:
+                 print(f"  WARNING: {func.name} has no continuation at "
+                       f"0x{func.fallthrough_to:08X}; emitting halt", flush=True)
+-                lines.append(f"        /* missing continuation 0x{func.fallthrough_to:08X}: halt */ return;")
+-
++                body.append(f"    /* missing continuation 0x{func.fallthrough_to:08X}: halt */ return;")
++
++        for bline in _reg_cache(body):
++            lines.append(f"    {bline}" if not bline.endswith(":") else bline)
+         lines.append("}")
+         lines.append("")
+         return lines
+@@ -4402,6 +4569,46 @@
+         # blr, bctr, or `b` without link ends the run
+         if v in (0x4E800020, 0x4E800420) or (v >> 26 == 18 and not v & 1):
+             return targets
++    return None
++
++
 +def _const_value(insns, at, reg, depth=0):
 +    """The constant `reg` holds right after instruction `at`, when its definition chain
 +    is lis/li/addi/ori from immediates within `insns` (in address order); else None."""
@@ -19714,13 +19900,10 @@ index a657ba61..bda578dd 100644
 +        if base is None:
 +            return None
 +        return ((base + v) if m == 'addi' else (base | (v & 0xFFFF))) & 0xFFFFFFFF
-+    return None
-+
-+
- def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts=None):
-     """Find `mtctr rX; bctr` switch dispatchers and read their jump tables.
+     return None
  
-@@ -4730,11 +4787,23 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+ 
+@@ -4730,11 +4937,23 @@
                          if _resolved or _pass:
                              break
                          _scan = _live(_scan_lo(i), i)
@@ -19745,7 +19928,7 @@ index a657ba61..bda578dd 100644
              continue
          toc_candidates = toc if isinstance(toc, (list, tuple)) else [toc]
          best = []
-@@ -4757,7 +4826,13 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+@@ -4757,7 +4976,13 @@
              # unresolved indirect call (0x422CA0) and stalled the loader.
              _idx_reg = p[1] if r_base == p[2] else p[2]
              _raw_idx = _idx_reg
@@ -19760,7 +19943,7 @@ index a657ba61..bda578dd 100644
                  a = [x.strip() for x in w.operands.split(',')]
                  if a and a[0] == _idx_reg:
                      if (w.mnemonic in ('rldic', 'rldicl', 'rldicr', 'rlwinm',
-@@ -4821,8 +4896,9 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+@@ -4821,8 +5046,9 @@
              # with. We don't track per-function TOCs here, so try each candidate
              # and keep the one whose table decodes to the most in-text case
              # targets (a wrong TOC reads unrelated data and validates 0 targets).
@@ -19772,7 +19955,7 @@ index a657ba61..bda578dd 100644
                      continue
                  def _read_ptr(_ea, _is_ld):
                      # ELFv1 TOC entries are 64-bit; a table address always fits the
-@@ -4833,8 +4909,11 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+@@ -4833,8 +5059,11 @@
                      if read_u32(_ea):
                          return None
                      return read_u32((_ea + 4) & 0xFFFFFFFF)
@@ -19786,7 +19969,7 @@ index a657ba61..bda578dd 100644
                      table_base = _read_ptr(table_base + disp2, disp2_is_ld)
                  _dbg(all_insns[i].addr, f"r_base={r_base} cand_toc=0x{cand:X} table_base={None if table_base is None else hex(table_base)} count={count} is_offset={is_offset} text=[0x{text_lo:X},0x{text_hi:X})")
                  if table_base is None:
-@@ -5058,6 +5137,11 @@ def main() -> None:
+@@ -5058,6 +5287,11 @@
                               "instead of its literal .lib.stub trampoline, and "
                               "split out as its own 0x20-byte function so direct "
                               "calls to it dispatch to the HLE handler.")
@@ -19798,7 +19981,7 @@ index a657ba61..bda578dd 100644
      parser.add_argument("--insn-patches", metavar="FILE", default=None,
                          help="JSON list of instruction patches to lift as "
                               "run-time switches: each {addr, orig, new, guard} "
-@@ -5364,6 +5448,10 @@ def main() -> None:
+@@ -5364,6 +5598,10 @@
                  print(f"  TOC candidates: {', '.join(hex(t) for t in toc_candidates)}")
              tables = discover_jump_tables(all_insns, _read_u32, toc_candidates, text_lo, text_hi,
                                            func_starts=sorted(s for s, _ in func_bounds))

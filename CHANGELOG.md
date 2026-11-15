@@ -9,6 +9,20 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 14 Nov 2026
 
+⚙️ **The game's translated code keeps PPU registers in host registers** (needs a re-lift)
+- Every guest load and store has an out-of-line slow path, so the compiler had to assume `*ctx` changed
+  after each one: registers were reloaded after nearly every memory access and stored after every
+  result. The lifter now keeps the GPRs, FPRs, CR, XER, LR and CTR a function uses in locals.
+- They are written back to `ctx` only where other code can see it: before a call (game function,
+  indirect call, syscall, HLE, a helper taking `ctx`) and before a return, and reloaded after the call.
+  A dataflow pass over the body's labels and gotos picks the registers that can have changed. Bodies
+  under 16 lines are left alone. `PPU_NO_REG_CACHE=1` at lift time turns it off.
+- Steam Deck, the same race and track, 11 ten-second segments from the start: 8.9 frames a second,
+  from 8.2 (about 7%, close to run-to-run noise). The main thread's hottest function is vector code,
+  whose registers are not cached yet.
+- Cost: the generated code grows from 324 MB to 479 MB, so a full build takes longer; the Linux
+  binary from 235 MB to 264 MB. Not measured on Windows yet.
+
 🐧 **Linux: the command-buffer walker sleeps and is woken, as on Windows** (Steam Deck)
 - On a CPU of 8 logical CPUs or fewer, v0.1.41's sleep-after-spin now works on Linux too: the walker
   spins 20 us, then waits on the kick event, which an SPU job writing the word it is parked on sets.
