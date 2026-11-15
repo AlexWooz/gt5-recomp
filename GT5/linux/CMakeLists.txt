@@ -146,6 +146,15 @@ foreach(_sound_job jD58063CD jCB9BD024)
             COMPILE_OPTIONS "-O2;-w;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1;-DSPU_X86_FAST_FLOAT=1")
     endif()
 endforeach()
+# The EQ module (socepdideq: jEB79FDFC, jE3FDDA10 from 2.01) does its FFT's phase steps in double
+# precision, and switching the rounding mode around each double op costs ten times the op: its doubles
+# round toward zero instead (SPU_X86_FAST_DOUBLE, spu_helpers.h), as in the Windows build.
+foreach(_eq_job jEB79FDFC jE3FDDA10)
+    if(EXISTS "${SPU_DIR}/jobs/${_eq_job}/spu_recomp.c")
+        set_source_files_properties("${SPU_DIR}/jobs/${_eq_job}/spu_recomp.c" PROPERTIES
+            COMPILE_OPTIONS "-O2;-w;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1;-DSPU_X86_FAST_DOUBLE=1")
+    endif()
+endforeach()
 
 target_link_libraries(gt5 PRIVATE ps3recomp_runtime SDL2::SDL2 ${CMAKE_DL_LIBS} m pthread)
 set_target_properties(gt5 PROPERTIES LINKER_LANGUAGE CXX)

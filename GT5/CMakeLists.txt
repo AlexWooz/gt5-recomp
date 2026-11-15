@@ -101,9 +101,18 @@ if(SPU_SOURCES)
 endif()
 # GT5's sound job: its numbers are samples, and it was about 10% short of real time with a full grid.
 # jD58063CD is the disc's; game update 2.17 replaces it with jCB9BD024 (spu_jobs_from_eboot.py, UPDATED).
+# Only the mixer: the downmix module (jFDFFAAC1) filled the mix with NaN under these rules (15 Nov),
+# since the SPU reads exponent-255 words as large numbers where the host sees infinity or NaN.
 foreach(_sound_job jD58063CD jCB9BD024)
     set_source_files_properties("${SPU_DIR}/jobs/${_sound_job}/spu_recomp.c" PROPERTIES
         COMPILE_OPTIONS "-O2;/w;/GS-;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1;-DSPU_X86_FAST_FLOAT=1")
+endforeach()
+# The EQ module (socepdideq: jEB79FDFC on the disc, jE3FDDA10 from 2.01) does its FFT's phase steps in
+# double precision, three ops per pass, and switching the rounding mode around each one costs ten
+# times the op: its doubles round toward zero instead (SPU_X86_FAST_DOUBLE, spu_helpers.h).
+foreach(_eq_job jEB79FDFC jE3FDDA10)
+    set_source_files_properties("${SPU_DIR}/jobs/${_eq_job}/spu_recomp.c" PROPERTIES
+        COMPILE_OPTIONS "-O2;/w;/GS-;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1;-DSPU_X86_FAST_DOUBLE=1")
 endforeach()
 
 target_include_directories(gt5 PRIVATE

@@ -9,6 +9,30 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.57**
+
+🔊 **Sound on small CPUs: GT5's audio chain a little cheaper, its EQ a third cheaper**
+(players on 4-core laptops and on 2.11 hear the audio lag; GT5's sound runs on one thread, the one that runs
+flat out on 4 small cores)
+- GT5 makes its sound in blocks of 5.33 ms, each a chain of 13 small SPU jobs run one after another: Sony's
+  mixer, EQ, delay, reverb, AC3, up- and downmix and compressor modules.
+- Each job began by clearing all 256 KB of the SPU's local store: 5 µs on a fast core, 12 on a small one, 13
+  times a block. Now only the part the previous job used is cleared, which leaves the store exactly as a full
+  clear would (checked before every job through a whole race with `SPURS_JOB_LS_CHECK=1`). Every small module
+  got 4-8 µs a block cheaper.
+- The EQ module does part of its work in double precision, and the sound thread runs in the SPU's own
+  rounding mode, so every double operation switched the processor's rounding mode and back: 13-20 ns each
+  time, ten times the operation. It now rounds those doubles toward zero, a difference in the 16th digit.
+- Measured on this PC (European disc, races at High Speed Ring, the game's own timer for each SPU job;
+  WoW and other test games running): on all cores, three interleaved pairs of races, the whole chain
+  3.13 → 2.96 ms per block (-5.6%) and the EQ 0.43 → 0.28 ms (-35%); confined to 4 small cores, two pairs,
+  5.60 → 5.42 ms per block (the jobs besides the mixer -9%) and the EQ 0.66 → 0.49 ms. The recorded sound
+  had no invalid samples in any race. On those 4 small cores the chain still takes a little more than a
+  block's 5.33 ms when the PC is busy; the mixer, 2.9 ms of it, is next.
+- Tried and left out: the mixer's quicker float rules for every sound module. The downmix module filled the
+  sound with invalid samples under them.
+- No re-lift: update.ps1 rebuilds.
+
 🏷️ Released as **v0.1.56**
 
 🧪 **Renderer choice: DirectX 12 or Vulkan (experimental)** (asked about by Arpadiam and brocolison on Discord)

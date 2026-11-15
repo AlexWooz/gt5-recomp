@@ -18682,7 +18682,15 @@ index ea2e8351..04be58d5 100644
 diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
 --- a/runtime/spu/spu_context.h
 +++ b/runtime/spu/spu_context.h
-@@ -425,6 +425,12 @@
+@@ -12,6 +12,7 @@
+ 
+ #include "../../include/ps3emu/ps3types.h"
+ #include "../../include/ps3emu/log_first.h"
++#include <stddef.h>
+ #include <stdint.h>
+ #include <string.h>
+ #include <stdio.h>
+@@ -425,6 +426,12 @@
       * spu_coh_reserve_fast). Written under that lock, read by the context's
       * own thread. */
      int coh_listed;
@@ -18695,7 +18703,26 @@ diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
  } spu_context;
  
  /* event_status is written from more than one host thread: the SPU's own
-@@ -519,9 +525,9 @@
+@@ -476,6 +483,18 @@
+ {
+     memset(ctx, 0, sizeof(*ctx));
+     ctx->ls     = ctx->ls_store;   /* a raw SPU repoints this at guest memory */
++    ctx->spu_id = spu_id;
++    ctx->status = SPU_STATUS_STOPPED;
++}
++
++/* spu_context_init except the local store, for a context reused job after job that zeroes only
++ * the part of its store the last job used (spurs_job.c). */
++static inline void spu_context_init_keep_ls(spu_context* ctx, uint32_t spu_id)
++{
++    const size_t ls_end = offsetof(spu_context, ls_store) + SPU_LS_SIZE;
++    memset(ctx, 0, offsetof(spu_context, ls_store));
++    memset((uint8_t*)ctx + ls_end, 0, sizeof(*ctx) - ls_end);
++    ctx->ls     = ctx->ls_store;
+     ctx->spu_id = spu_id;
+     ctx->status = SPU_STATUS_STOPPED;
+ }
+@@ -519,9 +538,9 @@
   * helpers in `spu_helpers.h` were written against. */
  /* The 128-bit LS accessors are THE hot primitive of lifted SPU execution
   * (every load/store in a Bink movie frame's ~millions of lifted instructions
@@ -18708,7 +18735,7 @@ diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
  #if defined(_MSC_VER)
  #include <stdlib.h>
  #define SPU_BSWAP32(x) _byteswap_ulong(x)
-@@ -532,6 +538,20 @@
+@@ -532,6 +551,20 @@
  #endif
  #if defined(__ARM_NEON)
  #include <arm_neon.h>     /* the quadword swap is one rev32 */
@@ -18729,7 +18756,7 @@ diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
  #endif
  
  /* Debug probes of spu_ls_read128/write128, out of line: inlined they kept
-@@ -628,6 +648,8 @@
+@@ -628,6 +661,8 @@
      const uint8_t* p = &ctx->ls[lsa];
  #if defined(__ARM_NEON)
      vst1q_u8(v._u8, vrev32q_u8(vld1q_u8(p)));     /* ldr q; rev32 */
@@ -18738,7 +18765,7 @@ diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
  #elif SPU_LS_FAST
      uint32_t w0, w1, w2, w3;
      memcpy(&w0, p,      4); memcpy(&w1, p + 4,  4);
-@@ -725,6 +747,8 @@
+@@ -725,6 +760,8 @@
      uint8_t* p = &ctx->ls[lsa];
  #if defined(__ARM_NEON)
      vst1q_u8(p, vrev32q_u8(vld1q_u8(val._u8)));   /* rev32; str q */
@@ -18747,7 +18774,7 @@ diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
  #elif SPU_LS_FAST
      uint32_t w0 = SPU_BSWAP32(val._u32[0]), w1 = SPU_BSWAP32(val._u32[1]);
      uint32_t w2 = SPU_BSWAP32(val._u32[2]), w3 = SPU_BSWAP32(val._u32[3]);
-@@ -740,6 +764,49 @@
+@@ -740,6 +777,49 @@
      }
  #endif
      if (__builtin_expect(g_spu_ls_wdiag != 0, 0))
@@ -18797,7 +18824,7 @@ diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
          spu_ls_write_diag(ctx, lsa, val);
  }
  
-@@ -1044,6 +1111,41 @@
+@@ -1044,6 +1124,41 @@
      } while (0)
  #endif
  
@@ -19125,10 +19152,21 @@ diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
  #else
  static inline u128 spu_fa(u128 a, u128 b) { return spu__fa_s(a, b); }
  static inline u128 spu_fs(u128 a, u128 b) { return spu__fs_s(a, b); }
-@@ -1369,6 +1478,23 @@
+@@ -1369,6 +1478,34 @@
      if (__builtin_expect(m == 0, 1)) return f##_h_(a, b, c); \
      spu__fpcr_put(0); __asm__ volatile("" : "+m"(a), "+m"(b), "+m"(c)); u128 r = f##_h_(a, b, c); \
      __asm__ volatile("" : "+m"(r)); spu__fpcr_put(m); return r; }
++#elif (defined(__x86_64__) || defined(_M_X64)) && (defined(SPU_X86_FAST_DOUBLE) || defined(SPU_X86_FAST_FLOAT))
++/* SPU_X86_FAST_DOUBLE (one sound job at a time, and implied by SPU_X86_FAST_FLOAT): double
++ * precision under the thread's mode as it stands -- round toward zero, denormals flushed --
++ * instead of switching MXCSR to round to nearest and back around every op. The two MXCSR writes
++ * cost 13-20 ns, ten times the op, and GT5's EQ module does three double ops per pass of an FFT
++ * loop. The result is within one double ulp (frds: one single ulp) of round to nearest, and no
++ * NaN or infinity can come of it that round to nearest would not give. For audio modules whose
++ * doubles are filter coefficients and phase steps. */
++#define SPU__DP_RN1(f) static inline u128 f(u128 a) { return f##_h_(a); }
++#define SPU__DP_RN2(f) static inline u128 f(u128 a, u128 b) { return f##_h_(a, b); }
++#define SPU__DP_RN3(f) static inline u128 f(u128 a, u128 b, u128 c) { return f##_h_(a, b, c); }
 +#elif defined(__x86_64__) || defined(_M_X64)
 +/* The same with MXCSR. Every translation unit needs this, not only the AVX2 ones: the mode
 + * belongs to the thread, and an interpreted instruction runs under it as well. */
@@ -19149,7 +19187,7 @@ diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
  #else
  #define SPU__DP_RN1(f) static inline u128 f(u128 a) { return f##_h_(a); }
  #define SPU__DP_RN2(f) static inline u128 f(u128 a, u128 b) { return f##_h_(a, b); }
-@@ -1765,31 +1891,60 @@
+@@ -1765,31 +1902,60 @@
      u128 r; r._u32[0] = 0x10111213u; r._u32[1] = 0x14151617u; r._u32[2] = 0x18191A1Bu; r._u32[3] = 0x1C1D1E1Fu;
      return r;
  }
@@ -19215,7 +19253,7 @@ diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
  #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
  static inline u128 spu_cwd(u128 a, int i7) {
      static const uint32_t base[4] = {0x10111213u, 0x14151617u, 0x18191A1Bu, 0x1C1D1E1Fu}, lane[4] = {0, 1, 2, 3};
-@@ -1805,6 +1960,37 @@
+@@ -1805,6 +1971,37 @@
  static inline u128 spu_cwd(u128 a, int i7) { return spu_cwd_ref(a, i7); }
  #endif
  static inline u128 spu_cdd(u128 a, int i7){ return spu_cdd_pos((int)a._u32[0]+i7); }
@@ -19253,7 +19291,7 @@ diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
  static inline u128 spu_cbx(u128 a, u128 b){ return spu_cbd_pos((int)(a._u32[0]+b._u32[0])); }
  static inline u128 spu_chx(u128 a, u128 b){ return spu_chd_pos((int)(a._u32[0]+b._u32[0])); }
  static inline u128 spu_cwx(u128 a, u128 b){ return spu_cwd_pos((int)(a._u32[0]+b._u32[0])); }
-@@ -1844,10 +2030,20 @@
+@@ -1844,10 +2041,20 @@
  #else
  static inline u128 spu_rotqmbybi(u128 a, u128 b) { return spu_rotqmbybi_ref(a, b); }
  #endif
@@ -24964,7 +25002,7 @@ diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
      if (!s_job_ls_valid || !handle || handle != g_spurs_job_ls_handle) return 0;
      return s_job_ls;
  }
-@@ -155,6 +161,14 @@
+@@ -155,6 +161,24 @@
  SPURS_JOB_TLS uint32_t g_spurs_job_spu_num;
  void spurs_job_set_spu_num(uint32_t n) { g_spurs_job_spu_num = n; }
  
@@ -24975,11 +25013,21 @@ diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
 + * init. A job that starts another on the same thread (none is known to) gets its own. */
 +static SPURS_JOB_TLS spu_context* t_job_ctx;
 +static SPURS_JOB_TLS int t_job_ctx_busy;
++/* Zeroing the whole 256 KB store for every job was ~12 us on a small core, and an audio chain runs
++ * 13 jobs every 5.33 ms. A job's bytes stay inside its own regions (binary, buffers, stack: LS 0 to
++ * the end of the last region) and the context block under the top of the store, so the context
++ * remembers where the last job's regions ended, and the next job zeroes from the end of its own
++ * binary (which the load overwrites) to there, and the top block: the store then reads exactly as
++ * a fully zeroed one. SPURS_JOB_LS_CHECK=1 proves the premise, checking before each job that the
++ * rest of the store is still zero (and zeroing all of it when it is not); SPURS_JOB_LS_FULL=1 zeroes
++ * all of it every time. */
++static SPURS_JOB_TLS uint32_t t_job_ls_hi;      /* end of the last job's regions; 0 = store all zero */
++#define JOB_LS_TOP (SPU_LS_SIZE - 0x440u)       /* the context + descriptor block (see below) */
 +
  int spu_run_spurs_job(spu_lifted_entry_fn entry, int image_id,
                        uint32_t job_ea, uint32_t job_desc_size)
  {
-@@ -179,8 +193,16 @@
+@@ -179,8 +203,41 @@
          return -1;
      }
  
@@ -24987,18 +25035,43 @@ diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
 -    if (!ls) return -1;
 +    spu_context* ctx = t_job_ctx_busy ? NULL : t_job_ctx;
 +    const int own_ctx = t_job_ctx_busy != 0;
++    int fresh = 0;
 +    if (!ctx) {
 +        ctx = (spu_context*)malloc(sizeof(spu_context));
 +        if (!ctx) return -1;
 +        if (!own_ctx) t_job_ctx = ctx;
++        fresh = 1;
 +    }
 +    if (!own_ctx) t_job_ctx_busy = 1;
-+    spu_context_init(ctx, 0);      /* zeroes the local store too */
++    { static int s_full = -1, s_check = -1;
++      if (s_full < 0) { s_full = getenv("SPURS_JOB_LS_FULL") != NULL; s_check = getenv("SPURS_JOB_LS_CHECK") != NULL; }
++      if (fresh || own_ctx || s_full) {
++          spu_context_init(ctx, 0);      /* zeroes the local store too */
++      } else {
++          uint8_t* const s = ctx->ls_store;
++          uint32_t hi = t_job_ls_hi;
++          if (s_check && hi < JOB_LS_TOP) {
++              for (uint32_t o = hi; o < JOB_LS_TOP; o += 16) {
++                  if (!((const uint64_t*)(s + o))[0] && !((const uint64_t*)(s + o))[1]) continue;
++                  static long s_n;
++                  if (__atomic_add_fetch(&s_n, 1, __ATOMIC_RELAXED) <= 40)
++                      fprintf(stderr, "[spurs-job] LS check: the job before image %d (job 0x%08X) left bytes at "
++                                      "LS 0x%05X, past the end of its regions 0x%05X\n", image_id, job_ea, o, hi);
++                  hi = JOB_LS_TOP;
++                  break;
++              }
++          }
++          spu_context_init_keep_ls(ctx, 0);
++          const uint32_t lo = size_bin & ~15u;           /* the binary load overwrites below this */
++          if (hi > JOB_LS_TOP) hi = JOB_LS_TOP;
++          if (hi > lo) memset(s + lo, 0, hi - lo);
++          memset(s + JOB_LS_TOP, 0, SPU_LS_SIZE - JOB_LS_TOP);
++      } }
 +    uint8_t* ls = ctx->ls;
  
      /* ---- binary at LS 0 (PIC, so delta 0 keeps the lifted addresses) ---- */
      memcpy(ls, vm_base + ea_bin, size_bin);
-@@ -298,7 +320,9 @@
+@@ -298,7 +355,9 @@
       * its DMA and atomic EAs from these words, so when a job spins on a
       * lock-line address that is not backed, this is what to read first. */
      { static int _d = 0;
@@ -25009,7 +25082,7 @@ diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
            fprintf(stderr, "[spurs-job] desc @0x%08X (%u bytes):", job_ea, dsz);
            for (uint32_t o = 0; o < dsz && o < 128; o += 4) {
                if ((o & 31) == 0) fprintf(stderr, "\n    +%02X:", o);
-@@ -328,7 +352,9 @@
+@@ -328,7 +387,9 @@
       * The header's input-DMA-list/io fields are legitimately zero for it. Dump
       * the user data + that command block so the bail path is attributable. */
      uint32_t dump_cmd = 0;
@@ -25020,7 +25093,7 @@ diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
          uint64_t ud  = g64(job_ea + JH_SIZE);        /* desc+0x30 */
          uint32_t cmd = (uint32_t)ud;                 /* low word = EA */
          fprintf(stderr, "[spurs-job] job 0x%08X userdata: %016llX %016llX %016llX %016llX\n",
-@@ -363,10 +389,7 @@
+@@ -363,10 +424,7 @@
      }
  
      /* ---- enter the job -------------------------------------------------- */
@@ -25032,7 +25105,7 @@ diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
      /* SPU stack grows down. A function saves its link register in its
       * caller's frame, at 16($sp), so the entry's first store lands 16 bytes
       * above $sp. The cache buffers start right at stack_top: with $sp at
-@@ -374,18 +397,18 @@
+@@ -374,18 +432,18 @@
       * cacheBuffer[0] (Twisted Metal's Edge jobs read their viewport there and
       * got width = height = 0). Leave the caller's 32-byte frame inside the
       * stack. */
@@ -25056,16 +25129,17 @@ diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
                    image_id); }
      /* NOTE: after its work the job's runtime jumps to LS 0 ("return to the
       * jm2 kernel" -- real layout has the kernel at 0, jobs above; we load the
-@@ -393,7 +416,7 @@
+@@ -393,7 +451,8 @@
       * and trips its parameter guard, which HALTS -- ending the run. So the
       * HALT-ASSERT heqi 0x1650 seen once per jm2 job is NORMAL COMPLETION
       * noise, not a failure: the job's real work finished before the jump. */
 -    spu_run_with_halt(entry, &ctx);
 +    spu_run_with_halt(entry, ctx);
++    if (!own_ctx) t_job_ls_hi = p;     /* where this job's regions end: the next one zeroes up to it */
  
      /* Capture the job's outbound mailbox. These are LS POINTERS TO STRINGS for
       * the SPU printf service, NOT query results -- value 0x83C0 from the sound
-@@ -401,29 +424,30 @@
+@@ -401,29 +460,30 @@
       * comment here claimed they carried the title's bus counts; they do not,
       * and feeding them into the completion event turned 0x40000000 into a 1 GB
       * allocation request. Kept because the printf service needs them. */
@@ -25105,7 +25179,7 @@ diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
      g_spurs_job_mbox_valid = g_spurs_job_mbox || g_spurs_job_mbox_intr;
      { uint32_t _cb = g32(job_ea + 0x4C);
        g_spurs_job_cmd = _cb ? (g32(_cb) >> 16) : 0; }
-@@ -433,9 +457,9 @@
+@@ -433,9 +493,9 @@
            fprintf(stderr, "[spurs-job] job 0x%08X posted mbox=0x%08X intr=0x%08X\n",
                    job_ea, g_spurs_job_mbox, g_spurs_job_mbox_intr); }
  
@@ -25117,7 +25191,7 @@ diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
          /* Post-run view of the same command block: the game polls result/status
           * fields the job writes back -- a before/after diff shows whether the
           * handler delivered its completion or the PPU waits on stale state. */
-@@ -450,9 +474,10 @@
+@@ -450,9 +510,10 @@
          fflush(stderr);
      }
  

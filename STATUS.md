@@ -131,7 +131,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **15 Nov 2026:** renderer choice in the launcher (Display > Renderer): DirectX 12, the default, or Vulkan,
+- **15 Nov 2026:** the sound chain needs less CPU (its EQ module a third less), for the audio lag on small
+  CPUs (v0.1.57); renderer choice in the launcher (Display > Renderer): DirectX 12, the default, or Vulkan,
   experimental and slower on Windows for now, added to `gt5.exe` with a one-time build (v0.1.56);
   Esc asks before it quits the game (v0.1.55); frame generation (beta, launcher Display): 30 fps and watch mode look like 60, frames made
   on the graphics card, presented on a thread of its own so the game keeps its speed (v0.1.54);
