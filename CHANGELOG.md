@@ -9,6 +9,16 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 14 Nov 2026
 
+🔀 **The SPU dispatch cache outlives a job's code being loaded again**
+- The cache of resolved indirect-branch targets was keyed by a counter bumped on every change to a
+  context's resident code, and a job manager loads a job's code for every job it runs: each short job
+  resolved its branch targets from nothing, through the registry walks (`spu_lifted_lookup_full`,
+  `spu_lookup`: about 4% of each of GT5's four graphics workers in a race).
+- The key is now a 64-bit hash of what is resident (each slot's span, image and verify state), so a
+  job's entries are still valid the next time it is loaded. 4,096 entries a thread, from 512, and the
+  per-thread registry memo 2,048 from 512.
+- Steam Deck, race paused on the grid: 105.2 ms a frame, from 107.3 (about 2%).
+
 🎨 **Vulkan/Metal renderer: a draw no longer re-parses its two programs**
 - Every draw parsed its fragment program six times (its size twice, the sampled, gamma and
   sign-expansion units, the inline constants, the structural hash) and its vertex program four. The

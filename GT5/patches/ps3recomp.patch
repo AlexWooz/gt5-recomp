@@ -17732,7 +17732,95 @@ diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
              { static int s_w = -1;
                if (s_w < 0) s_w = getenv("SPU_PUTLLC_WHY") ? 1 : 0;
                if (s_w) { static unsigned long long n;
-@@ -2108,6 +2148,38 @@
+@@ -1673,7 +1713,7 @@
+  * read before the walk, so a registration that races the walk leaves the entry
+  * stale and the next lookup redoes it. */
+ typedef struct { uint32_t addr, gen; int image; spu_fn fn; } spu_lookup_memo;
+-#define SPU_LOOKUP_MEMO_SIZE 512   /* power of two */
++#define SPU_LOOKUP_MEMO_SIZE 2048   /* power of two */
+ static SPU_TLS spu_lookup_memo t_lookup_memo[SPU_LOOKUP_MEMO_SIZE];
+ static spu_fn spu_lookup_memoized(uint32_t addr, int image_id)
+ {
+@@ -1763,7 +1803,7 @@
+     uint32_t id, lsa, rgen, residency;
+     int image, ovl, task;
+ } spu_dcache_ent;
+-#define SPU_DCACHE_ENTRIES 512u
++#define SPU_DCACHE_ENTRIES 4096u
+ static SPU_TLS spu_dcache_ent t_dcache[SPU_DCACHE_ENTRIES];
+ static uint32_t s_dcache_next_id;
+ static unsigned long long s_dcache_hits, s_dcache_misses, s_dcache_shadow_bad;
+@@ -1778,7 +1818,33 @@
+     }
+     return m;
+ }
+-static void spu_dcache_residency_changed(spu_context* ctx) { ctx->dcache_residency++; }
++/* The two cache-key words of a context name the CONTENTS of its resident code slots, not when
++ * they last changed: a 64-bit hash of every slot's span, image and verify state, worked out again
++ * (spu_dcache_sign) after any change has zeroed dcache_id. They used to be a lifetime id and a
++ * change counter, so each load of a job's code dropped every entry of the context -- and a job
++ * manager loads a job's code for every job it runs. In a GT5 race the four graphics workers ran
++ * thousands of short jobs a second, each resolving its branch targets from nothing: the resolver
++ * and its registry walks were a tenth of those threads. Keyed by contents, the entries of a job
++ * are still there the next time that job is loaded. */
++static void spu_dcache_residency_changed(spu_context* ctx) { ctx->dcache_id = 0; }
++static uint32_t spu_dcache_sign(spu_context* c)
++{
++    uint64_t h = 0x9E3779B97F4A7C15ull;
++    for (unsigned s = 0; s < 4; ++s) {
++        const uint64_t a = c->resident_code[s].image_id
++            ? ((uint64_t)c->resident_code[s].lsa << 32) | c->resident_code[s].size : 0;
++        const uint64_t b = c->resident_code[s].image_id
++            ? ((uint64_t)(uint32_t)c->resident_code[s].image_id << 32) |
++              (uint32_t)c->resident_code[s].verify_state : 0;
++        h = (h ^ a) * 0xFF51AFD7ED558CCDull; h ^= h >> 33;
++        h = (h ^ b) * 0xC4CEB9FE1A85EC53ull; h ^= h >> 29;
++    }
++    uint32_t id = (uint32_t)(h >> 32);
++    if (!id) id = 1;                       /* 0 means "not signed yet" */
++    c->dcache_residency = (uint32_t)h;
++    c->dcache_id = id;
++    return id;
++}
+ static void spu_dcache_shadow_stats(void)
+ {
+     const unsigned long long n = __atomic_load_n(&s_dcache_hits, __ATOMIC_RELAXED) +
+@@ -1795,10 +1861,7 @@
+     if (!mode || !ctx) return spu_lifted_lookup_full(ctx, lsa);
+     spu_context* c = (spu_context*)ctx;
+     uint32_t id = c->dcache_id;
+-    if (!id) {
+-        do id = __atomic_add_fetch(&s_dcache_next_id, 1, __ATOMIC_RELAXED); while (!id);
+-        c->dcache_id = id;
+-    }
++    if (!id) id = spu_dcache_sign(c);
+     /* Read before the resolver walks the registry: an entry is never keyed by
+      * a count newer than the registry it saw. */
+     const uint32_t rgen = __atomic_load_n(&s_registry_count, __ATOMIC_ACQUIRE);
+@@ -1827,8 +1890,12 @@
+     }
+     const spu_lifted_fn fn = spu_lifted_lookup_full(ctx, lsa);
+     if (fn) {
+-        /* The resolver may have verified a pending slot; the entry records the
+-         * residency it resolved against, read after it. */
++        /* The resolver may have verified a pending slot, which changes the
++         * signature: the entry records the one it resolved against, read
++         * after it, and goes in the slot that signature selects. */
++        id = c->dcache_id;
++        if (!id) id = spu_dcache_sign(c);
++        e = &t_dcache[((lsa >> 2) ^ (id * 0x9E3779B1u)) & (SPU_DCACHE_ENTRIES - 1)];
+         e->fn = fn; e->id = id; e->lsa = lsa; e->rgen = rgen;
+         e->residency = c->dcache_residency; e->image = c->image_id;
+         e->ovl = c->resident_ovl; e->task = c->resident_task;
+@@ -1951,6 +2018,7 @@
+         for (unsigned i = 0; match && i < o->code_count; ++i)
+             match = !memcmp(ctx->ls + o->code[i].lsa, o->code[i].bytes, o->code[i].size);
+         *state = match ? SPU_OVERLAY_VERIFIED : SPU_OVERLAY_REJECTED;
++        spu_dcache_residency_changed(ctx);   /* the verify state is part of the signature */
+     }
+     return *state == SPU_OVERLAY_VERIFIED;
+ }
+@@ -2108,6 +2176,38 @@
      t_next_ea = ea + size; t_next_lsa = lsa + size;
  }
  
@@ -17771,7 +17859,7 @@ diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
  /* SPU_LOCKGUARD=<hex ea>: the word at that EA is a ticket lock (serving,next
   * halfwords). Log any SPU write that moves either halfword by anything other
   * than 0 or +1 -- a stale whole-line store rolling the lock back. `src` is the
-@@ -2133,6 +2205,7 @@
+@@ -2133,6 +2233,7 @@
  {
      uint32_t lsa = (uint32_t)(ls - ctx->ls);
      spu_ovl_dump(ctx, ea, lsa, ls, size);
