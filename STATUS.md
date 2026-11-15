@@ -126,7 +126,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **14 Nov 2026:** Photo Mode pictures keep their colours: no more yellow-green tint or coloured ghost copies (v0.1.48);
+- **14 Nov 2026:** Linux: no more freezes when new shaders are needed (they build in the background), and
+  road markings and shadows get the PS3's polygon offset (v0.1.49); Photo Mode pictures keep their colours: no more yellow-green tint or coloured ghost copies (v0.1.48);
   the game starts on PCs where Windows forces Control Flow Guard on, and Options >
   Display no longer crashes it (v0.1.47); races at 1080p get the right brightness: auto-exposure read a leftover image, so
   tracks could come out blown-out white (Speed Test) or far too dark (v0.1.46); game updates and DLC

@@ -44,6 +44,10 @@ export PS3RECOMP_VK_GUEST_PROGRAMS=1
 export PS3RECOMP_SPIRV_CACHE="$HERE/shadercache"
 export VK_DRAW_BATCH=1
 export PS3RECOMP_VK_NO_READBACK=1
+# Shaders the game hasn't used before are built on spare CPU cores instead of stopping the game for
+# them (a new car or track needs a hundred or more at once: a freeze of up to seconds). The cost: an
+# object can be missing for its first few frames on screen. 0 builds them in place, as before.
+export PS3RECOMP_VK_ASYNC_SHADERS=1
 # Full screen: remove the # from the next line.
 # export PS3RECOMP_VK_FULLSCREEN=1
 # Resolution: the TV mode the game is told it's on, as on a PS3. 720 = its 720p mode (races drawn at

@@ -9,6 +9,35 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 14 Nov 2026
 
+🏷️ Released as **v0.1.49**
+
+🐧 **Linux: no more freezes when something new comes on screen, and road markings sit on the road**
+([#20](https://github.com/MormonFTP-hub/gt5-recomp/issues/20), melroy89: single frames of 0.3 to 0.7 s,
+once 1.7 s, in races and licence tests on a Radeon RX 7900 XTX)
+- The Vulkan renderer (the Linux build's) made every shader the game hadn't used before on the spot,
+  while the game waited: translated into Vulkan's form, then compiled by the graphics driver. A new
+  car, track or menu asks for 100 to 300 of them at once, so the picture stopped for up to seconds.
+  Now they're built on spare CPU cores while the game keeps running (`PS3RECOMP_VK_ASYNC_SHADERS`, on
+  in `play.sh`). The cost: something can be missing for its first few frames on screen.
+  `export PS3RECOMP_VK_ASYNC_SHADERS=0` in `GT5/settings.sh` goes back to the old way.
+- Checked on this PC with the Windows build of the same Vulkan renderer (NVIDIA card), from the title
+  screen to the B-1 licence test with no shaders cached yet. Before: 16 frames of 250 ms or more, 10 s
+  frozen in all, the worst 2.2 s (and 5.9 s with the driver's own cache empty too). Now: none of
+  250 ms or more, the worst 210 ms, and the pictures were complete once the shaders were built.
+- GT5 moves road markings, skid marks and its shadow maps a tiny step towards or away from the camera
+  (the PS3's polygon offset), so they don't flicker against the surface under them. The Vulkan
+  renderer ignored that and now applies it (`PS3RECOMP_VK_DEPTH_BIAS=0` turns it off). Whether it is
+  also what made the car bodies flicker on the 7900 XTX isn't known yet: that didn't show here.
+- `play.err` now has a `[slow-frame]` line for every frame of 250 ms or more, as the Windows build
+  does, splitting it into new shaders (translation and driver), textures, waiting for the GPU and the
+  rest (`PS3RECOMP_VK_HITCH_MS` sets the limit, 0 turns it off). A texture the renderer can't create
+  is now logged too.
+- Not seen on this PC yet (NVIDIA, European disc): the flickering car bodies, the see-through road in
+  the B-2 intro, the missing textures in a braking test and the dark title-screen scene. With
+  `PS3_SKIP_INTRO=1` (play.sh's default) the scene behind the title is GT5's own replay of a race at
+  dusk or at night, drawn live, and it is just as dark in the Windows build. Questions for those are
+  on #20.
+
 🏷️ Released as **v0.1.48**
 
 📷 **Photo Mode pictures have their real colours again: no more yellow-green tint or coloured ghost copies**
