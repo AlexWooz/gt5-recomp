@@ -9,6 +9,15 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 14 Nov 2026
 
+🎨 **Vulkan/Metal renderer: a draw no longer re-parses its two programs**
+- Every draw parsed its fragment program six times (its size twice, the sampled, gamma and
+  sign-expansion units, the inline constants, the structural hash) and its vertex program four. The
+  draw engine now keeps those answers with a copy of each program's bytes and reuses them while the
+  guest's bytes still equal the copy (`RSX_ENGINE_PROGRAM_MEMO=0` parses every draw, as before).
+- `PS3_FTRACE` records the SPURS job chain: a span per job (who 200) and per guard wait.
+- Steam Deck, race paused on the grid: the RSX thread walks 755 ms of each second, from 800. The frame
+  stays at 107 ms: the Deck's four cores are full (5.6 of 8 threads busy), so only the total work counts.
+
 ✍️ **A lifted guest store reads one byte before storing, not three globals** (needs a re-lift)
 - Every lifted PPU store made its own three checks -- the null-sweep and barrier-watch diagnostics and
   the SPU reserved-line bitmap -- four loads and four branches, about twenty host instructions a store.

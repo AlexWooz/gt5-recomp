@@ -7743,16 +7743,34 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
          u64 cmd = vm_read64(pc);
          u32 op  = (u32)(cmd & 7);
          u32 ext = (u32)(cmd & 127);
-@@ -2775,7 +3108,7 @@
+@@ -2745,7 +3078,13 @@
+         if (cmd != 0 && op == 0) {                    /* JOB */
+             { extern u32 g_spurs_job_ls_handle; g_spurs_job_ls_handle = jc_ea; }
+             int idx = jobs++;
+-            jc_run_one_job((u32)(cmd & ~7ull), idx, size_desc);
++            { /* PS3_FTRACE: one span per job, who = 200 (the chain walker), a = the job's
++               * binary, b = the chain: the report then shows the walker beside the PPU waits. */
++              const uint64_t ft0 = PS3_FT_ON() ? ps3_ft_now() : 0;
++              jc_run_one_job((u32)(cmd & ~7ull), idx, size_desc);
++              if (ft0) ps3_ft_span(PS3_FT_SPU_BUSY, 200u,
++                                   (uint32_t)(vm_read64((u32)(cmd & ~7ull) + JH_EA_BINARY) & ~7ull),
++                                   jc_ea, ft0, ps3_ft_now()); }
+             idle = 0;                    /* real work: the chain is healthy */
+             /* Signal per JOB, not per lap. The application waits once for each
+              * unit of work it queued -- this title notified the guard 7 times
+@@ -2775,7 +3114,10 @@
          }
          if (op == 7 && ext == (7 | (1 << 3))) {           /* GUARD */
              u32 g_ea = (u32)(cmd & ~127ull);
 -            if (!jg_wait(g_ea)) return;                  /* still closed */
-+            if (!jg_wait(g_ea, stop)) return;            /* shut down */
++            { const uint64_t ft0 = PS3_FT_ON() ? ps3_ft_now() : 0;
++              const int ok = jg_wait(g_ea, stop);
++              if (ft0) ps3_ft_span(PS3_FT_SPU_WAIT, 200u, g_ea, jc_ea, ft0, ps3_ft_now());
++              if (!ok) return; }                        /* shut down */
              pc += 8; continue;
          }
          /* NOP(0) / SYNC+LWSYNC(2, one virtual SPU: nothing to wait for) /
-@@ -2791,6 +3124,7 @@
+@@ -2791,6 +3133,7 @@
  {
      int slot = (int)(intptr_t)p;
      ps3_thread_name("spurs jc %d", slot);
@@ -7760,7 +7778,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      /* TIMING PROBE (SPURS_JC_DELAY=ms): the real jm2 chain walker is async and
       * picks up jobs as the PPU appends them + fills their descriptors. Our walk
       * is one-shot; if it reads descriptors before the PPU populates the I/O
-@@ -2799,11 +3133,14 @@
+@@ -2799,11 +3142,14 @@
      { const char* d = getenv("SPURS_JC_DELAY");
        if (d && *d) Sleep((unsigned)atoi(d)); }
      jc_execute(s_jobchains[slot].entry_ea, s_jobchains[slot].jc_ea,
@@ -7779,7 +7797,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      return 0;
  }
  
-@@ -2834,8 +3171,12 @@
+@@ -2834,8 +3180,12 @@
              jc_dump_commands(who, s_jobchains[i].entry_ea, 16);
          }
          if (s_off || !s_jobchains[i].entry_ea) return CELL_OK;
@@ -7792,7 +7810,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
              HANDLE th = CreateThread(NULL, 1u << 20, jc_thread, (LPVOID)(intptr_t)i, 0, NULL);
              if (th) CloseHandle(th);
              else s_jobchains[i].running = 0;
-@@ -2859,8 +3200,12 @@
+@@ -2859,8 +3209,12 @@
   * r3, so the caller reads a garbage result for "did the shutdown take?" and a
   * title that checks it can decide the subsystem failed and tear itself down.
   *
@@ -7807,7 +7825,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
   * Found in Tokyo Jungle, whose sound engine shuts its chain down during init
   * and then reports "failed to recv data from SPU" when the handshake does not
   * complete. */
-@@ -2870,7 +3215,7 @@
+@@ -2870,7 +3224,7 @@
      if (PS3_LOG_FIRST(_n, 8)) printf("[cellSpurs] ShutdownJobChain(jc=0x%08X)\n", (u32)jc_ea);
      for (int i = 0; i < MAX_JOBCHAINS; i++) {
          if (s_jobchains[i].jc_ea == (u32)jc_ea) {
@@ -20474,7 +20492,263 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          t->pitch != z->pitch)
          return 0;
      if (!z->conv || z->conv_serial != z->depth_serial || z->conv_fmt != base_fmt ||
-@@ -2465,6 +2511,267 @@
+@@ -1698,16 +1744,69 @@
+  * layout and by the pipeline, because they must not disagree: the built-in
+  * program declares all sixteen inputs, so narrowing the layout for it would
+  * leave the pipeline's vertex descriptor short of what the shader reads. */
++/* What a draw derives from the bytes of the two programs alone, kept with a copy of those bytes.
++ * The same few programs come round draw after draw, and each draw parsed its fragment program six
++ * times over (its size twice, the sampled, gamma and sign-expansion units, the inline constants,
++ * the structural hash) and its vertex program four: about a tenth of the RSX thread in a GT5
++ * race. A memo entry answers while the guest bytes still equal its copy, so a program rewritten
++ * in place (an inline constant changed) is parsed again. RSX_ENGINE_PROGRAM_MEMO=0 turns it off.
++ * s_cur_vpm / s_cur_fpm are the entries of the programs eng_guest_programs last returned, NULL
++ * when it found none. */
++typedef struct {
++    u32 start, instrs, ok;
++    u8  copy[RSX_DSP_VP_INSTR * 16];
++    u32 has_branch, branch_used, has_inputs, input_mask, has_hash;
++    u64 hash;                          /* eng_vp_hash from the FNV offset basis */
++} eng_vprog_memo;
++typedef struct {
++    u32 loc, off, size;
++    u8* copy;
++    u32 has_sampled, sampled, has_cand, gamma_cand, expand_cand;
++    u32 has_consts, has_hash;
++    u64 hash_seed, hash;               /* rsx_fp_structural_hash(seed) */
++    rsx_fp_constant_block consts;
++} eng_fprog_memo;
++static eng_vprog_memo  s_vprog_memo[8];
++static eng_fprog_memo  s_fprog_memo[128];
++static eng_vprog_memo* s_cur_vpm;
++static eng_fprog_memo* s_cur_fpm;
++static int eng_program_memo_on(void)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("RSX_ENGINE_PROGRAM_MEMO"); on = !(e && atoi(e) == 0); }
++    return on;
++}
++
+ static int eng_guest_programs(const u8** out_vp, u32* out_vp_instrs,
+                               const u8** out_fp, u32* out_fp_size)
+ {
+     const u8* vp_uc = NULL;
+     u32 vp_instrs = 0;
++    const int memo = eng_program_memo_on();
++    s_cur_vpm = NULL;
++    s_cur_fpm = NULL;
+     const u32 start = rsx_dsp_vp_start(&g.rsx);
+     if (start < RSX_DSP_VP_INSTR) {
+         vp_uc = (const u8*)(g.rsx.vp + start * 4);
+-        vp_instrs = rsx_vp_program_size_instrs(
+-            vp_uc, (RSX_DSP_VP_INSTR - start) * 16u);
++        eng_vprog_memo* m = memo ? &s_vprog_memo[start & 7u] : NULL;
++        if (m && m->ok && m->start == start &&
++            memcmp(m->copy, vp_uc, (size_t)m->instrs * 16u) == 0) {
++            vp_instrs = m->instrs;
++            s_cur_vpm = m;
++        } else {
++            vp_instrs = rsx_vp_program_size_instrs(
++                vp_uc, (RSX_DSP_VP_INSTR - start) * 16u);
++            if (m) {
++                m->ok = 0;
++                if (vp_instrs && vp_instrs <= RSX_DSP_VP_INSTR - start) {
++                    memcpy(m->copy, vp_uc, (size_t)vp_instrs * 16u);
++                    m->start = start; m->instrs = vp_instrs;
++                    m->has_branch = m->has_inputs = m->has_hash = 0;
++                    m->ok = 1;
++                    s_cur_vpm = m;
++                }
++            }
++        }
+     }
+ 
+     /* A zero SET_SHADER_PROGRAM is "none", not "the program at offset 0": the
+@@ -1718,10 +1817,31 @@
+     if (rsx_dsp_reg(&g.rsx, 0x08E4)) {
+         u32 fp_loc = 0;
+         const u32 fp_off = rsx_dsp_fragment_program(&g.rsx, &fp_loc);
+-        fp_uc = eng_guest_ptr(NULL, fp_loc, fp_off, 16);
+-        fp_size = fp_uc ? rsx_fp_program_size(fp_uc, ENG_FP_MAX_BYTES) : 0;
+-        if (fp_size) fp_uc = eng_guest_ptr(NULL, fp_loc, fp_off, fp_size);
+-        if (!fp_uc) fp_size = 0;
++        eng_fprog_memo* m = memo
++            ? &s_fprog_memo[((fp_off >> 4) ^ (fp_off >> 13) ^ (fp_loc * 7u)) & 127u] : NULL;
++        const u8* held = (m && m->copy && m->size && m->loc == fp_loc && m->off == fp_off)
++            ? eng_guest_ptr(NULL, fp_loc, fp_off, m->size) : NULL;
++        if (held && memcmp(held, m->copy, m->size) == 0) {
++            fp_uc = held;
++            fp_size = m->size;
++            s_cur_fpm = m;
++        } else {
++            fp_uc = eng_guest_ptr(NULL, fp_loc, fp_off, 16);
++            fp_size = fp_uc ? rsx_fp_program_size(fp_uc, ENG_FP_MAX_BYTES) : 0;
++            if (fp_size) fp_uc = eng_guest_ptr(NULL, fp_loc, fp_off, fp_size);
++            if (!fp_uc) fp_size = 0;
++            if (m && fp_size && fp_size <= 16384u) {
++                u8* c = (u8*)realloc(m->copy, fp_size);
++                if (c) {
++                    memcpy(c, fp_uc, fp_size);
++                    m->copy = c; m->loc = fp_loc; m->off = fp_off; m->size = fp_size;
++                    m->has_sampled = m->has_cand = m->has_consts = m->has_hash = 0;
++                    s_cur_fpm = m;
++                } else if (m->copy) {
++                    m->size = 0;               /* the old copy no longer describes anything */
++                }
++            }
++        }
+     }
+ 
+     if (out_vp) *out_vp = vp_uc;
+@@ -1739,10 +1859,16 @@
+     const u8* uc = NULL;
+     u32 instrs = 0;
+     if (eng_guest_programs(&uc, &instrs, NULL, NULL)) {
+-        rsx_vp_input_analysis analysis = { 0xFFFFu, 0 };
+-        if (rsx_vp_analyze_inputs(uc, instrs * 16u, &analysis) == (int)instrs &&
+-            analysis.exact && analysis.input_mask)
+-            mask = analysis.input_mask;
++        eng_vprog_memo* const vpm = s_cur_vpm;
++        if (vpm && vpm->has_inputs) {
++            mask = vpm->input_mask;
++        } else {
++            rsx_vp_input_analysis analysis = { 0xFFFFu, 0 };
++            if (rsx_vp_analyze_inputs(uc, instrs * 16u, &analysis) == (int)instrs &&
++                analysis.exact && analysis.input_mask)
++                mask = analysis.input_mask;
++            if (vpm) { vpm->input_mask = mask; vpm->has_inputs = 1; }
++        }
+     }
+     rsx_vertex_layout_plan_init(layout, mask);
+ }
+@@ -1924,6 +2050,8 @@
+     u32 vp_instrs = 0, fp_size = 0;
+     /* No resident program pair means the built-in one; see kEngFixedVS. */
+     const int fixed = !eng_guest_programs(&vp_uc, &vp_instrs, &fp_uc, &fp_size);
++    eng_vprog_memo* const vpm = fixed ? NULL : s_cur_vpm;
++    eng_fprog_memo* const fpm = fixed ? NULL : s_cur_fpm;
+ 
+     const u32 fp_ctrl  = rsx_dsp_shader_control(&g.rsx);
+     const u32 srgb_output = !fixed && rsx_fp_srgb_output_enabled(
+@@ -1934,13 +2062,34 @@
+     const u32 vtex_mask = eng_vtex_mask();
+     /* BRB/CLB outcomes are baked into the program: the branch bits are
+      * identity only for a program that tests them. */
+-    const int vp_branch_bits_used = !fixed && rsx_vp_uses_branch_bits(vp_uc, vp_instrs * 16u);
++    int vp_branch_bits_used = 0;
++    if (vpm && vpm->has_branch) {
++        vp_branch_bits_used = (int)vpm->branch_used;
++    } else if (!fixed) {
++        vp_branch_bits_used = rsx_vp_uses_branch_bits(vp_uc, vp_instrs * 16u);
++        if (vpm) { vpm->branch_used = (u32)vp_branch_bits_used; vpm->has_branch = 1; }
++    }
+     const u32 vp_branch_bits = vp_branch_bits_used ? rsx_dsp_reg(&g.rsx, 0x1FF8u) : 0;
+     const u32 ucp = fixed ? 0 : eng_user_clip_key();
+ 
+     rsx_fp_shadow_desc shadow[RSX_DSP_NUM_TEXTURES] = {{0}};
+     u32 shadow_mask = 0;
+-    const u32 sampled_units = fixed ? 0 : rsx_fp_texture_units(fp_uc, fp_size);
++    u32 sampled_units = 0;
++    if (fpm && fpm->has_sampled) {
++        sampled_units = fpm->sampled;
++    } else if (!fixed) {
++        sampled_units = rsx_fp_texture_units(fp_uc, fp_size);
++        if (fpm) { fpm->sampled = sampled_units; fpm->has_sampled = 1; }
++    }
++    /* Each of the two walks below accepts a unit when the program fetches it suitably AND its
++     * mask byte is set; the walk does not depend on the masks, so with every mask set it gives the
++     * candidates, and the answer for a draw is the candidates whose mask is set. */
++    if (fpm && !fpm->has_cand) {
++        static const u8 all_units[RSX_DSP_NUM_TEXTURES] = {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1};
++        fpm->gamma_cand = rsx_fp_texture_gamma_units(fp_uc, fp_size, all_units);
++        fpm->expand_cand = rsx_fp_texture_expand_units(fp_uc, fp_size, all_units);
++        fpm->has_cand = 1;
++    }
+     for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
+         if (!(sampled_units & (1u << u))) continue;
+         rsx_dsp_texture t;
+@@ -1954,7 +2103,14 @@
+         rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
+         if (t.enabled) gamma_masks[u] = rsx_texture_gamma_mask(t.format, t.remap, t.filter, t.wrap);
+     }
+-    const u32 gamma_units = fixed ? 0 : rsx_fp_texture_gamma_units(fp_uc, fp_size, gamma_masks);
++    u32 gamma_units = 0;
++    if (fpm) {
++        for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
++            if (gamma_masks[u]) gamma_units |= 1u << u;
++        gamma_units &= fpm->gamma_cand;
++    } else if (!fixed) {
++        gamma_units = rsx_fp_texture_gamma_units(fp_uc, fp_size, gamma_masks);
++    }
+     for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
+         if (!(gamma_units & (1u << u))) gamma_masks[u] = 0;
+     /* Texture sign expansion: SET_TEXTURE_ADDRESS's UNSIGNED_REMAP_BIASED
+@@ -1965,7 +2121,14 @@
+         rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
+         if (t.enabled) expand_masks[u] = rsx_texture_expand_mask(t.format, t.remap, t.filter, t.wrap);
+     }
+-    const u32 expand_units = fixed ? 0 : rsx_fp_texture_expand_units(fp_uc, fp_size, expand_masks);
++    u32 expand_units = 0;
++    if (fpm) {
++        for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
++            if (expand_masks[u]) expand_units |= 1u << u;
++        expand_units &= fpm->expand_cand;
++    } else if (!fixed) {
++        expand_units = rsx_fp_texture_expand_units(fp_uc, fp_size, expand_masks);
++    }
+     for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
+         if (!(expand_units & (1u << u))) expand_masks[u] = 0;
+ 
+@@ -1979,8 +2142,20 @@
+             unnorm_dim[u][0] = unnorm_dim[u][1] = unnorm_dim[u][2] = 0;
+ 
+     g.fp_constants.count = 0;
+-    if (!fixed && rsx_fp_collect_constants(fp_uc, fp_size, &g.fp_constants) < 0)
+-        return 0;
++    if (fpm && fpm->has_consts) {
++        g.fp_constants.count = fpm->consts.count;
++        if (fpm->consts.count)
++            memcpy(g.fp_constants.values, fpm->consts.values, (size_t)fpm->consts.count * 16u);
++    } else if (!fixed) {
++        if (rsx_fp_collect_constants(fp_uc, fp_size, &g.fp_constants) < 0)
++            return 0;
++        if (fpm) {
++            fpm->consts.count = g.fp_constants.count;
++            if (g.fp_constants.count)
++                memcpy(fpm->consts.values, g.fp_constants.values, (size_t)g.fp_constants.count * 16u);
++            fpm->has_consts = 1;
++        }
++    }
+ 
+     /* An antialiased target is held at its sample grid; WPOS must still count
+      * pixels (rsx_fp_apply_wpos_grid). */
+@@ -1999,9 +2174,23 @@
+         static const u32 fixed_tag = 0x4E464958u;   /* "XIFN" */
+         key = eng_fnv1a(&fixed_tag, sizeof fixed_tag, key);
+     } else {
+-        key = eng_vp_hash(vp_uc, vp_instrs * 16u, key);
++        /* `key` is still the offset basis here, so the hash of the vertex program is the same
++         * every draw; the fragment program is seeded with what came before it, which for one
++         * pair of programs is the same too. */
++        if (vpm && vpm->has_hash) {
++            key = vpm->hash;
++        } else {
++            key = eng_vp_hash(vp_uc, vp_instrs * 16u, key);
++            if (vpm) { vpm->hash = key; vpm->has_hash = 1; }
++        }
+         if (vp_branch_bits_used) key = eng_fnv1a(&vp_branch_bits, sizeof vp_branch_bits, key);
+-        key = rsx_fp_structural_hash(fp_uc, fp_size, key);
++        if (fpm && fpm->has_hash && fpm->hash_seed == key) {
++            key = fpm->hash;
++        } else {
++            const u64 seed = key;
++            key = rsx_fp_structural_hash(fp_uc, fp_size, key);
++            if (fpm) { fpm->hash_seed = seed; fpm->hash = key; fpm->has_hash = 1; }
++        }
+         if (!key) return 0;
+         const u32 fp_ctrl_key = fp_ctrl & 0x4Eu; /* colour width and fragment depth export */
+         key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
+@@ -2465,6 +2654,267 @@
      return ENG_INVALID;
  }
  
@@ -20742,7 +21016,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
  static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
                                u32 current_zslot, u32 tex_used,
                                u32 textures[RSX_BE_MAX_TEXTURES],
-@@ -2492,6 +2799,57 @@
+@@ -2492,6 +2942,57 @@
           * target in Resistance: Fall of Man). Neither colour nor depth
           * surfaces are looked up for it. */
          const u32 base_fmt = t.format & RSX_TEX_FMT_BASE_MASK & ~(u32)RSX_TEX_FMT_UNNORM;
@@ -20800,7 +21074,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          const int compressed = base_fmt == RSX_TEX_FMT_DXT1 ||
                                 base_fmt == RSX_TEX_FMT_DXT23 ||
                                 base_fmt == RSX_TEX_FMT_DXT45;
-@@ -2575,12 +2933,51 @@
+@@ -2575,12 +3076,51 @@
              continue;
          }
          if (sampled >= 0) {
@@ -20854,7 +21128,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          }
          if (base_fmt == RSX_TEX_FMT_DEPTH24_D8) {
              for (u32 i = 0; i < g.n_zdepths; i++)
-@@ -2597,6 +2994,42 @@
+@@ -2597,6 +3137,42 @@
                                         t.width, t.height, t.mipmaps, t.pitch,
                                         (int)t.cubemap, t.remap & 0xFFFFu,
                                         (t.dimension == 3 && !t.cubemap) ? t.depth : 1u);
@@ -20897,7 +21171,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      }
      return mask;
  }
-@@ -2691,6 +3124,22 @@
+@@ -2691,6 +3267,22 @@
      if (s_pd.state == 1 && s_pd.after_s &&
          difftime(time(NULL), s_pd.start) >= (double)s_pd.after_s && pd_open_index())
          fprintf(s_pd.index, "from a draw of frame %u, %u s in\n", g.frames, s_pd.after_s);
@@ -20920,7 +21194,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      return s_pd.state == 2;
  }
  
-@@ -3022,10 +3471,124 @@
+@@ -3022,10 +3614,124 @@
                  what, rc[0], rc[1], rc[2], rc[3], w, h);
  }
  
@@ -21045,7 +21319,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      /* Mixed geometry sources have no defined concatenation here. Reject the
       * whole group instead of drawing partial/misordered geometry. */
      if (dc.n_immediate && (dc.n_arr || dc.n_idx || dc.inl_bytes ||
-@@ -3236,6 +3799,12 @@
+@@ -3236,6 +3942,12 @@
      if (zslot != ENG_INVALID && rs.depth_test && rs.depth_write) {
          g.zdepths[zslot].had_write = 1;
          eng_zdepth_wrote(zslot, &sf);
@@ -21058,7 +21332,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      }
  }
  
-@@ -3243,6 +3812,7 @@
+@@ -3243,6 +3955,7 @@
  {
      (void)user; (void)r;
      if (!g.ready) return;
@@ -21066,7 +21340,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      u32 targets[RSX_BE_MAX_COLOR_TARGETS];
      const u32 n_targets = eng_current_target_set(targets);
      if (!n_targets) return;
-@@ -3340,6 +3910,8 @@
+@@ -3340,6 +4053,8 @@
              if (!partial) g.zdepths[zslot].had_write = 0;
              g.zdepths[zslot].snapshot_valid = 0;
              eng_zdepth_wrote(zslot, &sf);
@@ -21075,7 +21349,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          }
      }
  }
-@@ -3360,9 +3932,12 @@
+@@ -3360,9 +4075,12 @@
      return eng_current_surface();
  }
  
@@ -21088,7 +21362,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      const u32 target = eng_present_surface(buffer_id);
      if (target == ENG_INVALID) return;
      g.surfaces[target].last_use = g.frames;
-@@ -3377,7 +3952,14 @@
+@@ -3377,7 +4095,14 @@
      }
      pd_present(target);
      g.last_present_surface = target;
@@ -21104,7 +21378,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      g.frames++;
      g.last_guest_draws = g.guest_draws;
      g.guest_draws = 0;
-@@ -3466,12 +4048,19 @@
+@@ -3466,12 +4191,19 @@
          if (g.pipelines[i].handle) g.be->pipeline_release(g.be->user, g.pipelines[i].handle);
      for (u32 i = 0; i < g.n_surfaces; i++) {
          if (g.surfaces[i].feedback) g.be->texture_release(g.be->user, g.surfaces[i].feedback);
