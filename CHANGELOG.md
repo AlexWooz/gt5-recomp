@@ -9,6 +9,22 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.61**
+
+⏱️ **Updates recompile only what changed** (from the update after this one: this one is still installed by
+the old update.ps1)
+- An update that changed the port's runtime took the old ps3recomp patch out and put the new one in, which
+  rewrote every patched file, about 100 of them, shared headers included. The build saw them all as new
+  and recompiled all of the game's generated code: the 20 to 50 minutes players saw on most updates.
+- `update.ps1` now notes each patched file's content and timestamp first, and afterwards gives the
+  unchanged ones their timestamps back, so only what really changed is recompiled. It says how many
+  changed ("8 patched file(s) changed in this version, 91 unchanged").
+- Checked here on a scratch copy of ps3recomp, updating from v0.1.55's patch to v0.1.60's: exactly the 8
+  files those versions changed got new timestamps, and the other 91 kept theirs. The generated PPU code (the
+  long part) depends on one runtime header, `ppu_vmx.h`, so it's recompiled only when that changes; the
+  lifted SPU jobs, a few minutes, when `spu_context.h` or `spu_helpers.h` does. A re-lift still rebuilds
+  everything, as before.
+
 🏷️ Released as **v0.1.60**
 
 🛠️ **Adding Vulkan works with Visual Studio 18; setup no longer picks an incomplete Visual Studio**

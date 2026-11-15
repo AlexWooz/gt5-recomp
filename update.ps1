@@ -173,6 +173,21 @@ $same = (Test-Path $oldPatch) -and (Test-Path $patch) -and
 if ($same) {
     Write-Host "ps3recomp: this version's patch is already in place"
 } else {
+    # 0. Every file either patch touches, with its content hash and timestamp now. Taking the old patch out
+    #    and putting the new one in rewrites all of them, shared headers included, so the build saw them
+    #    all as changed and recompiled every file of the game's generated code (20 to 50 minutes) even
+    #    when an update changed a few runtime files. Below, the ones whose content comes out the same get
+    #    their old timestamps back.
+    $kept = @{}
+    foreach ($pf in @($oldPatch, $patch)) {
+        if (-not (Test-Path $pf)) { continue }
+        foreach ($m in (Select-String -LiteralPath $pf -Pattern '^diff --git a/(\S+) b/')) {
+            $rel = $m.Matches[0].Groups[1].Value
+            $full = Join-Path $rc $rel
+            if ($kept.ContainsKey($rel) -or -not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
+            $kept[$rel] = @((Get-FileHash -LiteralPath $full -Algorithm SHA1).Hash, (Get-Item -LiteralPath $full).LastWriteTimeUtc)
+        }
+    }
     # 1. Take the old patch out, keeping anything else changed in ps3recomp.
     $changes = git -C $rc status --porcelain
     if ($changes -and (Test-Path $oldPatch)) {
@@ -201,6 +216,17 @@ if ($same) {
     if ($LASTEXITCODE -ne 0) { Fail "this version's patch doesn't apply to ps3recomp $newBase. Please report it." }
     git -C $rc apply --whitespace=nowarn $patch
     if ($LASTEXITCODE -ne 0) { Fail "applying the patch failed" }
+    # 4. Files whose content is what it was before get their timestamps back (step 0), so only what this
+    #    version really changed is recompiled.
+    $unchanged = 0
+    foreach ($rel in $kept.Keys) {
+        $full = Join-Path $rc $rel
+        if ((Test-Path -LiteralPath $full -PathType Leaf) -and
+            (Get-FileHash -LiteralPath $full -Algorithm SHA1).Hash -eq $kept[$rel][0]) {
+            try { (Get-Item -LiteralPath $full).LastWriteTimeUtc = $kept[$rel][1]; $unchanged++ } catch { }
+        }
+    }
+    Write-Host "ps3recomp: $($kept.Count - $unchanged) patched file(s) changed in this version, $unchanged unchanged"
     Copy-Item $patch (Join-Path $state "applied.patch") -Force
     Set-Content -Path (Join-Path $state "applied-base.txt") -Value $newBase -Encoding ascii
     Remove-Item (Join-Path $state "pre-update.patch") -ErrorAction SilentlyContinue
