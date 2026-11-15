@@ -9,6 +9,18 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 14 Nov 2026
 
+✍️ **A lifted guest store reads one byte before storing, not three globals** (needs a re-lift)
+- Every lifted PPU store made its own three checks -- the null-sweep and barrier-watch diagnostics and
+  the SPU reserved-line bitmap -- four loads and four branches, about twenty host instructions a store.
+- A table with one byte per 4 KiB guest page (`g_ppu_st_page`, `spu_coh_bitmap.h`) now says whether a
+  page needs any of that: an SPU has reserved a line of it (set just before the line's bit, never
+  cleared), or a store diagnostic is armed (every page). A store reads that byte; only on a flagged
+  page does it go on to the exact test, out of line.
+- On x86-64 a lifted load or store also no longer tests whether its address is aligned: the atomic
+  and the memcpy path are the same single `mov` there.
+- Steam Deck, a race paused on the starting grid (the same frozen scene, steady to 1 ms): 106.5 ms a
+  frame, from 109.5 (about 3%). The Linux binary grows from 264 MB to 289 MB.
+
 🧩 **Two kinds of SPU code no longer run in the interpreter** (needs a re-lift of the SPU jobs)
 - A jump table placed right after its `bi`, with the table's address held in a register
   (position-independent code), had no `il`/`ila` naming it, so its handlers were never lifted. The Wws

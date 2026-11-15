@@ -16604,7 +16604,25 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
      if (ok && g_ww_lo && (uint32_t)ea + 4u >= g_ww_lo && (uint32_t)ea < g_ww_hi) {
          /* Report as two words: the watch window is word-granular, and a
           * doubleword CAS on a counter pair is exactly the case worth seeing. */
-@@ -1574,8 +1578,9 @@
+@@ -1415,7 +1419,8 @@
+     if (!en) return 0;                                    /* let it land */
+     { static int sweep = -1;
+       if (sweep < 0) { const char* e = getenv("PS3_NULL_SWEEP"); sweep = e ? 1 : 0; }
+-      if (sweep) { g_null_sweep_hi = 1; g_null_sweep_last = a;
++      if (sweep) { if (!g_null_sweep_hi) ppu_st_page_all(PPU_ST_PAGE_SWEEP, 1);
++                   g_null_sweep_hi = 1; g_null_sweep_last = a;
+                    g_null_sweep_tid = g_active_ctx
+                                     ? (unsigned)g_active_ctx->thread_id : 0u; } }
+     { static long n = 0;
+@@ -1477,6 +1482,7 @@
+         return 1;                       /* still the same sweep: drop */
+     }
+     g_null_sweep_hi = 0;                /* pattern broken: it is over */
++    ppu_st_page_all(PPU_ST_PAGE_SWEEP, 0);
+     { static int said = 0;
+       if (!said) { said = 1;
+           fprintf(stderr, "[null-write] sweep contained, ended at 0x%08X\n",
+@@ -1574,8 +1580,9 @@
          if (spu_coh_line_reserved((uint32_t)(a))) {                           \
              spu_lockline_lock();                                              \
              memcpy(vm_base + (uint32_t)(a), (src), (n));                      \
@@ -16615,7 +16633,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
          } else {                                                              \
              memcpy(vm_base + (uint32_t)(a), (src), (n));                      \
          }                                                                     \
-@@ -2139,6 +2144,7 @@
+@@ -2139,6 +2146,7 @@
  static uint32_t g_addr[PPU_HASH_SIZE];
  static ppu_fn   g_fn[PPU_HASH_SIZE];
  static uint32_t g_fn_count = 0;
@@ -16623,7 +16641,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
  
  extern "C" void ppu_register_function(uint64_t addr, ppu_fn fn)
  {
-@@ -2147,8 +2153,10 @@
+@@ -2147,8 +2155,10 @@
      /* Bounded probe: never loop past the whole table. A full table (function
       * count >= PPU_HASH_SIZE) would otherwise spin forever here at startup. */
      for (uint32_t probes = 0; probes < PPU_HASH_SIZE; probes++) {
@@ -16636,7 +16654,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
          i = (i + 1) & PPU_HASH_MASK;
      }
      static int warned = 0;
-@@ -2164,7 +2172,24 @@
+@@ -2164,7 +2174,24 @@
   * Built lazily on first use (registration is boot-time-only). */
  static struct { void* host; uint32_t guest; } g_inv[PPU_HASH_SIZE];
  static uint32_t g_inv_n = 0;
@@ -16661,7 +16679,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
  {
      if (!g_inv_n) {
          for (uint32_t i = 0; i < PPU_HASH_SIZE; i++)
-@@ -2183,6 +2208,25 @@
+@@ -2183,6 +2210,25 @@
      while (lo < hi) { uint32_t mid = (lo + hi) / 2;
          if (g_inv[mid].host <= ra) lo = mid + 1; else hi = mid; }
      return lo ? g_inv[lo - 1].guest : 0;
@@ -16687,7 +16705,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
  }
  
  static ppu_fn ppu_lookup(uint32_t a)
-@@ -2844,7 +2888,7 @@
+@@ -2844,7 +2890,7 @@
          }
      }
  
@@ -16696,7 +16714,7 @@ diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
      if (!fn) {
          /* OPD-swap clobber fixup: a malformed memcpy (game func_0036FA74) writes
           * some handler/vtable OPDs as {TOC, func} (code & toc SWAPPED), so lifted
-@@ -3195,6 +3239,14 @@
+@@ -3195,6 +3241,14 @@
  
  extern "C" void lv2_syscall(ppu_context* ctx)
  {
@@ -17589,10 +17607,17 @@ index a55afb05..13dd876e 100644
      printf("[boot] VFS root: %s\n", ppu_vfs_root);
  
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 5fc50208..440fb21d 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
-@@ -242,8 +242,11 @@ void spu_stop(spu_context* ctx)
+@@ -14,6 +14,7 @@
+ 
+ #include "spu_dma.h"
+ #include "spu_coherency.h" /* lock-line lock + PPU-write coherence bitmap */
++#include "spu_coh_bitmap.h" /* ppu_st_page_all: the lifted stores' page gate */
+ #include "spu_helpers.h"   /* spu_splat_u32 / spu_ls_read128 (SMC microstep) */
+ #include "spu_lockstep.h"
+ #include "spu_interp.h"    /* spu_lifted_fn / spu_lifted_lookup -- defined below */
+@@ -242,8 +243,11 @@
   * on entry to spu_run_with_halt and the caller's FPCR is put back on the way out: a run can
   * happen synchronously on a PPU thread (a workload dispatched from the PPU caller), whose
   * lifted floating point must keep round to nearest with denormals. Double precision restores
@@ -17606,7 +17631,7 @@ index 5fc50208..440fb21d 100644
  static uint64_t spu_float_mode_enter(void)
  {
  #if defined(__aarch64__) && defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
-@@ -260,6 +263,19 @@ static uint64_t spu_float_mode_enter(void)
+@@ -260,6 +264,19 @@
      if (v == SPU_FPCR_RZFZ) return ~0ull;   /* nested run: the outer one restores */
      __asm__ volatile("msr fpcr, %0" :: "r"((uint64_t)SPU_FPCR_RZFZ));
      return v;
@@ -17626,7 +17651,7 @@ index 5fc50208..440fb21d 100644
  #else
      return ~0ull;
  #endif
-@@ -268,6 +284,8 @@ static void spu_float_mode_leave(uint64_t outer)
+@@ -268,6 +285,8 @@
  {
  #if defined(__aarch64__) && defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
      if (outer != ~0ull) __asm__ volatile("msr fpcr, %0" :: "r"(outer));
@@ -17635,7 +17660,7 @@ index 5fc50208..440fb21d 100644
  #else
      (void)outer;
  #endif
-@@ -363,6 +381,22 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+@@ -363,6 +382,22 @@
                fflush(stderr); } }
          SPU_DRAIN(ctx);
      }
@@ -17658,7 +17683,7 @@ index 5fc50208..440fb21d 100644
      yz_lockstep_unregister(ctx);   /* leave the ring; hand the token onward */
      s_spu_halt_armed = outer_armed;
      if (outer_armed) memcpy(s_spu_halt_env, outer_env, sizeof(jmp_buf));
-@@ -432,8 +466,11 @@ static int spu_mfc_cache_enabled(void)
+@@ -432,8 +467,11 @@
      static atomic_int cached;
      int value = atomic_load_explicit(&cached, memory_order_relaxed);
      if (!value) {
@@ -17671,7 +17696,17 @@ index 5fc50208..440fb21d 100644
          atomic_store_explicit(&cached, value, memory_order_relaxed);
      }
      return value == 2;
-@@ -856,6 +893,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -663,7 +701,8 @@
+       if (s_ae < 0) { const char* e = getenv("SPU_ATOM_EA");
+         s_aea = e ? (uint32_t)strtoul(e, 0, 16) & ~127u : 0; s_ae = s_aea ? 1 : 0;
+         if (s_ae == 1) { extern uint32_t g_barrier_sync_watch;
+-            g_barrier_sync_watch = s_aea; } /* arm PUTLLC OK/FAIL verdict log */ }
++            g_barrier_sync_watch = s_aea;   /* arm PUTLLC OK/FAIL verdict log */
++            ppu_st_page_all(PPU_ST_PAGE_WATCH, 1); } }
+       if (s_ae == 1 && ((uint32_t)ea & ~127u) == s_aea) {
+           static int _n = 0, s_cap = -1;
+           /* SPU_ATOM_EA_MAX=<n>: lines to print (default 48, 0 = unlimited). */
+@@ -856,6 +895,7 @@
               * successful PUTLLC, it does not report it lost. Already under the
               * lock-line lock, which is what spu_coh_notify_write expects. */
              ctx->resv_valid = 0;
@@ -17679,7 +17714,7 @@ index 5fc50208..440fb21d 100644
              { static int s_w = -1;
                if (s_w < 0) s_w = getenv("SPU_PUTLLC_WHY") ? 1 : 0;
                if (s_w) { static unsigned long long n;
-@@ -2108,6 +2146,38 @@ static void spu_ovl_dump(spu_context* ctx, uint32_t ea, uint32_t lsa, const uint
+@@ -2108,6 +2148,38 @@
      t_next_ea = ea + size; t_next_lsa = lsa + size;
  }
  
@@ -17718,7 +17753,7 @@ index 5fc50208..440fb21d 100644
  /* SPU_LOCKGUARD=<hex ea>: the word at that EA is a ticket lock (serving,next
   * halfwords). Log any SPU write that moves either halfword by anything other
   * than 0 or +1 -- a stale whole-line store rolling the lock back. `src` is the
-@@ -2133,6 +2203,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -2133,6 +2205,7 @@
  {
      uint32_t lsa = (uint32_t)(ls - ctx->ls);
      spu_ovl_dump(ctx, ea, lsa, ls, size);
@@ -17877,12 +17912,13 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
  
  void spu_coh_reserve(spu_context* ctx, uint32_t ea)
  {
-@@ -149,12 +266,15 @@
+@@ -149,12 +266,16 @@
       * the bitmap byte. */
      uint32_t line = ea >> SPU_COH_LINE_SHIFT;
      const unsigned char bit = (unsigned char)(1u << (line & 7));
 -    if (!(s_coh_bitmap[line >> 3] & bit))
 +    if (!(s_coh_bitmap[line >> 3] & bit)) {
++        ppu_st_page_mark(ea);               /* before the bit: see spu_coh_bitmap.h */
          s_coh_bitmap[line >> 3] |= bit;
 +        s_coh_marked++;
 +    }
@@ -17894,7 +17930,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
      for (spu_coh_entry* entry = s_coh_ctxs; entry; entry = entry->next)
          if (entry->ctx == ctx) { __atomic_store_n(&ctx->coh_listed, 1, __ATOMIC_RELAXED); return; }
      spu_coh_entry* entry = (spu_coh_entry*)malloc(sizeof(*entry));
-@@ -175,6 +295,7 @@
+@@ -175,6 +296,7 @@
      /* Arming the existing bitmap makes PPU stores/CAS and MFC writes use
       * the same serialized commit/notify path as SPU reservations. */
      spu_coh_reserve(NULL, ea);
@@ -17902,7 +17938,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
      watch->line = ea & ~127u;
      watch->wake = wake;
      watch->opaque = opaque;
-@@ -188,6 +309,7 @@
+@@ -188,6 +310,7 @@
          if (*link != watch) continue;
          *link = watch->next;
          watch->next = NULL;
@@ -17910,7 +17946,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
          return;
      }
  }
-@@ -225,6 +347,7 @@
+@@ -225,6 +348,7 @@
          break;
      }
      __atomic_store_n(&ctx->coh_listed, 0, __ATOMIC_RELAXED);
@@ -17918,7 +17954,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
      spu_lockline_unlock();
  }
  
-@@ -245,6 +368,7 @@
+@@ -245,6 +369,7 @@
              if (PS3_LOG_FIRST(_n, 16))
                  fprintf(stderr, "[spu-coh] leaked ctx %p (img=%d) dropped at thread exit\n",
                          (void*)c, entry->ctx->image_id);
@@ -17926,7 +17962,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
              *link = entry->next;
              free(entry);
          } else {
-@@ -343,8 +467,53 @@
+@@ -343,8 +468,53 @@
      __atomic_store_n(&ctx->resv_valid, 0, __ATOMIC_RELAXED);
      __atomic_store_n(&ctx->resv_ea, ea, __ATOMIC_RELAXED);
      __atomic_store_n(&ctx->resv_valid, 1, __ATOMIC_RELAXED);
@@ -17980,7 +18016,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
  }
  
  void spu_coh_notify_write_except(uint32_t ea, const void* self)
-@@ -352,6 +521,7 @@
+@@ -352,6 +522,7 @@
      uint32_t line = ea & ~127u;
      ppu_resv_break_line(ea);
      spu_coh_writer_fence();
@@ -17988,13 +18024,15 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
      spu_coh_wake_watches(line);
      for (spu_coh_entry* entry = s_coh_ctxs; entry; entry = entry->next) {
          spu_context* c = entry->ctx;
-@@ -363,18 +533,85 @@
+@@ -363,18 +534,85 @@
              spu_ch_wake(c);
          }
      }
+-}
+-
 +    spu_coh_maybe_unmark(line, self);
- }
- 
++}
++
 +/* Lines whose PPU stores must reach a host-side scheduler at once: the request
 + * line of each live SPURS instance (wklReadyCount1 and wklSignal1 live there).
 + * The scheduler wakes immediately on an SPU commit to that line (the PUTLLC
@@ -18075,7 +18113,7 @@ diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
              SPU_EVENT_SET(c, SPU_EVENT_LR);
              __atomic_store_n(&c->resv_valid, 0, __ATOMIC_RELAXED);   /* reservation lost, PUTLLC must fail */
              /* SPU_PUTLLC_WHY=1: name the agent that killed it. A PUTLLC that
-@@ -393,8 +630,11 @@
+@@ -393,8 +631,11 @@
              spu_ch_wake(c);
          }
      }
@@ -19728,10 +19766,117 @@ diff --git a/tools/find_spu_functions.py b/tools/find_spu_functions.py
 diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
 --- a/tools/ppu_lifter.py
 +++ b/tools/ppu_lifter.py
-@@ -953,6 +953,155 @@
+@@ -174,6 +174,7 @@
+ extern uint32_t             g_barrier_sync_watch;
+ extern uint32_t             g_null_sweep_hi;
+ extern const unsigned char* g_spu_coh_bits;   /* SPU-reserved lines, NULL until the first */
++extern unsigned char        g_ppu_st_page[];  /* per 4 KiB page: stores need the checks */
+ #ifdef __cplusplus
+ }
+ #endif
+@@ -191,6 +192,13 @@
+  * one compare. The range is the old checks' or narrower. The one address
+  * they also turned away, the gcm ref-poll word, is only special to vm_read32,
+  * so only the 32-bit load still tests it. */
++/* An aligned load or store is one atomic access (single-copy atomic, as on Cell), an unaligned
++ * one a memcpy. On x86-64 both are the same single mov, so the test is skipped there. */
++#if defined(__x86_64__) || defined(_M_X64)
++#  define PPU_MM_SPLIT 0
++#else
++#  define PPU_MM_SPLIT 1
++#endif
+ typedef struct ppu_mm { uint8_t* vb; int64_t ld_span, st_span; uint32_t poll; } ppu_mm;
+ static inline ppu_mm ppu_mm_take(void)
+ {
+@@ -214,14 +222,24 @@
+ {
+     return vm_mm_in(m->ld_span, ea, n);
+ }
+-static inline int vm_mm_st_ok(const ppu_mm* m, uint32_t ea, uint32_t n)
++/* Is a store to a flagged page still a plain store? Out of line: the lifted code only gets here
++ * on a page an SPU has reserved a line of, or while a store diagnostic is armed. */
++#if defined(__GNUC__)
++__attribute__((noinline, cold))
++#endif
++static int vm_mm_st_ok_page(uint32_t ea)
+ {
+-    if (!__builtin_expect(vm_mm_in(m->st_span, ea, n), 1) ||
+-        __builtin_expect((g_barrier_sync_watch | g_null_sweep_hi) != 0, 0))
+-        return 0;
++    if (g_ppu_st_page[ea >> 12] & 0xC0u) return 0;          /* a diagnostic is armed */
+     const unsigned char* bits = g_spu_coh_bits;
+     if (bits) { const uint32_t line = ea >> 7; if ((bits[line >> 3] >> (line & 7)) & 1u) return 0; }
+     return 1;
++}
++static inline int vm_mm_st_ok(const ppu_mm* m, uint32_t ea, uint32_t n)
++{
++    if (!__builtin_expect(vm_mm_in(m->st_span, ea, n), 1)) return 0;
++    /* One byte per 4 KiB page says whether anything below applies (spu_coh_bitmap.h). */
++    if (__builtin_expect(g_ppu_st_page[ea >> 12] == 0, 1)) return 1;
++    return vm_mm_st_ok_page(ea);
+ }
+ static inline uint8_t vm_read8_mm(const ppu_mm* m, uint64_t a)
+ {
+@@ -234,7 +252,7 @@
+     const uint32_t ea = (uint32_t)a;
+     if (__builtin_expect(vm_mm_ok(m, ea, 2), 1)) {   /* aligned: single-copy atomic, as on Cell */
+         uint16_t v;
+-        if (!(ea & 1u)) v = __atomic_load_n((const uint16_t*)(m->vb + ea), __ATOMIC_RELAXED);
++        if (PPU_MM_SPLIT && !(ea & 1u)) v = __atomic_load_n((const uint16_t*)(m->vb + ea), __ATOMIC_RELAXED);
+         else memcpy(&v, m->vb + ea, 2);
+         return __builtin_bswap16(v); }
+     return vm_read16(a);
+@@ -244,7 +262,7 @@
+     const uint32_t ea = (uint32_t)a;
+     if (__builtin_expect(vm_mm_ok(m, ea, 4), 1) && __builtin_expect(ea != m->poll, 1)) {   /* aligned: single-copy atomic, as on Cell */
+         uint32_t v;
+-        if (!(ea & 3u)) v = __atomic_load_n((const uint32_t*)(m->vb + ea), __ATOMIC_RELAXED);
++        if (PPU_MM_SPLIT && !(ea & 3u)) v = __atomic_load_n((const uint32_t*)(m->vb + ea), __ATOMIC_RELAXED);
+         else memcpy(&v, m->vb + ea, 4);
+         return __builtin_bswap32(v); }
+     return vm_read32(a);
+@@ -254,7 +272,7 @@
+     const uint32_t ea = (uint32_t)a;
+     if (__builtin_expect(vm_mm_ok(m, ea, 8), 1)) {   /* aligned: single-copy atomic, as on Cell */
+         uint64_t v;
+-        if (!(ea & 7u)) v = __atomic_load_n((const uint64_t*)(m->vb + ea), __ATOMIC_RELAXED);
++        if (PPU_MM_SPLIT && !(ea & 7u)) v = __atomic_load_n((const uint64_t*)(m->vb + ea), __ATOMIC_RELAXED);
+         else memcpy(&v, m->vb + ea, 8);
+         return __builtin_bswap64(v); }
+     return vm_read64(a);
+@@ -270,7 +288,7 @@
+     const uint32_t ea = (uint32_t)a;
+     if (__builtin_expect(vm_mm_st_ok(m, ea, 2), 1)) {   /* aligned: single-copy atomic, as on Cell */
+         const uint16_t be = __builtin_bswap16(v);
+-        if (!(ea & 1u)) __atomic_store_n((uint16_t*)(m->vb + ea), be, __ATOMIC_RELAXED);
++        if (PPU_MM_SPLIT && !(ea & 1u)) __atomic_store_n((uint16_t*)(m->vb + ea), be, __ATOMIC_RELAXED);
+         else memcpy(m->vb + ea, &be, 2);
+         return; }
+     vm_write16(a, v);
+@@ -280,7 +298,7 @@
+     const uint32_t ea = (uint32_t)a;
+     if (__builtin_expect(vm_mm_st_ok(m, ea, 4), 1)) {
+         const uint32_t be = __builtin_bswap32(v);
+-        if (!(ea & 3u)) __atomic_store_n((uint32_t*)(m->vb + ea), be, __ATOMIC_RELAXED);
++        if (PPU_MM_SPLIT && !(ea & 3u)) __atomic_store_n((uint32_t*)(m->vb + ea), be, __ATOMIC_RELAXED);
+         else memcpy(m->vb + ea, &be, 4);
+         return; }
+     vm_write32(a, v);
+@@ -290,7 +308,7 @@
+     const uint32_t ea = (uint32_t)a;
+     if (__builtin_expect(vm_mm_st_ok(m, ea, 8), 1)) {
+         const uint64_t be = __builtin_bswap64(v);
+-        if (!(ea & 7u)) __atomic_store_n((uint64_t*)(m->vb + ea), be, __ATOMIC_RELAXED);
++        if (PPU_MM_SPLIT && !(ea & 7u)) __atomic_store_n((uint64_t*)(m->vb + ea), be, __ATOMIC_RELAXED);
+         else memcpy(m->vb + ea, &be, 8);
+         return; }
+     vm_write64(a, v);
+@@ -951,6 +969,155 @@
+         out.append(f"{mbr.group(1)}if {cond_c} goto {target};  /* CR fusion: {mset.group('ta')} cmp, field shift {shift} */")
+         i += 2
      return out
- 
- 
++
++
 +# ---------------------------------------------------------------------------
 +# Register cache
 +#
@@ -19879,12 +20024,10 @@ diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
 +    if end_dirty and s != "return;" and not re.fullmatch(r"goto\s+\w+\s*;", s):
 +        out_lines.append(f"    {{ {flush(end_dirty)} }}  /* reg cache: write back at exit */")
 +    return out_lines
-+
-+
+ 
+ 
  @dataclass
- class LiftedFunction:
-     """A single lifted C function."""
-@@ -1334,6 +1483,22 @@
+@@ -1334,6 +1501,22 @@
          # _off_escapes misses it too -- and the reload got rewritten to the
          # CALLER's r25, a pointer, which then flowed into the carry chain. Every
          # ECDSA signature the firmware checked failed on that one word.
@@ -19907,7 +20050,7 @@ diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
          _reg_snap = set()        # regs to snapshot from the register at entry
          _mem_snap = {}           # reg -> offset, snapshot from memory at entry
          for _i, _l in enumerate(func.body_lines):
-@@ -1343,7 +1508,8 @@
+@@ -1343,7 +1526,8 @@
                  if (_off, _m.group(1)) in _saved_slots:
                      _reg_snap.add(_reg)
                      func.body_lines[_i] = f"    ctx->gpr[{_reg}] = _cs_{_reg};"
@@ -19917,7 +20060,7 @@ diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
                          and _reg not in _reg_snap
                          and _is_epilogue_restore(func.body_lines, _i, _reg, _off)
                          and _mem_snap.setdefault(_reg, _off) == _off):
-@@ -4178,8 +4344,7 @@
+@@ -4178,8 +4362,7 @@
                        f"extern int {g};", "#endif"]
          lines.append(f"void {weak}{func.name}(ppu_context* ctx) {{")
          lines.append("    PPU_MM_SNAP")
@@ -19927,7 +20070,7 @@ diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
  
          # If a function doesn't end with blr/b/bctr (a return or unconditional
          # branch), PPC execution falls through to the next address. The lifter
-@@ -4207,12 +4372,14 @@
+@@ -4207,12 +4390,14 @@
                      if nxt.start_addr == func.fallthrough_to:
                          target = nxt.name
              if target:
@@ -19945,7 +20088,7 @@ diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
          lines.append("}")
          lines.append("")
          return lines
-@@ -4402,6 +4569,46 @@
+@@ -4402,6 +4587,46 @@
          # blr, bctr, or `b` without link ends the run
          if v in (0x4E800020, 0x4E800420) or (v >> 26 == 18 and not v & 1):
              return targets
@@ -19992,7 +20135,7 @@ diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
      return None
  
  
-@@ -4730,11 +4937,23 @@
+@@ -4730,11 +4955,23 @@
                          if _resolved or _pass:
                              break
                          _scan = _live(_scan_lo(i), i)
@@ -20017,7 +20160,7 @@ diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
              continue
          toc_candidates = toc if isinstance(toc, (list, tuple)) else [toc]
          best = []
-@@ -4757,7 +4976,13 @@
+@@ -4757,7 +4994,13 @@
              # unresolved indirect call (0x422CA0) and stalled the loader.
              _idx_reg = p[1] if r_base == p[2] else p[2]
              _raw_idx = _idx_reg
@@ -20032,7 +20175,7 @@ diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
                  a = [x.strip() for x in w.operands.split(',')]
                  if a and a[0] == _idx_reg:
                      if (w.mnemonic in ('rldic', 'rldicl', 'rldicr', 'rlwinm',
-@@ -4821,8 +5046,9 @@
+@@ -4821,8 +5064,9 @@
              # with. We don't track per-function TOCs here, so try each candidate
              # and keep the one whose table decodes to the most in-text case
              # targets (a wrong TOC reads unrelated data and validates 0 targets).
@@ -20044,7 +20187,7 @@ diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
                      continue
                  def _read_ptr(_ea, _is_ld):
                      # ELFv1 TOC entries are 64-bit; a table address always fits the
-@@ -4833,8 +5059,11 @@
+@@ -4833,8 +5077,11 @@
                      if read_u32(_ea):
                          return None
                      return read_u32((_ea + 4) & 0xFFFFFFFF)
@@ -20058,7 +20201,7 @@ diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
                      table_base = _read_ptr(table_base + disp2, disp2_is_ld)
                  _dbg(all_insns[i].addr, f"r_base={r_base} cand_toc=0x{cand:X} table_base={None if table_base is None else hex(table_base)} count={count} is_offset={is_offset} text=[0x{text_lo:X},0x{text_hi:X})")
                  if table_base is None:
-@@ -5058,6 +5287,11 @@
+@@ -5058,6 +5305,11 @@
                               "instead of its literal .lib.stub trampoline, and "
                               "split out as its own 0x20-byte function so direct "
                               "calls to it dispatch to the HLE handler.")
@@ -20070,7 +20213,7 @@ diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
      parser.add_argument("--insn-patches", metavar="FILE", default=None,
                          help="JSON list of instruction patches to lift as "
                               "run-time switches: each {addr, orig, new, guard} "
-@@ -5364,6 +5598,10 @@
+@@ -5364,6 +5616,10 @@
                  print(f"  TOC candidates: {', '.join(hex(t) for t in toc_candidates)}")
              tables = discover_jump_tables(all_insns, _read_u32, toc_candidates, text_lo, text_hi,
                                            func_starts=sorted(s for s, _ in func_bounds))
@@ -24390,3 +24533,46 @@ index 6f4fd64d..bc216c03 100644
  /* Self-check of the AES-128 and AES-CMAC primitives against the FIPS-197 and
   * RFC 4493 vectors. Returns 0 if both match. Run once on first use: silently
   * wrong crypto here produces plausible-looking garbage, which is the single most
+diff --git a/runtime/spu/spu_coh_bitmap.h b/runtime/spu/spu_coh_bitmap.h
+--- a/runtime/spu/spu_coh_bitmap.h
++++ b/runtime/spu/spu_coh_bitmap.h
+@@ -41,6 +41,39 @@
+     return (bits[line >> 3] >> (line & 7)) & 1;
+ }
+ 
++/* The lifted PPU code's store gate: one byte per 4 KiB guest page, non-zero when a store to the
++ * page cannot be a plain store. A lifted store used to make three checks of its own -- two
++ * diagnostic watches and the bitmap above, four loads and four branches -- which made a guest
++ * store about twenty host instructions. It now reads this one byte; only on a flagged page does
++ * it go on to the exact test (ppu_recomp.h, vm_mm_st_ok_page).
++ *   PPU_ST_PAGE_COH    a line of the page has been marked in the bitmap. Set just before the
++ *                      line's bit and never cleared, so whoever sees the bit sees the byte.
++ *   PPU_ST_PAGE_SWEEP  the null-store sweep is on (g_null_sweep_hi): every page.
++ *   PPU_ST_PAGE_WATCH  the barrier watch is armed (g_barrier_sync_watch): every page.
++ * Shared like g_spu_coh_bits: untouched pages of it are never committed. */
++#define PPU_ST_PAGE_SHIFT  12
++#define PPU_ST_PAGE_COH    0x01u
++#define PPU_ST_PAGE_WATCH  0x40u
++#define PPU_ST_PAGE_SWEEP  0x80u
++SPU_COH_SHARED unsigned char g_ppu_st_page[1u << (32 - PPU_ST_PAGE_SHIFT)];
++
++static inline void ppu_st_page_mark(uint32_t addr)
++{
++    unsigned char* b = &g_ppu_st_page[addr >> PPU_ST_PAGE_SHIFT];
++    if (!(__atomic_load_n(b, __ATOMIC_RELAXED) & PPU_ST_PAGE_COH))
++        __atomic_or_fetch(b, PPU_ST_PAGE_COH, __ATOMIC_SEQ_CST);
++}
++
++/* Turn a diagnostic flag on or off for every page. Rare (a diagnostic arming), so the megabyte
++ * walk does not matter; atomic because ppu_st_page_mark may run beside it. */
++static inline void ppu_st_page_all(unsigned char flag, int on)
++{
++    for (uint32_t i = 0; i < (1u << (32 - PPU_ST_PAGE_SHIFT)); i++) {
++        if (on) __atomic_or_fetch(&g_ppu_st_page[i], flag, __ATOMIC_SEQ_CST);
++        else    __atomic_and_fetch(&g_ppu_st_page[i], (unsigned char)~flag, __ATOMIC_SEQ_CST);
++    }
++}
++
+ #ifdef __cplusplus
+ }
+ #endif
