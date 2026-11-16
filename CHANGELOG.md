@@ -9,6 +9,30 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.69**
+
+🎮 **Steering wheels: Thrustmaster pedals the right way round, a button as a pedal, reverse on a button**
+- Thrustmaster wheels (a player's T-GT, on Discord): the accelerator braked and the brake accelerated, because
+  every wheel got Logitech's pedal layout. Thrustmaster wheels now get Thrustmaster's own: accelerator on Rz,
+  brake on Y, clutch on the slider.
+- In the Thrustmaster control panel's "combined" pedal mode both pedals share the Y axis, and the brake read
+  half pressed all the time. A throttle axis and a brake axis that both rest in the middle aren't two pedals,
+  so the port now splits Y, as it already did for wheels like the Genius Speed Wheel 3.
+- The pedals' rest points were taken from the port's very first reading of the wheel, which comes before the
+  wheel has sent anything: the T-GT's log showed every axis in the middle. The port now waits for the wheel's
+  first real reading; until then the pedals count as released. A clutch axis resting in the middle is left
+  out (half a clutch would slip in a manual car).
+- A button can be a pedal, for a wheel with no pedals plugged in or a broken one:
+  `set "PS3_WHEEL_BUTTONS=brake=4"` brakes fully while button 4 is held (`throttle=` and `clutch=` too).
+- Reverse on a wheel without an H-shifter: `gearr=6` in the same line makes button 6 the shifter's R while it
+  is held. GT5 takes it with the **manual gearbox (MT)**: hold it and accelerate to back up, then a shift-up
+  paddle puts you in 1st again. With the automatic gearbox GT5 ignores the shifter, even one attached from the
+  start, so automatic has no reverse on a wheel.
+- Checked without a wheel: a desk test of the T-GT in both pedal modes and of the Genius's split axis, and
+  races with a simulated wheel: button 4 stopped the car from 56 mph; button 6 with throttle backed up at
+  10 mph in MT (R on the dashboard) and did nothing in automatic. The T-GT's buttons still follow the G29's
+  numbers: if one is wrong, `PS3_WHEEL_BUTTONS` moves it (see the README's wheel section).
+
 🏷️ Released as **v0.1.68**
 
 🔊 **Sound on busy and small CPUs: no more 85 ms holes, and the sound no longer runs late** (the "audio lag"

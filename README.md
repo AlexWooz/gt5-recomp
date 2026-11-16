@@ -303,7 +303,8 @@ What hasn't been checked: force feedback on a real wheel, including which way th
 and attach `GT5\logs\play.err`: its `[wheel]` lines say which wheel was found, its axes, and what the
 game asked of it.
 
-If something is off, add a line to `play.bat` (next to the other `set` lines):
+If something is off, add a line to `GT5\settings.bat` (next to the other `set` lines; updates replace
+`play.bat`, and since v0.1.66 the launcher keeps lines you add to `settings.bat`):
 
 | Problem | Fix |
 |---|---|
@@ -315,6 +316,9 @@ If something is off, add a line to `play.bat` (next to the other `set` lines):
 | A button is wrong | `set "PS3_WHEEL_BUTTONS=cross=1,circle=3,start=10"`, with button numbers as Windows' *Set up USB game controllers* window (`joy.cpl`) shows them; names: cross square circle triangle r1 l1 r2 l2 select start r3 l3 gear1..gear6 gearr plus minus dialcw dialccw, and up down left right for the d-pad |
 | No d-pad on the wheel, and you'd rather move through menus with buttons | `set "PS3_WHEEL_BUTTONS=up=7,down=8"` (any spare buttons; left= and right= too). Without it, the rim and pedals move through menus on such a wheel; `set "PS3_WHEEL_MENU=off"` turns that off |
 | No Start button on the wheel (to pause) | give Start a spare button: `set "PS3_WHEEL_BUTTONS=start=8"` (the defaults put Start on button 10, which smaller wheels don't have) |
+| No pedals plugged in, or a broken one | a button can be a pedal: `set "PS3_WHEEL_BUTTONS=brake=4"` brakes fully while button 4 is held (`throttle=` and `clutch=` too) |
+| No H-shifter, and you want reverse | `set "PS3_WHEEL_BUTTONS=gearr=6"`: holding button 6 is the shifter's R. GT5 takes it with the manual gearbox (MT): hold it and accelerate to back up, then a shift-up paddle puts you in 1st again. With the automatic gearbox GT5 ignores it |
+| Several of these | one line, commas between: `set "PS3_WHEEL_BUTTONS=cross=1,circle=3,brake=4,gearr=6"`. A button given a job here loses its default one |
 | The wrong device is used, or none | `set "PS3_WHEEL=G29"` (part of its name, or its `046d:c24f` VID:PID); `play.err` lists every controller it saw |
 | You don't want it | `set "PS3_WHEEL=off"` |
 

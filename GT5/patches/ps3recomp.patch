@@ -5534,10 +5534,10 @@ index 00000000..9b170855
 +}
 diff --git a/libs/hardware/wheel_host_win.c b/libs/hardware/wheel_host_win.c
 new file mode 100644
-index 00000000..de029202
+index 00000000..9f32353f
 --- /dev/null
 +++ b/libs/hardware/wheel_host_win.c
-@@ -0,0 +1,974 @@
+@@ -0,0 +1,1052 @@
 +/*
 + * ps3recomp - the PC steering wheel behind the emulated G27 (see wheel.h)
 + *
@@ -5565,7 +5565,8 @@ index 00000000..de029202
 + *   PS3_WHEEL_STEER      steering axis (X).
 + *   PS3_WHEEL_BUTTONS    e.g. cross=1,circle=3,start=10, by the numbers Windows'
 + *                        Game Controllers panel shows (1 = first button);
-+ *                        up/down/left/right put the d-pad on buttons.
++ *                        up/down/left/right put the d-pad on buttons, and
++ *                        throttle/brake/clutch a pedal (brake=4: button 4 brakes fully).
 + *   PS3_WHEEL_MENU       how a wheel with no d-pad moves through menus. Unset: at the
 + *                        game's menus (it plays its menu centring spring there),
 + *                        turning the rim is d-pad left/right and the throttle / brake
@@ -5620,6 +5621,7 @@ index 00000000..de029202
 +    int  pedal_inv[3];      /* -1 = released where it rests (see pedal()), 2 = the other end */
 +    int  btn[WHEEL_BTN_COUNT];  /* host button index (0-based) per G27 button, -1 = none */
 +    int  dpad[4];               /* host button per d-pad direction (up right down left), -1 = none */
++    int  pbtn[3];               /* host button that floors throttle, brake, clutch, -1 = none */
 +} WheelMap;
 +
 +static int   s_mode = -1;
@@ -5679,11 +5681,19 @@ index 00000000..de029202
 +    m->steer = AX_X;
 +    for (int i = 0; i < WHEEL_BTN_COUNT; i++) m->btn[i] = i;   /* G29/G923 order */
 +    for (int d = 0; d < 4; d++) m->dpad[d] = -1;
++    for (int p = 0; p < 3; p++) m->pbtn[p] = -1;
 +    /* Pedals rest at the top of their range on Logitech wheels. Axis usage
 +     * differs: G29 / G923 (PlayStation) put the clutch on Z and the brake on
 +     * Rz, the G920 / G923 (Xbox) the other way round. */
 +    m->pedal[0] = AX_Y; m->pedal[1] = AX_RZ; m->pedal[2] = AX_Z;
 +    m->pedal_inv[0] = m->pedal_inv[1] = m->pedal_inv[2] = -1;
++    if (vid == 0x044F) {
++        /* Thrustmaster, pedals "separate" (their control panel's normal mode): accelerator on
++         * Rz, brake on Y, clutch on the first slider, as Thrustmaster's manuals list them. A
++         * T-GT under the Logitech layout had the throttle and the brake swapped (a player, 15
++         * Nov 2026). In "combined" mode both share Y: see the rest-point check in dev_poll. */
++        m->pedal[0] = AX_RZ; m->pedal[1] = AX_Y; m->pedal[2] = AX_S0;
++    }
 +    if (vid == 0x046D) {
 +        if (pid == 0xC262 || pid == 0xC26D || pid == 0xC26E) {   /* G920, G923 Xbox */
 +            static const int xb[] = {
@@ -5726,6 +5736,10 @@ index 00000000..de029202
 +                if (!strcmp(tok, k_btn_name[i])) { m->btn[i] = atoi(eq + 1) - 1; set[i] = 1; }   /* 1-based, 0 = none */
 +            for (int d = 0; d < 4; d++)
 +                if (!strcmp(tok, k_dpad_name[d])) m->dpad[d] = atoi(eq + 1) - 1;
++            /* A pedal on a button, for a wheel whose pedals are missing or broken. */
++            static const char* const pn[3] = { "throttle", "brake", "clutch" };
++            for (int p = 0; p < 3; p++)
++                if (!strcmp(tok, pn[p])) m->pbtn[p] = atoi(eq + 1) - 1;
 +        }
 +        /* A button given a job here leaves the one it had by default only: start=8 on an
 +         * eight-button wheel makes button 8 Start, not Start and L2. */
@@ -5734,6 +5748,7 @@ index 00000000..de029202
 +            int taken = 0;
 +            for (int j = 0; j < WHEEL_BTN_COUNT; j++) if (set[j] && m->btn[j] == m->btn[i]) taken = 1;
 +            for (int d = 0; d < 4; d++) if (m->dpad[d] == m->btn[i]) taken = 1;
++            for (int p = 0; p < 3; p++) if (m->pbtn[p] == m->btn[i]) taken = 1;
 +            if (taken) m->btn[i] = -1;
 +        }
 +    }
@@ -5804,6 +5819,7 @@ index 00000000..de029202
 +static char                  s_name[260];
 +static WheelMap              s_map;
 +static int                   s_rest_known;
++static ULONGLONG             s_rest_wait;    /* when the wait for the wheel's first report began */
 +static LONG                  s_rest[AX_COUNT];
 +/* Rest points survive the same wheel dropping out and coming back: measured again then, a pedal
 + * or the rim held at that moment would become "rest" (a held throttle staying on afterwards). */
@@ -5955,6 +5971,7 @@ index 00000000..de029202
 +    for (int p = 0; p < 3; p++)
 +        if (s_map.pedal[p] >= 0 && !s_axis_present[s_map.pedal[p]]) s_map.pedal[p] = AX_NONE;
 +    s_rest_known = 0;
++    s_rest_wait = 0;
 +    s_split = 0;
 +    s_ffb_dirty = 1;
 +    {
@@ -5967,6 +5984,10 @@ index 00000000..de029202
 +                s_map.pedal[1] >= 0 ? k_axis_name[s_map.pedal[1]] : "none",
 +                s_map.pedal[2] >= 0 ? k_axis_name[s_map.pedal[2]] : "none",
 +                (unsigned long)caps.dwButtons, s_has_hat ? "a d-pad" : "no d-pad");
++        static const char* const pn[3] = { "throttle", "brake", "clutch" };
++        for (int p = 0; p < 3; p++)
++            if (s_map.pbtn[p] >= 0)
++                fprintf(stderr, "[wheel] button %d floors the %s\n", s_map.pbtn[p] + 1, pn[p]);
 +        int dpad_btns = 0;
 +        for (int d = 0; d < 4; d++) dpad_btns += s_map.dpad[d] >= 0;
 +        if (s_menu_cfg == 1 || (s_menu_cfg < 0 && !s_has_hat))
@@ -5995,7 +6016,7 @@ index 00000000..de029202
 +static float pedal(const DIJOYSTATE2* js, int p)
 +{
 +    const int a = s_map.pedal[p];
-+    if (a < 0) return 0.f;
++    if (a < 0 || !s_rest_known) return 0.f;   /* released until the wheel's first report */
 +    const LONG v = axis_val(js, a);
 +    if (s_split && p < 2) {
 +        /* One axis, two pedals: each reads from the rest point to its own end,
@@ -6098,7 +6119,27 @@ index 00000000..de029202
 +        if (neutral && said < 20) { said++; fprintf(stderr, "[wheel] answering again after %llu ms\n", (unsigned long long)(GetTickCount64() - fail_since)); }
 +        fail_since = 0; neutral = 0;
 +    }
-+    if (!s_rest_known) {
++    int fresh = s_rest_have && s_rest_vid == s_vid && s_rest_pid == s_pid;
++    if (!s_rest_known && !fresh) {
++        /* Until the wheel's first report arrives, DirectInput hands back the middle of every
++         * axis: a Thrustmaster T-GT read 32768 on all eight, its released pedals too, so it looked
++         * like a wheel with every pedal half down. Rest points come from the first read that
++         * isn't that; the pedals read released until then. */
++        for (int a = 0; a < AX_COUNT; a++) {
++            const LONG v = axis_val(&js, a);
++            if (s_axis_present[a] && v != 32767 && v != 32768) fresh = 1;
++        }
++        const ULONGLONG now = GetTickCount64();
++        if (!s_rest_wait) s_rest_wait = now;
++        static unsigned said_wait;
++        if (!fresh && now - s_rest_wait >= 3000 && s_rest_wait != 1) {
++            s_rest_wait = 1;   /* said once per opening */
++            if (said_wait++ < 5)
++                fprintf(stderr, "[wheel] every axis still reads the middle: the pedals count as released "
++                                "until the wheel sends a reading (turn the rim a little)\n");
++        }
++    }
++    if (!s_rest_known && fresh) {
 +        const int reuse = s_rest_have && s_rest_vid == s_vid && s_rest_pid == s_pid;
 +        char line[256]; int n = 0;
 +        for (int a = 0; a < AX_COUNT; a++) {
@@ -6114,18 +6155,36 @@ index 00000000..de029202
 +         * axis that rests in the middle, one pedal moving it down and the other up,
 +         * with no brake axis. Read as one pedal, resting there would be half
 +         * throttle: split it where it rests instead. */
-+        const int ta = s_map.pedal[0], ba = s_map.pedal[1];
-+        const int mid = ta >= 0 && s_rest[ta] >= 6554 && s_rest[ta] <= 58981;
-+        if (ta >= 0 && (ba == ta || (ba == AX_NONE && mid))) {
++#define REST_MID(a) ((a) >= 0 && s_rest[a] >= 6554 && s_rest[a] <= 58981)
++        const int ta = s_map.pedal[0], ba = s_map.pedal[1], ca = s_map.pedal[2];
++        int sa = AX_NONE;
++        if (ta >= 0 && (ba == ta || (ba == AX_NONE && REST_MID(ta)))) sa = ta;
++        /* A pedal rests at one end of its axis, so a throttle axis and a brake axis that both
++         * rest in the middle aren't two pedals: Thrustmaster's "combined" mode puts both on Y
++         * (the other axis sits in the middle unused; read as a pedal it was a brake held half
++         * down, a player's T-GT, 15 Nov 2026). Split Y, as for the older wheels. */
++        else if (REST_MID(ta) && REST_MID(ba)) sa = (ta == AX_Y || ba == AX_Y) ? AX_Y : ta;
++        if (sa >= 0) {
 +            s_split = 1;
-+            s_split_at = mid ? s_rest[ta] : 32768;
++            /* Where it rests, unless that is far from the middle: the first reading can come
++             * with a pedal already moving. */
++            s_split_at = labs(s_rest[sa] - 32768) <= 6554 ? s_rest[sa] : 32768;
 +            s_split_swap = (s_map.pedal_inv[0] == 2) != (s_map.pedal_inv[1] == 2);
-+            s_map.pedal[1] = ta;
++            s_map.pedal[0] = s_map.pedal[1] = sa;
 +            fprintf(stderr, "[wheel] throttle and brake share the %s axis, split at %ld: throttle %s it, "
-+                            "brake %s (PS3_WHEEL_PEDALS=throttle=%s%s swaps them)\n",
-+                    k_axis_name[ta], s_split_at, s_split_swap ? "above" : "below",
-+                    s_split_swap ? "below" : "above", k_axis_name[ta], s_split_swap ? "" : "inv");
++                            "brake %s (PS3_WHEEL_PEDALS=throttle=%s%s,brake=%s swaps them)\n",
++                    k_axis_name[sa], s_split_at, s_split_swap ? "above" : "below",
++                    s_split_swap ? "below" : "above", k_axis_name[sa], s_split_swap ? "" : "inv",
++                    k_axis_name[sa]);
 +        }
++        /* The same for the clutch: an axis resting in the middle is no clutch pedal (half down
++         * would slip it in a manual car). */
++        if (REST_MID(ca) && ca != sa) {
++            fprintf(stderr, "[wheel] %s rests in the middle, so it is no clutch pedal: no clutch "
++                            "(PS3_WHEEL_PEDALS=clutch=<axis> names the clutch's axis)\n", k_axis_name[ca]);
++            s_map.pedal[2] = AX_NONE;
++        }
++#undef REST_MID
 +        if (!wheel_trace_on())
 +            fprintf(stderr, "[wheel] if a pedal or button is wrong, PS3_WHEEL_TRACE=1 logs them as they move\n");
 +    }
@@ -6148,6 +6207,13 @@ index 00000000..de029202
 +            on[d] = h >= 0 && h < 128 && (js.rgbButtons[h] & 0x80);
 +        }
 +        in.hat = hat_from(on[1] - on[3], on[2] - on[0]);
++    }
++    {   /* pedals on buttons (PS3_WHEEL_BUTTONS=brake=4) */
++        float* const pv[3] = { &in.throttle, &in.brake, &in.clutch };
++        for (int p = 0; p < 3; p++) {
++            const int h = s_map.pbtn[p];
++            if (h >= 0 && h < 128 && (js.rgbButtons[h] & 0x80)) *pv[p] = 1.f;
++        }
 +    }
 +    menu_dpad(&in);
 +    if (in.buttons & (0x7Fu << WHEEL_BTN_GEAR1)) s_shifter_seen = 1;
@@ -6394,17 +6460,24 @@ index 00000000..de029202
 +                        f = fopen(vf, "wb"); if (f) fclose(f);
 +                        memset(&press, 0, sizeof press); press.hat = -1;
 +                        press_steer = press_thr = press_brk = 0;
++                        s_vbtn = 0;
 +                        lower(what);
 +                        static const char* const dn[4] = { "up", "right", "down", "left" };
 +                        int known = 0;
-+                        for (int d = 0; d < 4; d++) if (!strcmp(what, dn[d])) { press.hat = d * 2; known = 1; }
-+                        for (int i = 0; i < WHEEL_BTN_COUNT; i++)
-+                            if (!strcmp(what, k_btn_name[i])) { press.buttons = 1u << i; known = 1; }
-+                        if (!strncmp(what, "steer=", 6))    { press.steer = (float)atof(what + 6); press_steer = known = 1; }
-+                        if (!strncmp(what, "throttle=", 9)) { press.throttle = (float)atof(what + 9); press_thr = known = 1; }
-+                        if (!strncmp(what, "brake=", 6))    { press.brake = (float)atof(what + 6); press_brk = known = 1; }
-+                        if (!strncmp(what, "btn", 3))       { press.buttons = 0; press.hat = -1; known = 1;
-+                                                              s_vbtn = atoi(what + 3); }   /* "btn7": host button 7 */
++                        /* Several at once with '+': "btn6+throttle=0.5 8000". */
++                        for (char* w = what; w && *w; ) {
++                            char* plus = strchr(w, '+');
++                            if (plus) *plus = 0;
++                            for (int d = 0; d < 4; d++) if (!strcmp(w, dn[d])) { press.hat = d * 2; known = 1; }
++                            for (int i = 0; i < WHEEL_BTN_COUNT; i++)
++                                if (!strcmp(w, k_btn_name[i])) { press.buttons |= 1u << i; known = 1; }
++                            if (!strncmp(w, "steer=", 6))    { press.steer = (float)atof(w + 6); press_steer = known = 1; }
++                            if (!strncmp(w, "throttle=", 9)) { press.throttle = (float)atof(w + 9); press_thr = known = 1; }
++                            if (!strncmp(w, "brake=", 6))    { press.brake = (float)atof(w + 6); press_brk = known = 1; }
++                            if (!strncmp(w, "btn", 3))       { known = 1; s_vbtn = atoi(w + 3); }   /* "btn7": host button 7 */
++                            if (plus) *plus = '+';
++                            w = plus ? plus + 1 : NULL;
++                        }
 +                        press_until = known ? now + (ULONGLONG)(ms > 0 ? ms : 150) : 0;
 +                        fprintf(stderr, "[wheel] virtual: %s for %d ms%s\n", what, ms, known ? "" : " (unknown, ignored)");
 +                    }
@@ -6421,10 +6494,15 @@ index 00000000..de029202
 +            if (s_vbtn) {   /* a host button by number, through the button map */
 +                for (int i = 0; i < WHEEL_BTN_COUNT; i++) if (s_map.btn[i] == s_vbtn - 1) in.buttons |= 1u << i;
 +                for (int d = 0; d < 4; d++) if (s_map.dpad[d] == s_vbtn - 1) in.hat = d * 2;
++                if (s_map.pbtn[0] == s_vbtn - 1) in.throttle = 1.f;
++                if (s_map.pbtn[1] == s_vbtn - 1) in.brake = 1.f;
++                if (s_map.pbtn[2] == s_vbtn - 1) in.clutch = 1.f;
 +            }
 +            /* jitter=1: a real rim never rests on one value, so nearly every report it
 +             * sends is new; this wobbles the steering a little every 2 ms to match. */
 +            if (jitter) { static int flip; flip ^= 1; in.steer += flip ? 0.004f : -0.004f; }
++            if (in.buttons & (0x7Fu << WHEEL_BTN_GEAR1)) s_shifter_seen = 1;   /* as a real wheel does */
++            in.shifter = s_shifter_cfg >= 0 ? s_shifter_cfg : s_shifter_seen;
 +            menu_dpad(&in);
 +            publish(&in);
 +            Sleep(jitter ? 2 : 10);
