@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.67](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.67) | 15 Nov 2026 | Launcher: lines you add to settings.bat by hand are kept (they were overwritten on the next Play) |
 | [v0.1.66](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.66) | 15 Nov 2026 | The check that an SPU job's code is unchanged costs half as much: a little less CPU for the sound on small CPUs |
 | [v0.1.65](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.65) | 15 Nov 2026 | 6-core/12-thread CPUs: the game's waiting threads sleep instead of spinning, 5-14% less CPU at the same frame rate |
 | [v0.1.64](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.64) | 15 Nov 2026 | Linux/Vulkan: races start at the right brightness, car reflections and shadows drawn in full (#20) |

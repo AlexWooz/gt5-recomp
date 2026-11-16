@@ -9,6 +9,18 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.67**
+
+🧰 **Launcher: lines you add to `settings.bat` by hand are kept**
+- The launcher stays open in the background while the game runs and saves `GT5\settings.bat` each time
+  you press Play. It saved the copy it had read when it started, so a line added by hand meanwhile, like
+  a wheel's `set "PS3_WHEEL_PEDALS=throttle=B,brake=A"`, was gone again on the next Play (Discord, Thrustmaster TGT
+  test report).
+- It now reads the file again before saving. A setting you changed in the launcher keeps the launcher's
+  value, everything else keeps what the file says, and a line of your own that you delete stays deleted.
+  Lines that aren't `set "NAME=value"` are still dropped.
+- Put your own settings in `settings.bat`, not in `play.bat`: updates replace `play.bat`.
+
 🏷️ Released as **v0.1.66**
 
 🔊 **The check that a job's code is still the same costs half as much (a little less CPU for the sound on small CPUs)**

@@ -255,40 +255,80 @@ namespace Gt5Launcher
         const string SpeedMark = "REM Speed";
         static readonly Regex SetLine = new Regex("^\\s*set\\s+\"([A-Za-z0-9_]+)=(.*)\"\\s*$", RegexOptions.IgnoreCase);
 
+        // The values as the file had them when it was last read or written. A value the launcher hasn't
+        // changed since then gives way to an edit made by hand meanwhile: the launcher stays open (hidden)
+        // while the game runs, and before v0.1.67 its next save wrote its old copy over lines players had
+        // added, such as PS3_WHEEL_PEDALS ("it just got deleted every time I launched the game").
+        Dictionary<string, string> Base;
+
         public Settings(string path)
         {
             this.path = path;
             Fresh = !File.Exists(path);
             foreach (var d in Defaults) V[d[0]] = d[1];
-            try
-            {
-                // The Speed lines Save() adds at the end are not settings of their own. v0.1.20-v0.1.22
-                // wrote them with no marker, so they were read back as LD_WATCH=2 and 30 fps stayed on
-                // after Speed was set back: the first value of a key counts, and LD_WATCH_PRIORITY that
-                // came with such a repeated LD_WATCH is dropped.
-                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                bool speedLines = false;
-                foreach (var line in File.ReadAllLines(path))
-                {
-                    if (line.TrimStart().StartsWith(SpeedMark, StringComparison.OrdinalIgnoreCase)) break;
-                    var m = SetLine.Match(line);
-                    if (!m.Success) continue;
-                    string k = m.Groups[1].Value;
-                    if (!seen.Add(k)) { if (k.Equals("LD_WATCH", StringComparison.OrdinalIgnoreCase)) speedLines = true; continue; }
-                    if (speedLines && k.Equals("LD_WATCH_PRIORITY", StringComparison.OrdinalIgnoreCase)) continue;
-                    V[k] = m.Groups[2].Value;
-                }
-            }
-            catch { }
+            try { foreach (var kv in Read(path)) V[kv.Key] = kv.Value; } catch { }
+            Base = new Dictionary<string, string>(V, StringComparer.OrdinalIgnoreCase);
         }
+
+        // The set "NAME=value" lines of a settings.bat. The Speed lines Save() adds at the end are not
+        // settings of their own. v0.1.20-v0.1.22 wrote them with no marker, so they were read back as
+        // LD_WATCH=2 and 30 fps stayed on after Speed was set back: the first value of a key counts, and
+        // LD_WATCH_PRIORITY that came with such a repeated LD_WATCH is dropped.
+        static Dictionary<string, string> Read(string path)
+        {
+            var r = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            bool speedLines = false;
+            foreach (var line in File.ReadAllLines(path))
+            {
+                if (line.TrimStart().StartsWith(SpeedMark, StringComparison.OrdinalIgnoreCase)) break;
+                var m = SetLine.Match(line);
+                if (!m.Success) continue;
+                string k = m.Groups[1].Value;
+                if (r.ContainsKey(k)) { if (k.Equals("LD_WATCH", StringComparison.OrdinalIgnoreCase)) speedLines = true; continue; }
+                if (speedLines && k.Equals("LD_WATCH_PRIORITY", StringComparison.OrdinalIgnoreCase)) continue;
+                r[k] = m.Groups[2].Value;
+            }
+            return r;
+        }
+
+        static bool Managed(string k)
+        {
+            foreach (var d in Defaults) if (d[0].Equals(k, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        // Takes in what was edited by hand since the last read or write: a key the launcher changed keeps
+        // the launcher's value, any other key takes the file's, and a line of the player's own that was
+        // deleted by hand stays deleted.
+        void Merge()
+        {
+            Dictionary<string, string> disk;
+            try { if (!File.Exists(path)) return; disk = Read(path); } catch { return; }
+            var keys = new HashSet<string>(V.Keys, StringComparer.OrdinalIgnoreCase);
+            keys.UnionWith(disk.Keys);
+            keys.UnionWith(Base.Keys);
+            var merged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var k in keys)
+            {
+                string v, b, d;
+                bool inV = V.TryGetValue(k, out v), inB = Base.TryGetValue(k, out b);
+                if (inV != inB || (inV && v != b)) { if (inV) merged[k] = v; }
+                else if (disk.TryGetValue(k, out d)) merged[k] = d;
+                else if (inV && Managed(k)) merged[k] = v;
+            }
+            V = merged;
+        }
+
         public string Get(string k) { string v; return V.TryGetValue(k, out v) ? v : ""; }
         public void Set(string k, string v) { V[k] = v ?? ""; }
         public void Save()
         {
+            Merge();
             var sb = new StringBuilder();
             sb.AppendLine("@echo off");
             sb.AppendLine("REM Written by the GT5 Launcher; play.bat runs it after its own defaults. Change these in the");
             sb.AppendLine("REM launcher, or edit them here: one set \"NAME=value\" per line, an empty value means not set.");
+            sb.AppendLine("REM Lines of your own in that form (like PS3_WHEEL_PEDALS) are kept; other lines are not.");
             var keys = new List<string>(V.Keys);
             keys.Sort(StringComparer.OrdinalIgnoreCase);
             foreach (var k in keys)
@@ -302,6 +342,7 @@ namespace Gt5Launcher
                 sb.AppendLine("set \"LD_WATCH=2\""); sb.AppendLine("set \"LD_WATCH_PRIORITY=0\""); sb.AppendLine("set \"LD_WATCH_DRAW=2\"");
             }
             File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
+            Base = new Dictionary<string, string>(V, StringComparer.OrdinalIgnoreCase);
         }
     }
 
