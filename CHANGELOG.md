@@ -9,6 +9,20 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.71**
+
+🖥️ **Vulkan draws at 1080p in the 1080p mode, and its window title shows FPS and the resolution**
+([#38](https://github.com/MormonFTP-hub/gt5-recomp/issues/38))
+- In the 1080p mode (launcher: Resolution 1080p) the game draws 1920x1080 frames, and the DirectX 12
+  renderer shows them at that size. The Vulkan renderer copied each one into a 1280x720 target first, then
+  stretched that to the window, so on Vulkan the 1080p mode looked like 720p. Its target is now the video
+  mode's size (1920x1080; wider on an ultrawide screen). The window still opens at the same size as before.
+- The Vulkan window's title now shows what the DirectX 12 one does: `FPS: 29.97 (game 60) | 1920x1080`.
+  FPS is frames drawn a second. The game's own rate is added when the 30 fps Speed setting or watch mode
+  leaves frames undrawn, since that's the rate the game runs at.
+- The DirectX 12 title said `1280x720` in the 1080p mode too: it gave the window's starting size, not the
+  size frames are drawn at. It now says `1920x1080`.
+
 🏷️ Released as **v0.1.70**
 
 🏁 **Update now opens an update window instead of a console**
