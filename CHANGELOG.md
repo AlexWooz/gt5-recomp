@@ -9,6 +9,25 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.75**
+
+🎥 **Cockpit view: a wider field of view and the seat moved** ([#36](https://github.com/MormonFTP-hub/gt5-recomp/issues/36), asked for by Arpadiam)
+- New, and nothing changes unless you set it: the launcher's **Display** page has a **Cockpit view** group.
+  **Field of view** widens (or narrows) the view from the driver's seat; **Seat forward / back** and **Seat
+  height** move your eye from where the game puts the driver. In `play.bat`: `PS3_COCKPIT_FOV` (degrees
+  added), `PS3_COCKPIT_SEAT` (cm forward, negative = back) and `PS3_COCKPIT_HEIGHT` (cm up).
+- GT5 shows every car's cockpit at 52.4° from the top of the screen to the bottom (the PS3 had no setting
+  for it). +20 makes it 72.4°: the whole steering wheel, the driver's hands and more of the side windows come
+  into view. Only the cockpit view changes; the chase, bumper and roof views and the menus stay as they are.
+- How: GT5 builds its race cameras out of small camera objects. The port now runs the game's own in-car
+  camera and then moves the eye along the camera's own axes and widens the field of view the game gives
+  its in-car views. The camera is found by its name in the game's code, not at a fixed address, so other
+  releases get it too: the European 2.17 update, the Asian disc and 2.01 have the same camera code.
+- Tested in Arcade races on the European disc (Fiat 500): with the settings at 0 the cockpit looks as
+  before, at +20° / 10 cm forward / 10 cm up it's wider, closer and higher, and the bumper and chase views
+  match the unchanged game. The 2.17 build started with it and found the in-car camera; a race on 2.17
+  wasn't reached in the test (its test save stops at the data-install question first).
+
 🏷️ Released as **v0.1.74**
 
 ⌨️ **Choose your own keyboard keys** (asked for by Arpadiam on Discord)

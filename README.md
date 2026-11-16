@@ -93,7 +93,8 @@ launcher: every setting in one window, then **Play**. No more editing `play.bat`
 
 - **Display:** 1080p or 720p, **Speed** (30 fps draws every other frame; it only helps when the graphics
   card is the limit, the window title then shows both numbers, e.g. `FPS: 15 (game 30)`), screen shape
-  (ultrawide), **borderless full screen**, maximized or a window size, watch mode, SPU threads.
+  (ultrawide), **borderless full screen**, maximized or a window size, watch mode, SPU threads, and the
+  [cockpit view](#cockpit-view) (field of view, seat position).
 - **Controls:** steering wheel on/off, wheel rotation, force feedback strength and direction, pad in the
   background, mouse clipping, [mouse steering](#mouse-steering).
 - **Game:** the game's language (as far as your disc has it), your mods from `GT5\mods`, the launcher's
@@ -326,6 +327,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Force feedback? | 🧪 New, with wheel support, also untried on a real wheel |
 | Widescreen (16:9)? | ✅ Yes, GT5 is a 16:9 game |
 | Ultrawide (21:9, 32:9)? | ✅ New: a wider view, with the HUD kept 16:9 in the middle |
+| Wider cockpit view, seat position? | ✅ New: the launcher's Display > Cockpit view ([more](#cockpit-view)) |
 | Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard; new: [keys of your choice](#keyboard-keys), [steering with the mouse](#mouse-steering) |
 | US copy (BCUS98114)? | ✅ Yes, players have raced on it |
 | Version 1.02, or a game update (2.xx)? | 🧪 New: game updates run: 2.17 (the last) tested on the US and European releases, 2.01 on the Asian one, 2.11 with the Master Mod on the US one by a player ([how to set one up](#game-updates)); 1.02 untried |
@@ -421,6 +423,25 @@ The game draws 720 lines at the wider shape, as many pixels across as it needs u
 and spread sideways to fill the window, so they're a little softer side to side. The window title shows
 the size it draws at. This works on the European release (BCES00569, disc 01.00); on any other release
 the picture stays 16:9 for now, and `logs\play.err` says so in a `[widescreen]` line.
+
+<a id="cockpit-view"></a>
+**Q: Can I widen the cockpit view, or move the seat?**
+
+**A: Yes, new: the [launcher](#launcher)'s Display page, under Cockpit view.** On a PS3 the view from
+the driver's seat is fixed: GT5 shows every car's cockpit at 52.4° from the top of the screen to the
+bottom, with the eye where the car's own data puts the driver. The port can widen (or narrow) that view
+and move the eye forward, back, up or down. Only the cockpit view changes: the chase, bumper and roof
+views and the menus stay as they are. All three are off by default, and then nothing changes.
+
+| In `play.bat` (or `settings.bat`) | What you get |
+|---|---|
+| `set "PS3_COCKPIT_FOV=20"` | the cockpit view 20° wider, top to bottom (72.4° instead of 52.4°; the sides widen with it); negative is narrower |
+| `set "PS3_COCKPIT_SEAT=10"` | the eye 10 cm further forward, toward the windscreen; negative moves it back |
+| `set "PS3_COCKPIT_HEIGHT=5"` | the eye 5 cm higher; negative is lower |
+
+`logs\play.err` has a `[cockpit]` line with the game's number and the new one. The in-car camera is found
+by its name in the game's code, so this isn't tied to one release: tested on the European disc, and the
+same camera code is in the 2.17 update and the Asian disc and 2.01.
 
 **Q: What resolution does it render at?**
 
@@ -978,6 +999,7 @@ so the launcher's settings win. Some useful ones:
 | `PAD_BACKGROUND=1` | The pad keeps working when another window has focus. |
 | `PS3_WHEEL=off` | Don't look for a steering wheel. The other `PS3_WHEEL_*` settings are in the [FAQ](#faq). |
 | `PS3_MOUSE_STEER=1` | Steer with the mouse in races (left button throttle, right brake). Its other settings are under [Mouse steering](#mouse-steering). |
+| `PS3_COCKPIT_FOV=20` | The cockpit view 20° wider (negative: narrower); `PS3_COCKPIT_SEAT` and `PS3_COCKPIT_HEIGHT` move the eye (cm forward, cm up). See [Cockpit view](#cockpit-view). |
 | `PS3_KEYS=cross:W,square:Space,...` | Your own keyboard keys, `button:key` pairs (the launcher's Controls page writes it). Button and key names are under [Your own keys](#keyboard-keys). |
 | `LD_WATCH=1` (or **F9** in the game) | Watch mode for B-Spec races and replays: draws every other frame while the race keeps full speed, draws nothing while minimized, and lowers the game's priority. Off unless you turn it on; with `LD_WATCH=1` it comes on after 10 s without input and goes off when you touch the controls. |
 | `PAD_CURSOR_CLIP=1` | Keep the mouse inside the window while the controller is in use (the old behaviour). By default the mouse is free, and only the mouse movement and clicks Steam makes from the controller are ignored. |

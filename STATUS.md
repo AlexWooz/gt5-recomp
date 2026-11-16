@@ -135,7 +135,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **16 Nov 2026:** your own keyboard keys: every pad button can take the keys you choose, on the launcher's Controls
+- **16 Nov 2026:** a wider cockpit view and the seat moved forward, back, up or down (launcher Display > Cockpit
+  view, off by default; only the view from the driver's seat changes) (v0.1.75); your own keyboard keys: every pad button can take the keys you choose, on the launcher's Controls
   page (labelled with what each button does in GT5) or with `PS3_KEYS` (v0.1.74); Vulkan: frame generation works there too (57 new pictures a second instead of 26 at Speed 30 fps),
   presents are evenly spaced on a thread of their own, and its command thread is cheaper (+17% game fps in a test
   race) (v0.1.73); mouse steering (launcher Controls, off by default): in races the mouse turns the wheel, left button

@@ -78,6 +78,7 @@ add_executable(gt5
     src/gt5_longjmp.cpp
     src/gt5_debug.cpp
     src/gt5_widescreen.cpp
+    src/gt5_cockpit.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
     ${RECOMP_SOURCES}

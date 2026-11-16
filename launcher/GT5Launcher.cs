@@ -172,6 +172,19 @@ namespace Gt5Launcher
             { "wdraw.4", new[] { "1 frame in 4 (weakest PCs)", "每 4 帧绘制 1 帧（最弱的电脑）" } },
             { "spus", new[] { "Extra SPU threads", "额外 SPU 线程" } },
             { "spus.help", new[] { "PC threads for the PS3's co-processors. 2 suits most CPUs; 0-1 on 4-core CPUs.", "用于 PS3 协处理器的 PC 线程。多数 CPU 用 2；4 核 CPU 用 0-1。" } },
+            { "cockpit", new[] { "Cockpit view", "车内视角" } },
+            { "cockpit.game", new[] { "As in the game", "游戏原样" } },
+            { "cfov", new[] { "Field of view", "视野" } },
+            { "cfov.help", new[] { "Only the view from the driver's seat (52.4° from the top of the screen to the bottom in the game; the sides widen with it). The chase, bumper and roof views stay as they are.", "只影响驾驶座视角（游戏中从屏幕上缘到下缘为 52.4°，左右随之变宽）。追尾、保险杠和车顶视角保持不变。" } },
+            { "cfov.wider", new[] { "{0}° wider", "加宽 {0}°" } },
+            { "cfov.narrower", new[] { "{0}° narrower", "缩小 {0}°" } },
+            { "cseat", new[] { "Seat forward / back", "座椅前后" } },
+            { "cseat.help", new[] { "Moves your eye in the cockpit view toward the windscreen, or back, from where the game puts the driver.", "在车内视角中把视点移向挡风玻璃，或从游戏设定的驾驶员位置向后移。" } },
+            { "cseat.fwd", new[] { "{0} cm forward", "向前 {0} 厘米" } },
+            { "cseat.back", new[] { "{0} cm back", "向后 {0} 厘米" } },
+            { "cheight", new[] { "Seat height", "座椅高度" } },
+            { "cheight.up", new[] { "{0} cm higher", "升高 {0} 厘米" } },
+            { "cheight.down", new[] { "{0} cm lower", "降低 {0} 厘米" } },
             // Controls
             { "padbg", new[] { "Controller works when the game isn't in front", "游戏不在前台时手柄仍可用" } },
             { "clip", new[] { "Keep the mouse inside the window", "鼠标限制在窗口内" } },
@@ -335,6 +348,7 @@ namespace Gt5Launcher
             new[] { "LD_FRAMEGEN", "" }, new[] { "GT5_RENDERER", "" },
             new[] { "PS3_MOUSE_STEER", "" }, new[] { "PS3_MOUSE_STEER_SENS", "" }, new[] { "PS3_MOUSE_STEER_CENTER", "" },
             new[] { "PS3_KEYS", "" },
+            new[] { "PS3_COCKPIT_FOV", "" }, new[] { "PS3_COCKPIT_SEAT", "" }, new[] { "PS3_COCKPIT_HEIGHT", "" },
         };
         // True when there was no settings.bat yet: the launcher's first start on this install.
         public bool Fresh;
@@ -1312,7 +1326,22 @@ namespace Gt5Launcher
             y = AddCombo(p, "wdraw", "wdraw.help", "LD_WATCH_DRAW", new[] { new Choice("", T.Get("wdraw.2")), new Choice("3", T.Get("wdraw.3")), new Choice("4", T.Get("wdraw.4")) }, y);
             y = AddCheck(p, "framegen", "framegen.help", "LD_FRAMEGEN", "1", y);
             y = AddCombo(p, "spus", "spus.help", "SPURS_EXTRA_SPUS", new[] { new Choice("0", "0"), new Choice("1", "1"), new Choice("2", "2"), new Choice("3", "3"), new Choice("4", "4") }, y);
+            // Cockpit view (GT5\src\gt5_cockpit.cpp): "" = the game's own camera.
+            p.Controls.Add(new Label { Text = T.Get("cockpit"), Font = Look.F(11f, FontStyle.Bold), ForeColor = Look.Text, AutoSize = true, Location = new Point(0, y + 8) });
+            y += 40;
+            y = AddCombo(p, "cfov", "cfov.help", "PS3_COCKPIT_FOV", CockpitChoices(new[] { -10, -5, 5, 10, 15, 20, 25, 30, 40 }, "cfov.wider", "cfov.narrower"), y);
+            y = AddCombo(p, "cseat", "cseat.help", "PS3_COCKPIT_SEAT", CockpitChoices(new[] { -30, -20, -10, -5, 5, 10, 20, 30 }, "cseat.fwd", "cseat.back"), y);
+            y = AddCombo(p, "cheight", null, "PS3_COCKPIT_HEIGHT", CockpitChoices(new[] { -10, -5, 5, 10 }, "cheight.up", "cheight.down"), y);
             return p;
+        }
+
+        // "As in the game", then each step labelled with the text for its direction.
+        Choice[] CockpitChoices(int[] steps, string plusKey, string minusKey)
+        {
+            var c = new List<Choice> { new Choice("", T.Get("cockpit.game")) };
+            foreach (int v in steps)
+                c.Add(new Choice(v.ToString(), string.Format(T.Get(v > 0 ? plusKey : minusKey), Math.Abs(v))));
+            return c.ToArray();
         }
 
         Panel BuildControlsPage()

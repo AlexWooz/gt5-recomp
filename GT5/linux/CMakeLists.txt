@@ -102,6 +102,7 @@ add_executable(gt5
     "${GT5_DIR}/src/gt5_longjmp.cpp"
     "${GT5_DIR}/src/gt5_debug.cpp"
     "${GT5_DIR}/src/gt5_widescreen.cpp"
+    "${GT5_DIR}/src/gt5_cockpit.cpp"
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
     ${RECOMP_SOURCES}

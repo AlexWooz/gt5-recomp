@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.75](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.75) | 16 Nov 2026 | Cockpit view (#36): a wider field of view and the seat moved forward, back, up or down, in the launcher's Display page; off by default |
 | [v0.1.74](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.74) | 16 Nov 2026 | Choose your own keyboard keys: every pad button can be rebound on the launcher's Controls page or with PS3_KEYS, labelled with GT5's own actions |
 | [v0.1.73](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.73) | 16 Nov 2026 | Vulkan: frame generation and even frame pacing on a presenter thread; command thread reuses images, keeps converted geometry and copies constants once (#38) |
 | [v0.1.72](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.72) | 16 Nov 2026 | Steer with the mouse (#37): in races the mouse turns the emulated G27, left button throttle, right brake; off by default |
