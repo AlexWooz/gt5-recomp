@@ -1006,6 +1006,7 @@ so the launcher's settings win. Some useful ones:
 | `LD_WATCH=1` (or **F9** in the game) | Watch mode for B-Spec races and replays: draws every other frame while the race keeps full speed, draws nothing while minimized, and lowers the game's priority. Off unless you turn it on; with `LD_WATCH=1` it comes on after 10 s without input and goes off when you touch the controls. |
 | `PAD_CURSOR_CLIP=1` | Keep the mouse inside the window while the controller is in use (the old behaviour). By default the mouse is free, and only the mouse movement and clicks Steam makes from the controller are ignored. |
 | `GCM_DRAIN_STAT=1` | Timing lines every 5 s in `logs\play.err`. |
+| `PS3_THREAD_STATS=0` | Turns off the `[threads]` line written to `logs\play.err` every 5 s: how busy each kind of thread was (the game's own, its SPU jobs, the drawing threads, sound), where 100 is one core busy the whole time. A single thread near 100 is the one holding the frame rate back. A number sets another period in seconds (1 to 60). |
 | `PS3_MUTE=1` | No sound. |
 | `RSX_SHADER_CACHE_DIR=<dir>` | Where compiled shaders are cached (default `scratch\rsx_shader_cache_v2`). |
 | `LD_ASYNC_SHADERS=0` | Compile new shaders one at a time on the graphics thread, as before 13 Nov, instead of on up to 8 threads alongside it. |

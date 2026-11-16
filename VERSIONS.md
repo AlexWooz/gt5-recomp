@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.82](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.82) | 16 Nov 2026 | A [threads] CPU line in the log every 5 s (PS3_THREAD_STATS=0 off); DirectX 12: the walker hands calls to the recording thread with less cache-line traffic (-20% per call) |
 | [v0.1.81](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.81) | 16 Nov 2026 | Vulkan: start-up shader list keeps the most recently used, full lists no longer stall the start |
 | [v0.1.80](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.80) | 16 Nov 2026 | Vulkan: new scenes no longer half-drawn for a minute on slow PCs (each shader built once, builders above normal priority, on-screen first, disk pipeline cache) and a minimised window comes back (#38, #20) |
 | [v0.1.79](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.79) | 16 Nov 2026 | Installer: a Visual Studio without the Windows SDK gets it added instead of a failed build (#35) |

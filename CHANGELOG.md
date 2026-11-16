@@ -9,6 +9,32 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.82**
+
+🧵 **A per-thread CPU line in the log**
+- `logs\play.err` now gets a `[threads]` line every 5 seconds saying how busy each kind of thread was: the
+  game's own threads, its SPU jobs, the drawing threads (`rsx walker`, which turns the game's drawing
+  commands into DirectX 12 or Vulkan work, and `rsx record`) and sound, where 100 means one core busy the
+  whole time. A single thread near 100 is the one holding the frame rate back, so a log now says which part
+  of the PC is the limit. Asked for on Discord by Keduboneur78.
+- `PS3_THREAD_STATS=0` turns it off; a number sets another period in seconds (1 to 60).
+
+🏎️ **DirectX 12: the two drawing threads stop fighting over one cache line**
+- The thread that walks GT5's drawing commands hands every DirectX 12 call (about nine a draw, 7,000-23,000 a
+  frame in a race) to a second thread that records them. Both threads' positions in that queue, the walker's
+  own counter and the sleep flag shared one 64-byte cache line, and each side read the other's position with
+  a locked instruction on every call and on every spin while waiting, so each call moved that line between
+  the two cores two or three times. Now the shared positions sit on lines of their own, the walker looks at
+  the recording thread's position only when the queue is full, and the recording thread waits with plain
+  reads. Nothing is drawn differently or in another order.
+- Measured on this PC in two Arcade races, switching the change on and off every 15-20 s in the same race:
+  the walker's time per handed-over call **136 -> 108 ns and 132 -> 107 ns** (-20%), the recording thread's
+  CPU 45% -> 40% of a core. Race frame rate in the windows with it on: 33.7 -> 40.5 and 28.9 -> 31.7 fps
+  (+13% +- 8% compared with the neighbouring windows in the second race); the busy PC's own swings are large,
+  so take the frame rate as "not worse, probably a little better". On a heavy grid like AryaTwirl's (#10),
+  where the walker hands over ~23,000 calls a frame, that is about 0.6 ms of the walker's ~30 ms.
+- `LD_REC_FAST=0` goes back to the old way.
+
 🏷️ Released as **v0.1.81**
 
 🗂️ **Vulkan: the start-up shader list keeps what you play, and a full one no longer stalls the start**
