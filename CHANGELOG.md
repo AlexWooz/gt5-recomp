@@ -9,6 +9,21 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.88**
+
+🧩 **RPCS3 patches that change instructions in place can become mods**
+- `GT5\scripts\rpcs3_mods.py` reads RPCS3's `patch.yml` (Keduboneur78 shared one) and finds the
+  patches written for exactly your copy: it works out RPCS3's ID for the game's executable from your
+  `EBOOT.elf`. It lists them, says which fit, and `--add "<name>"` turns one into a mod in `GT5\mods`
+  (shown in the launcher's mod list) after a relift and build. See MODDING.md.
+- What fits: patches that only change instructions in place, including byte-sized edits and RPCS3's
+  shared write lists. Patches that add code of their own (most long ones), change data or take a
+  configurable value are left out whole: RPCS3 writes them into the game's code as it runs, and here
+  that code was turned into PC code before the game starts.
+- Checked on the European release: 1.00's Unlock FPS comes out identical to the port's own
+  `unlock-fps` mod (and is refused as a duplicate of it), and 2.17's Unlock FPS becomes two instruction
+  changes the mod builder accepts. Not yet built and played as a converted mod.
+
 🏷️ Released as **v0.1.87**
 
 🧰 **Installer and updates work on exFAT and FAT32 drives (#41)**

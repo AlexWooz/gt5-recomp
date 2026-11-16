@@ -98,6 +98,22 @@ A game-code mod changes instructions in the game's own code. It lives in a folde
 `GT5\mods\unlock-fps` is a working example. It's experimental: GT5's clock counts frames, so with it
 on, races run faster than real time whenever the frame rate goes over 60.
 
+**RPCS3 patches.** RPCS3's game patches (`patch.yml`, from RPCS3's patch manager) can become mods
+when they only change instructions in place. `scripts\rpcs3_mods.py` finds the patches written for
+exactly your copy (release and update) and says which ones fit:
+
+```
+venv\Scripts\python.exe GT5\scripts\rpcs3_mods.py "C:\path\to\patch.yml"
+venv\Scripts\python.exe GT5\scripts\rpcs3_mods.py "C:\path\to\patch.yml" --add "Disable Dithering"
+```
+
+`--add` writes `GT5\mods\rpcs3-<name>\mod.json` (on by default; it shows in the launcher's mod list),
+then run `scripts\relift.ps1` and `scripts\build.cmd gt5`. RPCS3 writes its patches into the game's
+code while the game runs, but here the code was turned into PC code ahead of time, so patches that
+add code of their own (most long ones), change data, take a configurable value or point a branch
+somewhere new don't fit and are left out whole. The patches are their authors' work: keep the
+generated mods on your PC.
+
 Some changes are data rather than instructions, such as a constant the game reads. Try one without
 building anything with `set "PS3_POKE32=<address>=<value>"` (hex, big-endian 32-bit words, comma
 separated; `logs\play.err` shows the old values). To keep one, do as `GT5\src\gt5_widescreen.cpp`
