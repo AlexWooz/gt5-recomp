@@ -9,6 +9,20 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.76**
+
+🐧 **Linux: your own keyboard keys, and the small-CPU setting from Windows**
+- `PS3_KEYS` works on Linux too, with the same buttons, key names and rules as on Windows: put
+  `export PS3_KEYS="cross:W,square:Space,l2:Q,r2:E,circle:LAlt"` in `GT5/settings.sh` (play.sh lists the
+  buttons and keys). Letters are where they are on a US keyboard. `PS3_KEYS_TEST_FILE` and `PS3_KEYS_TRACE`
+  work as on Windows.
+- The v0.1.65 setting that lets waiting threads sleep instead of spinning now counts a PC with up to 12
+  logical CPUs as small on Linux too (it was 8 there), with the same `PS3_SMALL_HOST_CPUS` to move the line.
+  It counts the CPUs the game may use, so `taskset` counts, and `play.err` says which way it went.
+- Checked in an Ubuntu 24.04 build: with `PS3_KEYS=cross:W`, W held for 2 s reached the game as Cross
+  (`[pad] ... cross=255`), and W no longer pressed R1. 6 CPUs counted as small, and as big with
+  `PS3_SMALL_HOST_CPUS=4`. The Windows build of both files is the same as before.
+
 🏷️ Released as **v0.1.75**
 
 🎥 **Cockpit view: a wider field of view and the seat moved** ([#36](https://github.com/MormonFTP-hub/gt5-recomp/issues/36), asked for by Arpadiam)

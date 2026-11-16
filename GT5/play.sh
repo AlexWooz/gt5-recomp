@@ -5,6 +5,7 @@
 # Keyboard while no controller is connected:
 #   Z = Cross (OK)   X = Circle   A = Square   S = Triangle   Q/W = L1/R1   1/2 = L2/R2
 #   arrows = D-pad   Enter = Start   Tab = Select   Esc = quit
+#   (other keys: PS3_KEYS, near the end of this file)
 # Controllers (DualSense, DualShock 4, Xbox, Steam Deck through Steam Input) go through SDL2.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GAME="$HERE/build-linux/gt5"
@@ -58,6 +59,12 @@ export PS3_SKIP_INTRO=1
 # Watch mode, for B-Spec races and replays: remove the # and it comes on by itself after 10 s
 # without input (draws fewer frames), and goes off the moment you press something.
 # export LD_WATCH=1
+# Your own keyboard keys: button:key pairs, ',' between pairs, '/' between keys for one button,
+# none for no key. Buttons: cross circle square triangle l1 r1 l2 r2 l3 r3 start select up down
+# left right, and lstick_up/down/left/right, rstick_up/down/left/right. Keys: A-Z, 0-9, F1-F24,
+# Num0-Num9, Space, Enter, Tab, LShift, LCtrl, LAlt, Up, Down, Left, Right, Comma, Mouse4 ... A bound
+# button takes only its new keys; GT5 accelerates with Cross, brakes with Square, shifts with R2/L2.
+# export PS3_KEYS="cross:W,square:Space,l2:Q,r2:E,circle:LAlt"
 # Your own settings, one "export NAME=value" per line, win over the lines above.
 [ -f "$HERE/settings.sh" ] && . "$HERE/settings.sh"
 

@@ -228,8 +228,9 @@ set "PS3_KEYS=cross:W,square:Space,l2:Q,r2:E,circle:LAlt"
 That one is W = accelerate, Space = brake, Q / E = shift down / up, Left Alt = handbrake. A bound
 button takes only its new keys, and a key you bind stops doing its old job (above, W no longer works
 the headlights and Z no longer accelerates). Two keys for one button: `cross:W/Up`; no key: `l1:none`.
-With nothing set, the keys above are unchanged. Windows only for now (the Linux build keeps the
-default keys).
+With nothing set, the keys above are unchanged. On Linux the same line goes in `GT5/settings.sh`:
+`export PS3_KEYS="cross:W,square:Space,l2:Q,r2:E,circle:LAlt"` (letters are where they are on a US
+keyboard there).
 
 - **Buttons:** `cross` `circle` `square` `triangle` `l1` `r1` `l2` `r2` `l3` `r3` `start` `select`,
   the D-pad `up` `down` `left` `right`, and the sticks pushed all the way: `lstick_up` `lstick_down`
@@ -689,6 +690,7 @@ Or just once: `PS3RECOMP_VK_FULLSCREEN=1 bash GT5/play.sh`.
 Controls: any controller SDL2 knows (DualSense, DualShock 4, Xbox, 8BitDo, the Steam Deck's own
 controls through Steam Input), or the keyboard as on Windows: Z = Cross, X = Circle, A = Square,
 S = Triangle, Q/W = L1/R1, 1/2 = L2/R2, arrows = D-pad, Enter = Start, Tab = Select, Esc = quit.
+[Your own keys](#keyboard-keys) work too, with `export PS3_KEYS=...` in `GT5/settings.sh`.
 
 ### Updating
 
