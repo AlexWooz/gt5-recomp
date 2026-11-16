@@ -135,7 +135,7 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **16 Nov 2026:** keyboard: an arrow-key tap moves one place in the menus (it moved two), the keyboard works with a pad connected, and mouse steering speed goes down to 1% in steps of 0.5 (launcher number box); a `[threads]` line in `logs\play.err` every 5 s says how busy each kind of thread is (`PS3_THREAD_STATS=0` turns it off);
+- **16 Nov 2026:** mouse steering: left click = OK, right click = back and the wheel moves up/down at the menus; keyboard: an arrow-key tap moves one place in the menus (it moved two), the keyboard works with a pad connected, and mouse steering speed goes down to 1% in steps of 0.5 (launcher number box); a `[threads]` line in `logs\play.err` every 5 s says how busy each kind of thread is (`PS3_THREAD_STATS=0` turns it off);
   DirectX 12: the drawing threads hand work over with less cache traffic (-20% per call); Vulkan: the start-up shader list keeps the most recently used shaders, and a full list no longer
   freezes the first race start for ~11 s; Vulkan: new scenes no longer stay half-drawn for a minute on slow PCs (each shader built once,
   builders above normal priority, what's on screen first) and a minimised window comes back (v0.1.80); texture dumping and HD texture packs on DirectX 12: `PS3_TEX_DUMP=1` (or the launcher's Display page)

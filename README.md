@@ -280,8 +280,10 @@ A steering wheel works too, with force feedback (new; one real wheel tried so fa
 Controls page, or `set "PS3_MOUSE_STEER=1"` in `play.bat`. In races, move the mouse left and right to
 steer: **left button = throttle, right button = brake, middle button = straighten the wheel**. The
 keyboard and pads keep working alongside (Z still accelerates). While you steer, the cursor is hidden
-and kept inside the window; at the menus and when paused the mouse does nothing (move through the menus
-with the keyboard or a pad as before), and Alt+Tab frees it at any time. The game sees a steering wheel
+and kept inside the window. At the menus and when paused the mouse doesn't steer: there **left click = OK
+(Cross), right click = back (Circle) and the mouse wheel moves the cursor up and down**, and the keyboard
+and pads work as before (`set "PS3_MOUSE_MENU=0"` leaves the mouse out of the menus). Alt+Tab frees the
+mouse at any time. The game sees a steering wheel
 (the same emulated G27 a real wheel uses, with its fine steering), so a real wheel isn't used while
 mouse steering is on.
 

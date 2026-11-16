@@ -9,6 +9,15 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.85**
+
+🖱️ **Mouse steering: the mouse works the menus too**
+- With mouse steering on, at the menus and the pause screen the left button now presses Cross (OK), the right
+  button Circle (back), and each notch of the mouse wheel moves the cursor up or down (asked for by Arpadiam).
+  In races the buttons stay throttle and brake. A button already held when the menus come up (the click that
+  brings the window to the front, or the throttle as a race ends) counts only after it is let go.
+  `PS3_MOUSE_MENU=0` turns it off.
+
 🏷️ Released as **v0.1.84**
 
 ⌨️ **Keyboard: one tap of an arrow key moves one place in the menus**

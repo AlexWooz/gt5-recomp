@@ -199,7 +199,7 @@ namespace Gt5Launcher
             { "ffb", new[] { "Force feedback strength", "力反馈强度" } },
             { "ffbinv", new[] { "Forces push the wrong way (invert)", "力反馈方向相反（反转）" } },
             { "mouse", new[] { "Steer with the mouse", "用鼠标转向" } },
-            { "mouse.help", new[] { "In races, move the mouse left and right to steer. Left button = throttle, right button = brake, middle button = straighten the wheel; the keyboard and pads keep working. At the menus the mouse does nothing, and Alt+Tab frees it at any time. The game sees a steering wheel, so a real wheel isn't used while this is on.", "比赛中左右移动鼠标即可转向。左键 = 油门，右键 = 刹车，中键 = 方向盘回正；键盘和手柄仍然可用。在菜单中鼠标不起作用，随时按 Alt+Tab 即可释放鼠标。游戏会把它当作方向盘，所以开启时不会使用真实方向盘。" } },
+            { "mouse.help", new[] { "In races, move the mouse left and right to steer. Left button = throttle, right button = brake, middle button = straighten the wheel; the keyboard and pads keep working. At the menus, left click = OK, right click = back and the mouse wheel moves up and down; Alt+Tab frees the mouse at any time. The game sees a steering wheel, so a real wheel isn't used while this is on.", "比赛中左右移动鼠标即可转向。左键 = 油门，右键 = 刹车，中键 = 方向盘回正；键盘和手柄仍然可用。在菜单中，左键 = 确定，右键 = 返回，鼠标滚轮上下移动；随时按 Alt+Tab 即可释放鼠标。游戏会把它当作方向盘，所以开启时不会使用真实方向盘。" } },
             { "msens", new[] { "Mouse steering speed", "鼠标转向灵敏度" } },
             { "msens.help", new[] { "100% is normal: mouse movement about the width of a 1080p screen turns the wheel from straight ahead to full lock (at Windows' default pointer speed). Lower is slower, 50% needs twice the movement; 1 to 1000, in steps of 0.5.", "100% 为正常：鼠标移动约一个 1080p 屏幕的宽度，方向盘从正前方转到打满（按 Windows 默认指针速度）。数值越小越慢，50% 需要两倍的移动距离；范围 1 到 1000，步长 0.5。" } },
             { "msens.normal", new[] { "Normal", "正常" } },
