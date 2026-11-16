@@ -9,6 +9,12 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.83**
+
+🩹 **Build fix for v0.1.82**
+- v0.1.82 named the new `[threads]` source file (`GT5\src\gt5_threadstats.cpp`) in the build but the release
+  did not carry the file, so building v0.1.82 stopped with "Cannot find source file". This release has it.
+
 🏷️ Released as **v0.1.82**
 
 🧵 **A per-thread CPU line in the log**
