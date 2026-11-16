@@ -304,7 +304,7 @@ and attach `GT5\logs\play.err`: its `[wheel]` lines say which wheel was found, i
 game asked of it.
 
 If something is off, add a line to `GT5\settings.bat` (next to the other `set` lines; updates replace
-`play.bat`, and since v0.1.66 the launcher keeps lines you add to `settings.bat`):
+`play.bat`, and since v0.1.67 the launcher keeps lines you add to `settings.bat`):
 
 | Problem | Fix |
 |---|---|
