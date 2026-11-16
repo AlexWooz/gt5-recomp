@@ -9,6 +9,18 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.66**
+
+🔊 **The check that a job's code is still the same costs half as much (a little less CPU for the sound on small CPUs)**
+- Every time an SPU job starts, the port makes sure the job's code is still the code it translated, by
+  comparing it byte for byte with a copy: about 2,200 times a second in a race, 33.6 KB each time, most of
+  them on the thread that runs the sound chain, the one thread that runs out of time on 4-core laptops.
+- It now compares a 128-bit CRC32C of the code (four streams at once) with the CRC of that copy, which
+  reads the code once instead of reading it and the copy. On 4 efficient cores of the test PC, switching
+  between the two every 10 s in one race: 6.4-7.7 µs per check with the old compare, 3.3-4.5 µs with the
+  CRC, about 7 ms of CPU a second less. Too small to show in the frame rate; the sound is unchanged.
+- `SPU_FP_CHECK=memcmp` brings back the byte compare; `SPU_FP_STATS=1` logs what the checks cost.
+
 🏷️ Released as **v0.1.65**
 
 ⚙️ **6-core/12-thread CPUs: the game's waiting threads sleep instead of spinning, 5-14% less CPU at the same frame rate**

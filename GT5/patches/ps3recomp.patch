@@ -19905,7 +19905,7 @@ diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
 diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
 --- a/runtime/spu/spu_workload.c
 +++ b/runtime/spu/spu_workload.c
-@@ -269,36 +269,62 @@
+@@ -269,36 +269,135 @@
      for (; i < n; ++i) r = (r ^ p[i]) * 0x100000001B3ull;
      return r;
  }
@@ -19918,12 +19918,81 @@ diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
 + * round-robin slots kept being replaced, and every miss copied and hashed the
 + * whole image again (3% of the sound-job thread in fingerprinting plus much of
 + * its memcpy, 12 Nov). */
++/* Round 9 (15 Nov 2026): on x86-64 a hit is proven by a CRC32C of the image instead -- four interleaved
++ * streams over its four quarters (crc32 issues one a cycle with a 3-cycle latency), 128 bits in all --
++ * compared with the CRC of the copy the fingerprint was computed from. That reads the image once, not the
++ * image and the copy. GT5 on 4 E-cores checks ~2,200 images a second, 33.6 KB on average: 6.4-7.7 us
++ * each with memcmp, 3.3-4.5 us with the CRC (alternated in one race), ~7 ms of CPU a second less, most
++ * of it on the sound job chain's thread. SPU_FP_CHECK=memcmp restores the byte compare; PS3_AB_WHAT=fpcrc
++ * alternates the two; SPU_FP_STATS=1 logs the checks' cost every 10 s. */
++#if defined(__x86_64__) || defined(_M_X64)
++#include <immintrin.h>
++#define SPU_FP_HAVE_CRC 1
++__attribute__((target("sse4.2")))
++static void spu_fp_crc4(const uint8_t* p, size_t n, uint64_t out[2])
++{
++    const size_t q = (n / 32) * 8;   /* bytes per stream, a multiple of 8 */
++    uint64_t c0 = 0xFFFFFFFFu, c1 = 0x12345678u, c2 = 0x9ABCDEF0u, c3 = 0x0F1E2D3Cu;
++    const uint8_t *p0 = p, *p1 = p + q, *p2 = p + 2 * q, *p3 = p + 3 * q;
++    for (size_t i = 0; i < q; i += 8) {
++        uint64_t d0, d1, d2, d3;
++        memcpy(&d0, p0 + i, 8); memcpy(&d1, p1 + i, 8); memcpy(&d2, p2 + i, 8); memcpy(&d3, p3 + i, 8);
++        c0 = _mm_crc32_u64(c0, d0); c1 = _mm_crc32_u64(c1, d1); c2 = _mm_crc32_u64(c2, d2); c3 = _mm_crc32_u64(c3, d3);
++    }
++    for (size_t i = 4 * q; i < n; i++) c0 = _mm_crc32_u8((uint32_t)c0, p[i]);
++    out[0] = c0 | (c1 << 32);
++    out[1] = (c2 | (c3 << 32)) ^ (uint64_t)n;
++}
++#else
++#define SPU_FP_HAVE_CRC 0
++static void spu_fp_crc4(const uint8_t* p, size_t n, uint64_t out[2]) { (void)p; out[0] = out[1] = n; }
++#endif
++static int spu_fp_check_crc(void)
++{
++    if (!SPU_FP_HAVE_CRC) return 0;
++    static int mode = -1;
++    if (mode < 0) { const char* e = getenv("SPU_FP_CHECK"); mode = (e && !strcmp(e, "memcmp")) ? 0 : 1; }
++    extern int ps3_ab_on(const char* what);
++    static signed char listed = -1;
++    if (listed < 0) listed = (signed char)(ps3_ab_on("fpcrc") >= 0);
++    if (listed) { const int ab = ps3_ab_on("fpcrc"); if (ab >= 0) return ab; }
++    return mode;
++}
++static uint64_t spu_workload_fingerprint_cached_impl(const uint8_t* image, size_t n);
++/* SPU_FP_STATS=1: time spent in the job-image check, by method, every 10 s. */
  static uint64_t spu_workload_fingerprint_cached(const uint8_t* image, size_t n)
  {
 -    enum { SLOTS = 8 };
 -    static struct { const uint8_t* image; size_t n; uint64_t content, fp; } s_fp[SLOTS];
++#ifdef _WIN32
++    static int on = -1;
++    if (on < 0) on = getenv("SPU_FP_STATS") ? 1 : 0;
++    if (!on) return spu_workload_fingerprint_cached_impl(image, n);
++    static LARGE_INTEGER f; static volatile LONG64 ticks[2], calls[2], bytes, t0;
++    if (!f.QuadPart) QueryPerformanceFrequency(&f);
++    const int m = spu_fp_check_crc();
++    LARGE_INTEGER a, b; QueryPerformanceCounter(&a);
++    const uint64_t fp = spu_workload_fingerprint_cached_impl(image, n);
++    QueryPerformanceCounter(&b);
++    InterlockedAdd64(&ticks[m], b.QuadPart - a.QuadPart); InterlockedIncrement64(&calls[m]); InterlockedAdd64(&bytes, (LONG64)n);
++    if (!t0) t0 = b.QuadPart;
++    else if (b.QuadPart - t0 > f.QuadPart * 10) {
++        const double s = (double)(b.QuadPart - t0) / f.QuadPart;
++        const LONG64 c = calls[0] + calls[1];
++        fprintf(stderr, "[fp-stat] %.0f checks/s, %.1f KB avg, memcmp %lld at %.2f us, crc %lld at %.2f us, %.2f ms/s\n", c / s,
++                c ? bytes / 1024.0 / c : 0.0, calls[0], calls[0] ? ticks[0] * 1e6 / f.QuadPart / calls[0] : 0.0,
++                calls[1], calls[1] ? ticks[1] * 1e6 / f.QuadPart / calls[1] : 0.0, (ticks[0] + ticks[1]) * 1e3 / f.QuadPart / s);
++        ticks[0] = ticks[1] = 0; calls[0] = calls[1] = 0; bytes = 0; t0 = b.QuadPart;
++    }
++    return fp;
++#else
++    return spu_workload_fingerprint_cached_impl(image, n);
++#endif
++}
++static uint64_t spu_workload_fingerprint_cached_impl(const uint8_t* image, size_t n)
++{
 +    enum { SLOTS = 64 };
-+    static struct { const uint8_t* image; size_t n; uint64_t content, fp; uint8_t* copy; } s_fp[SLOTS];
++    static struct { const uint8_t* image; size_t n; uint64_t content, fp; uint8_t* copy; uint64_t crc[2]; } s_fp[SLOTS];
      static unsigned s_next;
 +    static int hashcheck = -1;
 +    if (hashcheck < 0) hashcheck = getenv("SPU_FP_HASHCHECK") ? 1 : 0;
@@ -19937,17 +20006,22 @@ diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
      static pthread_mutex_t s_fp_lock = PTHREAD_MUTEX_INITIALIZER;
  #define FP_LOCK()   pthread_mutex_lock(&s_fp_lock)
  #define FP_UNLOCK() pthread_mutex_unlock(&s_fp_lock)
-+#define FP_RLOCK()   pthread_mutex_lock(&s_fp_lock)
-+#define FP_RUNLOCK() pthread_mutex_unlock(&s_fp_lock)
- #endif
+-#endif
 -    const uint64_t content = spu_workload_content_hash(image, n);
 -    FP_LOCK();
++#define FP_RLOCK()   pthread_mutex_lock(&s_fp_lock)
++#define FP_RUNLOCK() pthread_mutex_unlock(&s_fp_lock)
++#endif
 +    const uint64_t content = hashcheck ? spu_workload_content_hash(image, n) : 0;
++    const int crc = !hashcheck && spu_fp_check_crc();
++    uint64_t c[2] = { 0, 0 };
++    if (crc) spu_fp_crc4(image, n, c);
 +    FP_RLOCK();
      for (unsigned i = 0; i < SLOTS; ++i)
 -        if (s_fp[i].image == image && s_fp[i].n == n && s_fp[i].content == content) {
 +        if (s_fp[i].image == image && s_fp[i].n == n &&
 +            (hashcheck ? s_fp[i].content == content
++             : crc     ? (s_fp[i].copy && s_fp[i].crc[0] == c[0] && s_fp[i].crc[1] == c[1])
 +                       : (s_fp[i].copy && memcmp(s_fp[i].copy, image, n) == 0))) {
              const uint64_t fp = s_fp[i].fp;
 -            FP_UNLOCK();
@@ -19961,13 +20035,13 @@ diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
 +     * with a fingerprint of different bytes: if the image changes during the
 +     * hash, the next lookup's compare fails and it is fingerprinted again. */
 +    uint8_t* copy = hashcheck ? NULL : (uint8_t*)malloc(n);
-+    if (copy) memcpy(copy, image, n);
++    if (copy) { memcpy(copy, image, n); spu_fp_crc4(copy, n, c); }
 +    const uint64_t fp = copy ? spu_workload_fingerprint(copy, n) : spu_workload_fingerprint(image, n);
      FP_LOCK();
      const unsigned slot = s_next++ % SLOTS;
 +    free(s_fp[slot].copy);
      s_fp[slot].image = image; s_fp[slot].n = n; s_fp[slot].content = content; s_fp[slot].fp = fp;
-+    s_fp[slot].copy = copy;
++    s_fp[slot].copy = copy; s_fp[slot].crc[0] = c[0]; s_fp[slot].crc[1] = c[1];
      FP_UNLOCK();
  #undef FP_LOCK
  #undef FP_UNLOCK
@@ -19976,7 +20050,7 @@ diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
      return fp;
  }
  
-@@ -630,6 +656,13 @@
+@@ -630,6 +729,13 @@
          spu_workload_dispatch_async(vm_base + start_elf[i], (uint32_t)start_sz[i], start_ctx[i]);
      }
      s_ts_held = 0; ts_unlock();
@@ -19990,7 +20064,7 @@ diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
  }
  
  /* Start any task that is enabled + ready/pending but not running. The scan
-@@ -1001,6 +1034,10 @@
+@@ -1001,6 +1107,10 @@
  #ifdef _WIN32
  static DWORD WINAPI spu_async_thread(LPVOID p) {
      ps3_thread_name("spu job");
