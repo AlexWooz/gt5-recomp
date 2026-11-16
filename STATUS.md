@@ -80,7 +80,10 @@ performance matters more than the graphics card.
   using the keyboard for the menus. Since 15 Nov a wheel with no d-pad moves through the menus itself
   (rim for left / right, throttle and brake for down / up), which works on that wheel now, and since
   v0.1.59 the steering and pedals no longer stay stuck in a race when a busy PC falls behind (checked
-  with a simulated wheel). **Force feedback is still untried on a real wheel.** Wheel owners:
+  with a simulated wheel). The second real wheel, a player's Thrustmaster T-GT, has force feedback that
+  works and pulls the right way; since v0.1.69 Thrustmaster wheels get their own pedal layout (normal and
+  combined pedal mode), a button can be a pedal, and a button can be reverse (manual gearbox only). Its
+  button numbers aren't known yet. Wheel owners:
   [tell us how it goes](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=1-tried-it.yml),
   with `GT5\logs\play.err` attached (settings are in the README's FAQ).
 - **The picture can freeze on one screen at the first start** while the game carries on behind it
@@ -132,7 +135,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **15 Nov 2026:** sound on busy and small CPUs: no more 85 ms holes, and the sound no longer runs up to 80 ms late
+- **15 Nov 2026:** steering wheels: Thrustmaster pedals the right way round in normal and combined mode, a button can
+  be a pedal (`brake=4`), and a button can be reverse with the manual gearbox (v0.1.69); sound on busy and small CPUs: no more 85 ms holes, and the sound no longer runs up to 80 ms late
   (the 2.11 "audio lag", v0.1.68); the check that an SPU job's code is unchanged costs half as much, a little less CPU for the
   sound on small CPUs (v0.1.66); on 6-core/12-thread CPUs the game's waiting threads sleep instead of spinning, as on
   8-thread ones: 5-14% less CPU at the same frame rate (v0.1.65); Linux and the Vulkan renderer: races no longer start far too dark, and car reflections and
