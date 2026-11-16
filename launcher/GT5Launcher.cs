@@ -194,7 +194,51 @@ namespace Gt5Launcher
             { "mcenter.mid", new[] { "Medium", "中" } },
             { "mcenter.fast", new[] { "Quickly", "快" } },
             { "mouse.short", new[] { "Mouse steering", "鼠标转向" } },
-            { "keys", new[] { "Keyboard: Z = Cross (OK), X = Circle, A = Square, S = Triangle, arrows = D-pad, Enter = Start, Tab = Select. DualSense, DualShock 4 and Xbox pads work too.", "键盘：Z = ✕（确定），X = ○，A = □，S = △，方向键 = 十字键，Enter = Start，Tab = Select。也支持 DualSense、DualShock 4 和 Xbox 手柄。" } },
+            { "keys", new[] { "Keyboard: Z = Cross (OK), X = Circle, A = Square, S = Triangle, arrows = D-pad, Enter = Start, Tab = Select (change them on the Controls page). DualSense, DualShock 4 and Xbox pads work too.", "键盘：Z = ✕（确定），X = ○，A = □，S = △，方向键 = 十字键，Enter = Start，Tab = Select（可在“操控”页面更改）。也支持 DualSense、DualShock 4 和 Xbox 手柄。" } },
+            // Keyboard keys (PS3_KEYS)
+            { "kb.title", new[] { "Keyboard keys", "键盘按键" } },
+            { "kb.help", new[] { "Click a row, then press the key you want (Esc cancels); right-click a row to add a second key, × clears it. A key that's already used moves to the new row. The keyboard is used when no pad is connected. The actions are GT5's own pad layout (Options > Hardware > Change Button Assignments in the game); change them there and these rows follow the button, not the action. With mouse steering on, the keys work the same.", "点击一行，然后按下想要的键（Esc 取消）；右键点击一行可添加第二个键，× 清除。已被使用的键会移到新的一行。未连接手柄时使用键盘。动作为 GT5 自带的手柄布局（游戏中：选项 > 硬件 > 更改按键分配）；在那里更改后，这里的行对应的是按钮而不是动作。开启鼠标转向时按键同样有效。" } },
+            { "kb.views", new[] { "Left View, Right View and Flash Lights have no pad button in GT5's default layout: give them one in the game (for example the right stick's left and right), then bind a key to that button here.", "在 GT5 默认布局中，“左视角”“右视角”和“闪灯”没有手柄按钮：先在游戏中为它们分配一个按钮（例如右摇杆的左和右），再在这里为该按钮绑定按键。" } },
+            { "kb.reset", new[] { "Reset to defaults", "恢复默认" } },
+            { "kb.press", new[] { "Press a key...", "请按一个键..." } },
+            { "kb.none", new[] { "(no key)", "（无按键）" } },
+            { "kb.stick", new[] { "Sticks (full tilt)", "摇杆（推到底）" } },
+            { "kb.a.cross", new[] { "Accelerate, OK", "加速、确定" } },
+            { "kb.a.square", new[] { "Brake", "刹车" } },
+            { "kb.a.r2", new[] { "Shift up", "升挡" } },
+            { "kb.a.l2", new[] { "Shift down", "降挡" } },
+            { "kb.a.circle", new[] { "Handbrake, Back", "手刹、返回" } },
+            { "kb.a.triangle", new[] { "Reverse", "倒车" } },
+            { "kb.a.l1", new[] { "Look back", "后视" } },
+            { "kb.a.r1", new[] { "Headlights: flash, high/low beam", "大灯：闪灯、远/近光" } },
+            { "kb.a.l3", new[] { "Horn", "喇叭" } },
+            { "kb.a.r3", new[] { "Windscreen wipers", "雨刷" } },
+            { "kb.a.select", new[] { "Change view (camera)", "切换视角" } },
+            { "kb.a.start", new[] { "Pause", "暂停" } },
+            { "kb.a.up", new[] { "Ghost, menu up", "幽灵车、菜单上" } },
+            { "kb.a.down", new[] { "Menu down", "菜单下" } },
+            { "kb.a.left", new[] { "Steer left, menu left", "左转、菜单左" } },
+            { "kb.a.right", new[] { "Steer right, menu right", "右转、菜单右" } },
+            { "kb.a.lstick_up", new[] { "(nothing by default)", "（默认无）" } },
+            { "kb.a.lstick_down", new[] { "(nothing by default)", "（默认无）" } },
+            { "kb.a.lstick_left", new[] { "Steer left", "左转" } },
+            { "kb.a.lstick_right", new[] { "Steer right", "右转" } },
+            { "kb.a.rstick_up", new[] { "Accelerate", "加速" } },
+            { "kb.a.rstick_down", new[] { "Brake", "刹车" } },
+            { "kb.a.rstick_left", new[] { "(nothing by default: Left View?)", "（默认无：左视角？）" } },
+            { "kb.a.rstick_right", new[] { "(nothing by default: Right View?)", "（默认无：右视角？）" } },
+            { "kb.b.cross", new[] { "Cross", "✕" } }, { "kb.b.square", new[] { "Square", "□" } },
+            { "kb.b.circle", new[] { "Circle", "○" } }, { "kb.b.triangle", new[] { "Triangle", "△" } },
+            { "kb.b.l1", new[] { "L1", "L1" } }, { "kb.b.r1", new[] { "R1", "R1" } }, { "kb.b.l2", new[] { "L2", "L2" } },
+            { "kb.b.r2", new[] { "R2", "R2" } }, { "kb.b.l3", new[] { "L3 (left stick press)", "L3（按下左摇杆）" } },
+            { "kb.b.r3", new[] { "R3 (right stick press)", "R3（按下右摇杆）" } },
+            { "kb.b.select", new[] { "Select", "Select" } }, { "kb.b.start", new[] { "Start", "Start" } },
+            { "kb.b.up", new[] { "D-pad up", "十字键上" } }, { "kb.b.down", new[] { "D-pad down", "十字键下" } },
+            { "kb.b.left", new[] { "D-pad left", "十字键左" } }, { "kb.b.right", new[] { "D-pad right", "十字键右" } },
+            { "kb.b.lstick_up", new[] { "Left stick up", "左摇杆上" } }, { "kb.b.lstick_down", new[] { "Left stick down", "左摇杆下" } },
+            { "kb.b.lstick_left", new[] { "Left stick left", "左摇杆左" } }, { "kb.b.lstick_right", new[] { "Left stick right", "左摇杆右" } },
+            { "kb.b.rstick_up", new[] { "Right stick up", "右摇杆上" } }, { "kb.b.rstick_down", new[] { "Right stick down", "右摇杆下" } },
+            { "kb.b.rstick_left", new[] { "Right stick left", "右摇杆左" } }, { "kb.b.rstick_right", new[] { "Right stick right", "右摇杆右" } },
             // Game
             { "lang", new[] { "Game language", "游戏语言" } },
             { "lang.help", new[] { "The PS3 system language the game is told. It only changes if your disc has that language (Europe: many; North America: English, French, Spanish, Portuguese, Japanese).", "告诉游戏的 PS3 系统语言。只有光盘包含该语言时才会改变（欧版语言较多；美版：英、法、西、葡、日）。" } },
@@ -290,6 +334,7 @@ namespace Gt5Launcher
             new[] { "GT5_SPEED", "" }, new[] { "PS3_SKIP_INTRO", "1" }, new[] { "LD_WATCH_DRAW", "" },
             new[] { "LD_FRAMEGEN", "" }, new[] { "GT5_RENDERER", "" },
             new[] { "PS3_MOUSE_STEER", "" }, new[] { "PS3_MOUSE_STEER_SENS", "" }, new[] { "PS3_MOUSE_STEER_CENTER", "" },
+            new[] { "PS3_KEYS", "" },
         };
         // True when there was no settings.bat yet: the launcher's first start on this install.
         public bool Fresh;
@@ -393,6 +438,136 @@ namespace Gt5Launcher
     {
         public string Name, Description, Switch;
         public bool Default;
+    }
+
+    // ---- Keyboard keys: PS3_KEYS, as the game reads it (ps3recomp libs\input\cellPad.c, kb_init) -------
+    // "button:key[/key...]" pairs split by commas. A bound button takes only its keys; the others keep
+    // their default key unless a binding took it. The launcher writes only the buttons that differ from
+    // the defaults, so with nothing changed PS3_KEYS stays empty and the game keeps its old keys.
+    static class KeyBinds
+    {
+        public static readonly string[] Order = { "cross", "square", "r2", "l2", "circle", "triangle", "l1", "r1", "l3", "r3",
+            "select", "start", "up", "down", "left", "right",
+            "lstick_up", "lstick_down", "lstick_left", "lstick_right", "rstick_up", "rstick_down", "rstick_left", "rstick_right" };
+        static readonly Dictionary<string, string> Def = new Dictionary<string, string>
+        {
+            { "up", "Up" }, { "down", "Down" }, { "left", "Left" }, { "right", "Right" }, { "cross", "Z" }, { "circle", "X" },
+            { "square", "A" }, { "triangle", "S" }, { "l1", "Q" }, { "r1", "W" }, { "l2", "1" }, { "r2", "2" },
+            { "start", "Enter" }, { "select", "Tab" },
+        };
+        // Windows virtual-key code -> the name the game takes. Letters, digits, F-keys and Num0-9 are made below.
+        static readonly Dictionary<int, string> Vk = new Dictionary<int, string>
+        {
+            { 0x20, "Space" }, { 0x0D, "Enter" }, { 0x09, "Tab" }, { 0x08, "Backspace" }, { 0x26, "Up" }, { 0x28, "Down" },
+            { 0x25, "Left" }, { 0x27, "Right" }, { 0x2D, "Insert" }, { 0x2E, "Delete" }, { 0x24, "Home" }, { 0x23, "End" },
+            { 0x21, "PageUp" }, { 0x22, "PageDown" }, { 0x14, "CapsLock" }, { 0x6B, "NumPlus" }, { 0x6D, "NumMinus" },
+            { 0x6A, "NumMultiply" }, { 0x6F, "NumDivide" }, { 0x6E, "NumDecimal" }, { 0xBC, "Comma" }, { 0xBE, "Period" },
+            { 0xBF, "Slash" }, { 0xBA, "Semicolon" }, { 0xDE, "Apostrophe" }, { 0xDB, "LBracket" }, { 0xDD, "RBracket" },
+            { 0xDC, "Backslash" }, { 0xBD, "Minus" }, { 0xBB, "Equals" }, { 0xC0, "Grave" }, { 0xE2, "IntlBackslash" },
+            { 0xA0, "LShift" }, { 0xA1, "RShift" }, { 0xA2, "LCtrl" }, { 0xA3, "RCtrl" }, { 0xA4, "LAlt" }, { 0xA5, "RAlt" },
+            { 0x05, "Mouse4" }, { 0x06, "Mouse5" },
+        };
+        static readonly List<string> Known = MakeKnown();
+        static List<string> MakeKnown()
+        {
+            var l = new List<string>(Vk.Values);
+            for (char c = 'A'; c <= 'Z'; c++) l.Add(c.ToString());
+            for (char c = '0'; c <= '9'; c++) { l.Add(c.ToString()); l.Add("Num" + c); }
+            for (int i = 1; i <= 24; i++) l.Add("F" + i);
+            l.Add("Shift"); l.Add("Ctrl"); l.Add("Alt");
+            return l;
+        }
+
+        // A key name in the game's spelling, or null for one it doesn't know (and Esc, the quit key).
+        public static string Canon(string name)
+        {
+            foreach (var k in Known) if (string.Equals(k, name, StringComparison.OrdinalIgnoreCase)) return k;
+            return null;
+        }
+
+        // The name of a key pressed in the launcher (a WM_KEYDOWN/WM_SYSKEYDOWN), or null.
+        public static string FromKey(int vk, long lParam)
+        {
+            bool ext = (lParam & 0x01000000) != 0;
+            int scan = (int)((lParam >> 16) & 0xFF);
+            if (vk == 0x10) vk = scan == 0x36 ? 0xA1 : 0xA0;   // Shift: the right one has its own scan code
+            if (vk == 0x11) vk = ext ? 0xA3 : 0xA2;
+            if (vk == 0x12) vk = ext ? 0xA5 : 0xA4;
+            if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9')) return ((char)vk).ToString();
+            if (vk >= 0x70 && vk <= 0x87) return "F" + (vk - 0x6F);
+            if (vk >= 0x60 && vk <= 0x69) return "Num" + (vk - 0x60);
+            string n;
+            return Vk.TryGetValue(vk, out n) ? n : null;
+        }
+
+        public static string Pretty(string k)
+        {
+            switch (k)
+            {
+                case "LAlt": return "Left Alt";
+                case "RAlt": return "Right Alt";
+                case "LCtrl": return "Left Ctrl";
+                case "RCtrl": return "Right Ctrl";
+                case "LShift": return "Left Shift";
+                case "RShift": return "Right Shift";
+                default: return k;
+            }
+        }
+
+        public static List<string> Default(string b)
+        {
+            var l = new List<string>();
+            string k;
+            if (Def.TryGetValue(b, out k)) l.Add(k);
+            return l;
+        }
+
+        public static Dictionary<string, List<string>> Defaults()
+        {
+            var m = new Dictionary<string, List<string>>();
+            foreach (var b in Order) m[b] = Default(b);
+            return m;
+        }
+
+        public static Dictionary<string, List<string>> Parse(string s)
+        {
+            var map = Defaults();
+            var bound = new Dictionary<string, List<string>>();
+            foreach (var item in (s ?? "").Split(','))
+            {
+                int c = item.IndexOf(':');
+                if (c < 0) continue;
+                string b = item.Substring(0, c).Trim().ToLowerInvariant();
+                if (Array.IndexOf(Order, b) < 0) continue;
+                if (!bound.ContainsKey(b)) bound[b] = new List<string>();
+                foreach (var part in item.Substring(c + 1).Split('/'))
+                {
+                    string k = Canon(part.Trim());
+                    if (k != null && !bound[b].Contains(k) && bound[b].Count < 4) bound[b].Add(k);
+                }
+            }
+            foreach (var kv in bound) map[kv.Key] = kv.Value;
+            foreach (var b in Order)
+            {
+                if (bound.ContainsKey(b)) continue;
+                foreach (var kv in bound) foreach (var k in kv.Value) map[b].Remove(k);
+            }
+            return map;
+        }
+
+        public static string Format(Dictionary<string, List<string>> map)
+        {
+            var parts = new List<string>();
+            foreach (var b in Order)
+            {
+                var cur = map[b];
+                var def = Default(b);
+                bool same = cur.Count == def.Count;
+                for (int i = 0; same && i < cur.Count; i++) same = cur[i] == def[i];
+                if (!same) parts.Add(b + ":" + (cur.Count == 0 ? "none" : string.Join("/", cur.ToArray())));
+            }
+            return string.Join(",", parts.ToArray());
+        }
     }
 
     // ---- Look ---------------------------------------------------------------------------------------
@@ -999,6 +1174,7 @@ namespace Gt5Launcher
         void ShowPage(string key)
         {
             page = key;
+            if (keyWait != null) { keyWait = null; ShowKeys(); }
             foreach (var kv in pages) kv.Value.Visible = kv.Key == key;
             foreach (var kv in navButtons)
             {
@@ -1154,8 +1330,123 @@ namespace Gt5Launcher
             y = AddCheck(p, "mouse", "mouse.help", "PS3_MOUSE_STEER", "1", y + 10);
             y = AddCombo(p, "msens", "msens.help", "PS3_MOUSE_STEER_SENS", new[] { new Choice("50", "50%"), new Choice("75", "75%"), new Choice("", T.Get("msens.normal") + " (100%)"), new Choice("150", "150%"), new Choice("200", "200%"), new Choice("300", "300%") }, y);
             y = AddCombo(p, "mcenter", "mcenter.help", "PS3_MOUSE_STEER_CENTER", new[] { new Choice("", T.Get("off")), new Choice("50", T.Get("mcenter.slow")), new Choice("100", T.Get("mcenter.mid")), new Choice("200", T.Get("mcenter.fast")) }, y);
-            y = AddHelp(p, T.Get("keys"), y + 10, 0);
+            y = AddKeyRows(p, y + 14);
             return p;
+        }
+
+        // -- keyboard keys: one row per PS3 button, labelled with what it does in GT5 --
+        Dictionary<string, List<string>> keyMap;
+        readonly Dictionary<string, FlatButton> keyButtons = new Dictionary<string, FlatButton>();
+        string keyWait;        // the button waiting for a key, or null
+        bool keyAdd;           // the key goes next to the ones there (right-click) instead of replacing them
+        int keySwallowUp;      // the key just taken: its key-up isn't passed on (Alt's would open the menu)
+        KeyCatcher catcher;
+
+        // Takes the next key (or Mouse4/5) for the button waiting, before the controls see it: Tab, the
+        // arrows and Alt never move the focus or open a menu while a row waits.
+        class KeyCatcher : IMessageFilter
+        {
+            readonly LauncherForm f;
+            public KeyCatcher(LauncherForm form) { f = form; }
+            public bool PreFilterMessage(ref Message m)
+            {
+                const int KEYDOWN = 0x100, KEYUP = 0x101, CHAR = 0x102, SYSKEYDOWN = 0x104, SYSKEYUP = 0x105, SYSCHAR = 0x106,
+                          XDOWN = 0x20B, XUP = 0x20C;
+                int msg = m.Msg;
+                if (f.keySwallowUp != 0 && (msg == KEYDOWN || msg == SYSKEYDOWN) && f.keyWait == null &&
+                    (int)(m.WParam.ToInt64() & 0xFFFF) == f.keySwallowUp)
+                    return true;   // the taken key repeating while it's held
+                if (f.keySwallowUp != 0 && (msg == KEYUP || msg == SYSKEYUP || msg == CHAR || msg == SYSCHAR))
+                {
+                    if (msg == KEYUP || msg == SYSKEYUP) f.keySwallowUp = 0;
+                    return true;
+                }
+                if (f.keyWait == null) return false;
+                if (msg == KEYDOWN || msg == SYSKEYDOWN)
+                {
+                    int vk = (int)(m.WParam.ToInt64() & 0xFFFF);
+                    f.keySwallowUp = vk;
+                    if (vk == 0x1B) { f.KeyTaken(null); return true; }   // Esc: cancel (it's the game's quit key)
+                    string k = KeyBinds.FromKey(vk, m.LParam.ToInt64());
+                    if (k != null) f.KeyTaken(k);
+                    return true;
+                }
+                if (msg == XDOWN) { f.KeyTaken(((m.WParam.ToInt64() >> 16) & 0xFFFF) == 1 ? "Mouse4" : "Mouse5"); return true; }
+                if (msg == XUP || msg == KEYUP || msg == SYSKEYUP || msg == CHAR || msg == SYSCHAR) return true;
+                return false;
+            }
+        }
+
+        int AddKeyRows(Panel p, int y)
+        {
+            keyMap = KeyBinds.Parse(S.Get("PS3_KEYS"));
+            keyButtons.Clear();
+            keyWait = null;
+            if (catcher == null) { catcher = new KeyCatcher(this); Application.AddMessageFilter(catcher); }
+            y = AddHeading(p, T.Get("kb.title"), y);
+            y = AddHelp(p, T.Get("kb.help"), y - 4, 0);
+            var reset = new FlatButton(T.Get("kb.reset"), Look.Panel, Look.NavHot) { Size = new Size(170, 30), Location = new Point(0, y) };
+            reset.Click += delegate { keyWait = null; keyMap = KeyBinds.Defaults(); SaveKeys(); };
+            p.Controls.Add(reset);
+            y += 42;
+            foreach (var b in KeyBinds.Order)
+            {
+                if (b == "lstick_up") { y = AddHelp(p, T.Get("kb.stick"), y + 6, 0) - 4; }
+                string btn = b;
+                var action = new Label { Text = T.Get("kb.a." + b), AutoSize = false, Size = new Size(250, 26), Location = new Point(0, y + 2), ForeColor = Look.Text, TextAlign = ContentAlignment.MiddleLeft, Cursor = Cursors.Hand };
+                var pad = new Label { Text = T.Get("kb.b." + b), AutoSize = false, Size = new Size(150, 26), Location = new Point(255, y + 2), ForeColor = Look.Dim, TextAlign = ContentAlignment.MiddleLeft, Cursor = Cursors.Hand };
+                var key = new FlatButton("", Look.Panel, Look.NavHot) { Size = new Size(190, 28), Location = new Point(410, y + 1), TextAlign = ContentAlignment.MiddleLeft };
+                var clear = new FlatButton("×", Look.Panel, Look.NavHot) { Size = new Size(30, 28), Location = new Point(604, y + 1) };
+                MouseEventHandler start = delegate(object s, MouseEventArgs e)
+                {
+                    if (e.Button != MouseButtons.Left && e.Button != MouseButtons.Right) return;
+                    keyWait = btn; keyAdd = e.Button == MouseButtons.Right; ShowKeys();
+                };
+                action.MouseUp += start; pad.MouseUp += start; key.MouseUp += start;
+                clear.Click += delegate { keyWait = null; keyMap[btn].Clear(); SaveKeys(); };
+                p.Controls.Add(action); p.Controls.Add(pad); p.Controls.Add(key); p.Controls.Add(clear);
+                keyButtons[b] = key;
+                y += 32;
+            }
+            y = AddHelp(p, T.Get("kb.views"), y + 8, 0);
+            ShowKeys();
+            return y;
+        }
+
+        void KeyTaken(string k)
+        {
+            string b = keyWait;
+            keyWait = null;
+            if (b != null && k != null)
+            {
+                foreach (var kv in keyMap) if (kv.Key != b) kv.Value.Remove(k);   // a key used elsewhere moves here
+                if (!keyAdd) keyMap[b].Clear();
+                if (!keyMap[b].Contains(k) && keyMap[b].Count < 4) keyMap[b].Add(k);
+                SaveKeys();
+                return;
+            }
+            ShowKeys();
+        }
+
+        void SaveKeys()
+        {
+            S.Set("PS3_KEYS", KeyBinds.Format(keyMap));
+            SaveQuiet();
+            ShowKeys();
+        }
+
+        void ShowKeys()
+        {
+            foreach (var kv in keyButtons)
+            {
+                var names = new List<string>();
+                foreach (var k in keyMap[kv.Key]) names.Add(KeyBinds.Pretty(k));
+                bool wait = kv.Key == keyWait;
+                kv.Value.Text = wait ? T.Get("kb.press") : names.Count == 0 ? T.Get("kb.none") : string.Join("  /  ", names.ToArray());
+                kv.Value.Normal = wait ? Look.Accent : Look.Panel;
+                kv.Value.BackColor = kv.Value.Normal;
+                kv.Value.ForeColor = names.Count == 0 && !wait ? Look.Dim : Look.Text;
+            }
         }
 
         Panel BuildGamePage()

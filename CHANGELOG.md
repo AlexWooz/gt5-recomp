@@ -9,6 +9,40 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.74**
+
+⌨️ **Choose your own keyboard keys** (asked for by Arpadiam on Discord)
+- New, and nothing changes unless you set it: the launcher's **Controls** page has a **Keyboard keys** list,
+  one row per PS3 button, each labelled with what that button does in GT5. Click a row and press a key (Esc
+  cancels); right-click a row to give it a second key, **×** clears it, **Reset to defaults** brings the old
+  keys back. A key that's already used moves to the row you picked. Or in `GT5\settings.bat` / `play.bat`:
+  `set "PS3_KEYS=cross:W,square:Space,l2:Q,r2:E,circle:LAlt"` (W gas, Space brake, Q / E shift down / up,
+  Left Alt handbrake). Every button (the D-pad and the sticks' directions too) and key name (letters,
+  digits, F1-F24, Space, the Shift/Ctrl/Alt keys left and right, arrows, Insert...PageDown, the number pad,
+  punctuation by name, Mouse4/Mouse5) is listed under [Your own keys](README.md#keyboard-keys).
+- What each row does was read from the game's own **Options > Hardware > Change Button Assignments**
+  screen (its defaults): Cross accelerate, Square brake, **R2 / L2 shift up / down**, Circle handbrake,
+  Triangle reverse, L1 rear view, R1 flash and high/low beam, L3 horn, R3 windscreen wipers, Select change
+  view, Start pause, D-pad up ghost, right stick up/down accelerate/brake. Left View, Right View and Flash
+  Lights have no pad button there by default: give one a free button in the game (the right stick's
+  left/right, D-pad down), then bind a key to that button.
+- A key you bind stops doing its old job (with W as Cross, W no longer works the headlights), Esc stays the
+  quit key, and with Alt or F10 bound the game window no longer opens its window menu or beeps on them
+  (Alt+Tab and Alt+F4 still work). Windows only for now.
+- Works the same with **mouse steering** on: GT5 takes the pad's buttons alongside the steering wheel the
+  mouse plays (checked with the pad's own buttons first: shift down, change view, rear view and pause all
+  worked with the wheel attached), so the keys don't need the wheel's buttons.
+- Tested in Arcade races at High Speed Ring with the manual gearbox, keys held from a test file
+  (`PS3_KEYS_TEST_FILE`; the real keyboard is never read then), with
+  `cross:W,square:Space,l2:Q,r2:E,circle:LAlt,start:P,select:C,l1:B`, once with mouse steering off and once
+  on: Space braked the Fiat 500 from 30-32 mph to a stop, Q shifted 4th down to 1st one gear at a time, W
+  took it from a standstill to 10-13 mph (it's a slow car), E shifted 1st to 2nd, Left Alt lit the
+  handbrake light and held the car, C went to the cockpit view and then the bumper view, B looked back,
+  P paused and P went on again. The game's pad log showed each key arriving as its button (W as Cross at
+  full pressure, Q as L2, and so on). A third race with `PS3_KEYS` unset did the same with the old keys
+  (A, 1, Z, 2, X, Tab, Q, Enter). Alt, Alt+W, F10 and the menu command sent to the game window left it out
+  of menu mode.
+
 🏷️ Released as **v0.1.73**
 
 🌋 **Vulkan: frame generation, even frame pacing, and a cheaper command thread**

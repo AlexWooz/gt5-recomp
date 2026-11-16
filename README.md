@@ -212,6 +212,61 @@ A DualSense, DualShock 4 or XInput pad works. Without one, the keyboard:
 Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
 Esc quits the game, after asking (`set "PS3_ESC_CONFIRM=0"` in `play.bat` quits at once).
 
+<a id="keyboard-keys"></a>
+
+**Your own keys** (new): the launcher's Controls page has a **Keyboard keys** list, one row per PS3
+button, labelled with what that button does in GT5. Click a row and press the key you want (Esc
+cancels); right-click a row to give it a second key, **×** to clear it, **Reset to defaults** to start
+over. A key that's already used moves to the row you picked. Or put it in `GT5\settings.bat` (or
+`play.bat`) yourself, `button:key` pairs split by commas:
+
+```bat
+set "PS3_KEYS=cross:W,square:Space,l2:Q,r2:E,circle:LAlt"
+```
+
+That one is W = accelerate, Space = brake, Q / E = shift down / up, Left Alt = handbrake. A bound
+button takes only its new keys, and a key you bind stops doing its old job (above, W no longer works
+the headlights and Z no longer accelerates). Two keys for one button: `cross:W/Up`; no key: `l1:none`.
+With nothing set, the keys above are unchanged. Windows only for now (the Linux build keeps the
+default keys).
+
+- **Buttons:** `cross` `circle` `square` `triangle` `l1` `r1` `l2` `r2` `l3` `r3` `start` `select`,
+  the D-pad `up` `down` `left` `right`, and the sticks pushed all the way: `lstick_up` `lstick_down`
+  `lstick_left` `lstick_right` `rstick_up` `rstick_down` `rstick_left` `rstick_right`.
+- **Keys:** `A`-`Z`, `0`-`9`, `F1`-`F24`, `Space` `Enter` `Tab` `Backspace` `CapsLock`, `LShift` `RShift`
+  `LCtrl` `RCtrl` `LAlt` `RAlt`, `Up` `Down` `Left` `Right`, `Insert` `Delete` `Home` `End` `PageUp`
+  `PageDown`, the number pad `Num0`-`Num9` `NumPlus` `NumMinus` `NumMultiply` `NumDivide` `NumDecimal`,
+  `Comma` `Period` `Slash` `Semicolon` `Apostrophe` `LBracket` `RBracket` `Backslash` `Minus` `Equals`
+  `Grave` `IntlBackslash` (the extra key next to Left Shift on European keyboards), and the mouse's side
+  buttons `Mouse4` `Mouse5`. Any case. Esc stays the quit key. A name the game doesn't know is left out,
+  with a `[keys]` line in `logs\play.err`.
+- With Alt or F10 bound, the game window no longer opens its window menu (or beeps) on them; Alt+Tab and
+  Alt+F4 work as before.
+
+What each button does is GT5's own setting (in the game: **Options > Hardware > Change Button
+Assignments**). Its defaults, as the game shows them:
+
+| Button | GT5 does (default) | Default key |
+|---|---|---|
+| Cross | Accelerate (OK in the menus) | Z |
+| Square | Brake | A |
+| R2 / L2 | Shift up / Shift down | 2 / 1 |
+| Circle | Handbrake (Back in the menus) | X |
+| Triangle | Reverse | S |
+| L1 | Rear view (look back) | Q |
+| R1 | Flash and toggle high/low beam | W |
+| L3 / R3 | Horn / Windscreen wipers | none |
+| Select / Start | Change view / Pause | Tab / Enter |
+| D-pad up | Ghost | Up |
+| D-pad left/right, left stick left/right | Steering | Left / Right |
+| Right stick up / down | Accelerate / Brake | none |
+
+Left View, Right View, Flash Lights (on its own) and Toggle High/Low Beam have no pad button by
+default: give one of the free buttons (D-pad down, the left stick's up/down, the right stick's
+left/right) that action in GT5's Change Button Assignments, then bind a key to that button here. The
+keys press the pad's buttons, so they follow whatever you set there. With mouse steering (below) GT5
+still takes the pad's buttons, so the keys work the same.
+
 A steering wheel works too, with force feedback (new; one real wheel tried so far): see the
 [FAQ](#faq).
 
@@ -271,7 +326,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Force feedback? | 🧪 New, with wheel support, also untried on a real wheel |
 | Widescreen (16:9)? | ✅ Yes, GT5 is a 16:9 game |
 | Ultrawide (21:9, 32:9)? | ✅ New: a wider view, with the HUD kept 16:9 in the middle |
-| Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard; new: [steering with the mouse](#mouse-steering) |
+| Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard; new: [keys of your choice](#keyboard-keys), [steering with the mouse](#mouse-steering) |
 | US copy (BCUS98114)? | ✅ Yes, players have raced on it |
 | Version 1.02, or a game update (2.xx)? | 🧪 New: game updates run: 2.17 (the last) tested on the US and European releases, 2.01 on the Asian one, 2.11 with the Master Mod on the US one by a player ([how to set one up](#game-updates)); 1.02 untried |
 | Settings without editing files? | ✅ New: the [launcher](#launcher) |
@@ -923,6 +978,7 @@ so the launcher's settings win. Some useful ones:
 | `PAD_BACKGROUND=1` | The pad keeps working when another window has focus. |
 | `PS3_WHEEL=off` | Don't look for a steering wheel. The other `PS3_WHEEL_*` settings are in the [FAQ](#faq). |
 | `PS3_MOUSE_STEER=1` | Steer with the mouse in races (left button throttle, right brake). Its other settings are under [Mouse steering](#mouse-steering). |
+| `PS3_KEYS=cross:W,square:Space,...` | Your own keyboard keys, `button:key` pairs (the launcher's Controls page writes it). Button and key names are under [Your own keys](#keyboard-keys). |
 | `LD_WATCH=1` (or **F9** in the game) | Watch mode for B-Spec races and replays: draws every other frame while the race keeps full speed, draws nothing while minimized, and lowers the game's priority. Off unless you turn it on; with `LD_WATCH=1` it comes on after 10 s without input and goes off when you touch the controls. |
 | `PAD_CURSOR_CLIP=1` | Keep the mouse inside the window while the controller is in use (the old behaviour). By default the mouse is free, and only the mouse movement and clicks Steam makes from the controller are ignored. |
 | `GCM_DRAIN_STAT=1` | Timing lines every 5 s in `logs\play.err`. |

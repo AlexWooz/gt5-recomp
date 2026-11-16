@@ -135,7 +135,10 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **16 Nov 2026:** mouse steering (launcher Controls, off by default): in races the mouse turns the wheel, left button
+- **16 Nov 2026:** your own keyboard keys: every pad button can take the keys you choose, on the launcher's Controls
+  page (labelled with what each button does in GT5) or with `PS3_KEYS` (v0.1.74); Vulkan: frame generation works there too (57 new pictures a second instead of 26 at Speed 30 fps),
+  presents are evenly spaced on a thread of their own, and its command thread is cheaper (+17% game fps in a test
+  race) (v0.1.73); mouse steering (launcher Controls, off by default): in races the mouse turns the wheel, left button
   accelerates, right brakes, with a speed setting and optional self-centring; menus and pauses leave the mouse alone (v0.1.72).
 - **15 Nov 2026:** Vulkan draws at 1080p in the 1080p mode, and its window title shows the frame rate and resolution
   (v0.1.71); **Update now** opens an update window with a progress bar over your Photo Mode pictures, the full text one
