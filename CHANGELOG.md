@@ -9,6 +9,16 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.86**
+
+🚀 **Launcher: your own lines in settings.bat are kept, however and wherever you write them**
+- A player's wheel mapping in `settings.bat` disappeared the next time the launcher saved (Gustingorriz).
+  The launcher kept a line of the player's own only if it was written `set "NAME=value"` and sat above the
+  Speed lines it adds at the end of the file when Speed is 30 fps. A line added at the very end, or one
+  written `set NAME=value` without the quotes (which cmd takes just the same), was dropped.
+- Now both forms are read anywhere in the file, a key set twice takes the later value as cmd does, and
+  any other line of your own (a `REM` note, for example) is kept as written under "Your own lines".
+
 🏷️ Released as **v0.1.85**
 
 🖱️ **Mouse steering: the mouse works the menus too**

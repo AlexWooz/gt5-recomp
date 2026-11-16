@@ -357,7 +357,12 @@ namespace Gt5Launcher
         public Dictionary<string, string> V = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         readonly string path;
         const string SpeedMark = "REM Speed";
-        static readonly Regex SetLine = new Regex("^\\s*set\\s+\"([A-Za-z0-9_]+)=(.*)\"\\s*$", RegexOptions.IgnoreCase);
+        const string OwnMark = "REM Your own lines";
+        // set "NAME=value", and set NAME=value without the quotes, which cmd takes just the same
+        // (before v0.1.86 a line without them was dropped at the next save).
+        static readonly Regex SetLine = new Regex("^\\s*@?set\\s+(?:\"([A-Za-z0-9_]+)=(.*)\"|([A-Za-z0-9_]+)=(.*))\\s*$", RegexOptions.IgnoreCase);
+        // The Speed lines Save() writes after SpeedMark: the launcher's, not the player's.
+        static readonly string[] SpeedKeys = { "LD_WATCH", "LD_WATCH_PRIORITY", "LD_WATCH_DRAW" };
 
         // The values as the file had them when it was last read or written. A value the launcher hasn't
         // changed since then gives way to an edit made by hand meanwhile: the launcher stays open (hidden)
@@ -374,23 +379,51 @@ namespace Gt5Launcher
             Base = new Dictionary<string, string>(V, StringComparer.OrdinalIgnoreCase);
         }
 
-        // The set "NAME=value" lines of a settings.bat. The Speed lines Save() adds at the end are not
-        // settings of their own. v0.1.20-v0.1.22 wrote them with no marker, so they were read back as
-        // LD_WATCH=2 and 30 fps stayed on after Speed was set back: the first value of a key counts, and
+        static bool IsSpeedKey(string k)
+        {
+            foreach (var s in SpeedKeys) if (s.Equals(k, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+        // Lines the launcher writes itself (now or in earlier versions), so not the player's own.
+        static bool LauncherLine(string t)
+        {
+            return t.Length == 0 || t.Equals("@echo off", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("REM Written by the GT5 Launcher", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("REM launcher, or edit them here", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("REM Lines of your own", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith(OwnMark, StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith(SpeedMark, StringComparison.OrdinalIgnoreCase);
+        }
+
+        static Dictionary<string, string> Read(string path) { return Read(path, null); }
+
+        // The set lines of a settings.bat; any other line of the player's own goes to `own` as written.
+        // A key set twice takes the later value, as cmd does: a line added at the end of the file wins.
+        // The Speed lines Save() adds after SpeedMark are the launcher's own, but reading goes on past
+        // them (before v0.1.86 it stopped there, and a player's lines added below them were dropped).
+        // v0.1.20-v0.1.22 wrote the Speed lines with no marker, so they were read back as LD_WATCH=2 and
+        // 30 fps stayed on after Speed was set back: for those keys the first value counts, and
         // LD_WATCH_PRIORITY that came with such a repeated LD_WATCH is dropped.
-        static Dictionary<string, string> Read(string path)
+        static Dictionary<string, string> Read(string path, List<string> own)
         {
             var r = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            bool speedLines = false;
+            bool speedSection = false, speedLines = false;
             foreach (var line in File.ReadAllLines(path))
             {
-                if (line.TrimStart().StartsWith(SpeedMark, StringComparison.OrdinalIgnoreCase)) break;
+                string t = line.Trim();
+                if (t.StartsWith(SpeedMark, StringComparison.OrdinalIgnoreCase)) { speedSection = true; continue; }
                 var m = SetLine.Match(line);
-                if (!m.Success) continue;
-                string k = m.Groups[1].Value;
-                if (r.ContainsKey(k)) { if (k.Equals("LD_WATCH", StringComparison.OrdinalIgnoreCase)) speedLines = true; continue; }
-                if (speedLines && k.Equals("LD_WATCH_PRIORITY", StringComparison.OrdinalIgnoreCase)) continue;
-                r[k] = m.Groups[2].Value;
+                if (!m.Success) { if (own != null && !LauncherLine(t)) own.Add(line.TrimEnd()); continue; }
+                bool quoted = m.Groups[1].Success;
+                string k = quoted ? m.Groups[1].Value : m.Groups[3].Value;
+                string v = quoted ? m.Groups[2].Value : m.Groups[4].Value.TrimEnd();
+                if (IsSpeedKey(k))
+                {
+                    if (speedSection) continue;
+                    if (r.ContainsKey(k)) { if (k.Equals("LD_WATCH", StringComparison.OrdinalIgnoreCase)) speedLines = true; continue; }
+                    if (speedLines && k.Equals("LD_WATCH_PRIORITY", StringComparison.OrdinalIgnoreCase)) continue;
+                }
+                r[k] = v;
             }
             return r;
         }
@@ -428,15 +461,23 @@ namespace Gt5Launcher
         public void Save()
         {
             Merge();
+            // Lines of the player's own that aren't settings (comments, anything else) are kept as written.
+            var own = new List<string>();
+            try { if (File.Exists(path)) Read(path, own); } catch { }
             var sb = new StringBuilder();
             sb.AppendLine("@echo off");
             sb.AppendLine("REM Written by the GT5 Launcher; play.bat runs it after its own defaults. Change these in the");
             sb.AppendLine("REM launcher, or edit them here: one set \"NAME=value\" per line, an empty value means not set.");
-            sb.AppendLine("REM Lines of your own in that form (like PS3_WHEEL_PEDALS) are kept; other lines are not.");
+            sb.AppendLine("REM Lines of your own (like PS3_WHEEL_PEDALS) are kept, wherever you add them.");
             var keys = new List<string>(V.Keys);
             keys.Sort(StringComparer.OrdinalIgnoreCase);
             foreach (var k in keys)
                 sb.AppendLine(string.Format("set \"{0}={1}\"", k, V[k].Replace("\"", "")));
+            if (own.Count > 0)
+            {
+                sb.AppendLine(OwnMark + ", as you wrote them:");
+                foreach (var l in own) sb.AppendLine(l);
+            }
             // Speed (GT5_SPEED) turns into the renderer's own switches, after the keys so it wins.
             // GT5 counts time in frames: these draw fewer frames instead of letting the game slow down.
             string speed = Get("GT5_SPEED");

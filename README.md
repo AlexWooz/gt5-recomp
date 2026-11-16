@@ -383,8 +383,8 @@ What hasn't been checked: force feedback on a real wheel, including which way th
 and attach `GT5\logs\play.err`: its `[wheel]` lines say which wheel was found, its axes, and what the
 game asked of it.
 
-If something is off, add a line to `GT5\settings.bat` (next to the other `set` lines; updates replace
-`play.bat`, and since v0.1.67 the launcher keeps lines you add to `settings.bat`):
+If something is off, add a line to `GT5\settings.bat` (right-click it > Edit; updates replace
+`play.bat`, and the launcher keeps lines you add to `settings.bat`, anywhere in it, since v0.1.86):
 
 | Problem | Fix |
 |---|---|

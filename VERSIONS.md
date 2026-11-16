@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.86](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.86) | 16 Nov 2026 | Launcher: your own lines in settings.bat are kept wherever and however you write them (lines after the Speed block or without quotes were dropped) |
 | [v0.1.85](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.85) | 16 Nov 2026 | Mouse steering: at the menus left click = OK, right click = back, the mouse wheel moves up/down (PS3_MOUSE_MENU=0 off) |
 | [v0.1.84](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.84) | 16 Nov 2026 | Keyboard: an arrow-key tap moves one place in the menus (it moved two), the keyboard works with a pad connected, finer mouse steering speed (down to 1%, launcher number box) |
 | [v0.1.83](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.83) | 16 Nov 2026 | Build fix: v0.1.82 was missing GT5/src/gt5_threadstats.cpp |
