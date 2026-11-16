@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.79](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.79) | 16 Nov 2026 | Installer: a Visual Studio without the Windows SDK gets it added instead of a failed build (#35) |
 | [v0.1.78](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.78) | 16 Nov 2026 | Texture dumping and HD texture packs (DirectX 12): PS3_TEX_DUMP=1 writes the game's textures to GT5\textures\dump, files named by the same hash in GT5\textures\replace are used instead at any size |
 | [v0.1.77](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.77) | 16 Nov 2026 | Vulkan: exposure read from the right surface (no more washed-out races), async readbacks and shader prebuild on by default (#38, #20) |
 | [v0.1.76](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.76) | 16 Nov 2026 | Linux: your own keyboard keys (PS3_KEYS) and the small-CPU setting up to 12 threads, as on Windows |

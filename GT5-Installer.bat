@@ -304,6 +304,24 @@ function Find-VsClang {
     }
     return $null
 }
+function Test-WinSdk {
+    # The Windows SDK (kernel32.lib and the other Windows libraries the build links with), shared by every
+    # Visual Studio on the PC: one installed without it stopped with "could not open 'kernel32.lib'" (#35).
+    foreach ($r in @("${env:ProgramFiles(x86)}\Windows Kits\10\Lib", "$env:ProgramFiles\Windows Kits\10\Lib")) {
+        foreach ($d in @(Get-ChildItem -LiteralPath $r -Directory -ErrorAction SilentlyContinue)) {
+            if (Test-Path (Join-Path $d.FullName "um\x64\kernel32.lib")) { return $true }
+        }
+    }
+    return $false
+}
+function Get-VsModifyAdds([string]$path, [bool]$sdk) {
+    # What to add to an installed Visual Studio. The C++ workload is VCTools in the Build Tools and
+    # NativeDesktop in Community, Professional and Enterprise.
+    $wl = if ($path -match 'BuildTools') { "Microsoft.VisualStudio.Workload.VCTools" } else { "Microsoft.VisualStudio.Workload.NativeDesktop" }
+    $parts = @($wl) + @($VsParts | Select-Object -Skip 1)
+    if ($sdk) { $parts += "Microsoft.VisualStudio.Component.Windows11SDK.22621" }
+    return ($parts | ForEach-Object { "--add $_" }) -join " "
+}
 
 # ---- RPCS3, as an unlocking tool ---------------------------------------------------------------------
 function Get-Rpcs3([string]$dir) {
@@ -454,19 +472,24 @@ if (Find-Python) { Say "  Python: ok" } else {
     Install-WithWinget "Python.Python.3.11" "Python 3.11" @("--silent")
     if (-not (Find-Python)) { Stop-Install "Python didn't install. Install Python 3.11 from https://www.python.org (tick 'Add python.exe to PATH') and run this again." }
 }
-if (Find-VsClang) { Say "  C++ build tools with Clang: ok" } else {
+$vsClang = Find-VsClang
+$sdkOk = Test-WinSdk
+if ($vsClang -and $sdkOk) { Say "  C++ build tools with Clang: ok" } else {
     $adds = ($VsParts | ForEach-Object { "--add $_" }) -join " "
-    $any = if (Test-Path $VsWhere) { & $VsWhere -latest -products * -property installationPath } else { $null }
+    $any = if ($vsClang) { $vsClang } elseif (Test-Path $VsWhere) { & $VsWhere -latest -products * -property installationPath } else { $null }
     if ($any) {
-        # Visual Studio is there without the Clang tools: add them to it.
-        Say "  adding the Clang tools to your Visual Studio (Windows may ask for permission; 5-15 minutes)..." "Yellow"
+        # Visual Studio is there without the Clang tools or without the Windows SDK: add what's missing to it.
+        $what = if ($vsClang) { "the Windows SDK" } elseif ($sdkOk) { "the Clang tools" } else { "the Clang tools and the Windows SDK" }
+        Say "  adding $what to your Visual Studio (Windows may ask for permission; 5-15 minutes)..." "Yellow"
         $vsSetup = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
-        Start-Process -FilePath $vsSetup -ArgumentList "modify --installPath `"$any`" $adds --includeRecommended --passive --norestart" -Wait -Verb RunAs
+        $modAdds = Get-VsModifyAdds $any (-not $sdkOk)
+        Start-Process -FilePath $vsSetup -ArgumentList "modify --installPath `"$any`" $modAdds --includeRecommended --passive --norestart" -Wait -Verb RunAs
     } else {
         Say "  Microsoft's C++ build tools are about 7 GB and take 10-20 minutes." "Yellow"
         Install-WithWinget "Microsoft.VisualStudio.2022.BuildTools" "Microsoft C++ Build Tools" @("--override", "--wait --passive --norestart $adds --includeRecommended")
     }
     if (-not (Find-VsClang)) { Stop-Install "the C++ build tools with Clang aren't installed. In the Visual Studio Installer, add 'Desktop development with C++' and 'C++ Clang tools for Windows', then run this again." }
+    if (-not (Test-WinSdk)) { Stop-Install "the Windows SDK isn't installed, and the build needs its kernel32.lib. In the Visual Studio Installer, choose Modify, tick 'Windows 11 SDK' under Individual components, then run this again." }
 }
 
 # ---- 2. The port's code -------------------------------------------------------------------------------

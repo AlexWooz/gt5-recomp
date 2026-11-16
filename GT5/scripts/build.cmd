@@ -23,6 +23,10 @@ if not defined VS goto no_vs
 echo Building with the Visual Studio in "%VS%"
 call "%VS%\VC\Auxiliary\Build\vcvars64.bat" >nul
 if errorlevel 1 exit /b 1
+REM The Windows SDK (kernel32.lib and the other Windows libraries): vcvars64.bat puts its folder in LIB
+REM when it is installed. A Visual Studio without it stopped at CMake's first test with "could not open
+REM 'kernel32.lib'" (#35).
+for %%L in (kernel32.lib) do if "%%~$LIB:L"=="" goto no_sdk
 set "CLANGCL=%VS:\=/%/VC/Tools/Llvm/x64/bin/clang-cl.exe"
 :configure
 REM add_vulkan.ps1 builds SDL2 and glslang with this same compiler: it asks for the environment alone.
@@ -64,6 +68,18 @@ echo and neither were the portable tools from get-toolchain.ps1. (A Visual Studi
 echo but no VC\Auxiliary\Build\vcvars64.bat is incomplete: repair it in the Visual Studio Installer.)
 echo Install them with the Visual Studio Installer (see Requirements in README.md), or, to keep C: free,
 echo run get-toolchain.ps1 in the gt5-recomp folder. Then run this again.
+exit /b 1
+
+:no_sdk
+REM get-toolchain.ps1's tools bring their own Windows SDK: use them when they're there.
+set "TC="
+if exist "%~dp0..\..\.gt5\toolchain-path.txt" set /p TC=<"%~dp0..\..\.gt5\toolchain-path.txt"
+if defined TC if exist "%TC%\gt5-toolchain.txt" goto portable
+set "TC=%~dp0..\..\..\toolchain"
+if exist "%TC%\gt5-toolchain.txt" goto portable
+echo The Visual Studio in "%VS%" has no Windows SDK: kernel32.lib and the other Windows libraries
+echo the build links with. Add it in the Visual Studio Installer: Modify, Individual components, tick
+echo "Windows 11 SDK" (any version), then run this again. GT5-Installer.bat adds it by itself.
 exit /b 1
 
 :portable

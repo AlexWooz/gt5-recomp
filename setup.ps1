@@ -97,7 +97,19 @@ function Find-Toolchain {
     $cands += Join-Path (Split-Path $base -Parent) "toolchain"
     foreach ($c in $cands) { if ($c -and (Test-Path -LiteralPath (Join-Path $c "gt5-toolchain.txt"))) { return $c } }
 }
-if ($vsOk) { Ok "Visual Studio with the C++ Clang tools" }
+# The Windows SDK (kernel32.lib and the other Windows libraries), shared by every Visual Studio on the PC: one
+# installed without it stopped the build with "could not open 'kernel32.lib'" (#35). get-toolchain.ps1's tools
+# bring their own.
+$sdkOk = $false
+foreach ($r in @("${env:ProgramFiles(x86)}\Windows Kits\10\Lib", "$env:ProgramFiles\Windows Kits\10\Lib")) {
+    foreach ($d in @(Get-ChildItem -LiteralPath $r -Directory -ErrorAction SilentlyContinue)) {
+        if (Test-Path (Join-Path $d.FullName "um\x64\kernel32.lib")) { $sdkOk = $true }
+    }
+}
+if ($vsOk -and -not $sdkOk -and -not (Find-Toolchain)) {
+    Todo "Windows SDK" "Your Visual Studio has the Clang tools but no Windows SDK (kernel32.lib and the other Windows libraries the build needs). In the Visual Studio Installer choose Modify, tick 'Windows 11 SDK' under Individual components, then run setup.ps1 again. GT5-Installer.bat adds it by itself."
+}
+elseif ($vsOk -and $sdkOk) { Ok "Visual Studio with the C++ Clang tools" }
 else {
     $tc = Find-Toolchain
     if (-not $tc) {

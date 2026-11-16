@@ -9,6 +9,15 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.79**
+
+🧰 **Installer: a Visual Studio without the Windows SDK gets it added, instead of a failed build (#35)**
+- A Visual Studio with the Clang tools but no Windows SDK stopped the build at CMake's first test with
+  `could not open 'kernel32.lib'`. The installer now checks for the SDK as well and adds "Windows 11
+  SDK" to that Visual Studio, with the C++ workload of its own edition (Community, Professional and
+  Enterprise were asked for the Build Tools' one before). `setup.ps1` reports a missing SDK, and
+  `build.cmd` says what to add, or uses get-toolchain.ps1's tools when they're there.
+
 🏷️ Released as **v0.1.78**
 
 🖼️ **Texture dumping and HD texture packs (DirectX 12)**
