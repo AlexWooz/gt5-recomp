@@ -319,7 +319,9 @@ If something is off, add a line to `play.bat` (next to the other `set` lines):
 | You don't want it | `set "PS3_WHEEL=off"` |
 
 Buttons and pedals are set up for Logitech's G29 / G923 / G920 out of the box; other wheels steer and
-get force feedback the same way but may need the pedal and button lines above.
+get force feedback the same way but may need the pedal and button lines above. Thrustmaster wheels get
+Thrustmaster's pedal layout (accelerator, brake, clutch), in the control panel's normal pedal mode and in
+combined mode alike; their buttons still follow the G29's numbers.
 
 **Q: Does it support widescreen and ultrawide?**
 

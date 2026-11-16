@@ -132,7 +132,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **15 Nov 2026:** the check that an SPU job's code is unchanged costs half as much, a little less CPU for the
+- **15 Nov 2026:** sound on busy and small CPUs: no more 85 ms holes, and the sound no longer runs up to 80 ms late
+  (the 2.11 "audio lag", v0.1.68); the check that an SPU job's code is unchanged costs half as much, a little less CPU for the
   sound on small CPUs (v0.1.66); on 6-core/12-thread CPUs the game's waiting threads sleep instead of spinning, as on
   8-thread ones: 5-14% less CPU at the same frame rate (v0.1.65); Linux and the Vulkan renderer: races no longer start far too dark, and car reflections and
   shadows are drawn in full (v0.1.64); less CPU for every frame on small CPUs and the Steam Deck, from AlexWooz's pull request #33,

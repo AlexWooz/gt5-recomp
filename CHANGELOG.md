@@ -9,6 +9,31 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.68**
+
+🔊 **Sound on busy and small CPUs: no more 85 ms holes, and the sound no longer runs late** (the "audio lag"
+reported on Discord with 2.11; it shows on any version once every core is busy)
+- GT5 makes its sound in blocks of 5.33 ms on one thread (a chain of 13 SPU jobs) and keeps two blocks ready
+  ahead of the sound card. When that thread lost the CPU for longer than that, the port played the missing block
+  as silence and moved on. GT5's late blocks then landed behind it: the port played the whole 85 ms ring empty
+  before it came round to them, and from then on everything sounded up to 80 ms late, until the next hole.
+- Two changes, no re-lift:
+  - The thread that runs the sound chain now runs above normal priority, so the SPU workers and waiting
+    threads, all at normal priority, no longer hold it up when every core is busy.
+  - When a block is still late, the port waits for it (that 5.33 ms plays silence, at most 16 in a row)
+    instead of reading past it, so GT5 stays exactly two blocks ahead and nothing plays late.
+- Measured on 4 efficient cores of the test PC with another game running, Arcade races at 6-12 fps, each change
+  switched on and off every 10 s in one race:
+  - priority: silent periods in the race 35% → 6% (in the menus too: 253 → 64 dropouts a minute);
+  - waiting for late blocks, priority on in both halves: silence 7.6% → 2.1%, 85 ms holes 51 → 0, and the time
+    the sound ran late (GT5 five or more blocks ahead, 27-85 ms) 32% → about 1%;
+  - the frame rate was the same both ways.
+- `SPURS_JC_PRIO=0` and `AUDIO_HOLD_MAX=0` in `settings.bat` bring back the old behaviour. When the port had to
+  wait for sound, `play.err` says so once a minute (`[audio] waited for late sound blocks ...`).
+- Also new in `play.err`: GT5's sound thread stops listening for the sound clock after a second without it, and
+  its sound then comes in one-second bursts for the rest of the session. If that happens, a line now says when
+  the clock last reached it. If you see `notify queue ... removed` in your log, please send it.
+
 🏷️ Released as **v0.1.67**
 
 🧰 **Launcher: lines you add to `settings.bat` by hand are kept**

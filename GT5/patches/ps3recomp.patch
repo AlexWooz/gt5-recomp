@@ -109,7 +109,6 @@ index da9c5928..692debc8 100644
 +
  #endif /* PS3EMU_THREAD_NAME_H */
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index 02b751b2..be61c533 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
 @@ -14,6 +14,7 @@
@@ -120,16 +119,47 @@ index 02b751b2..be61c533 100644
  #include "../../runtime/ppu/ppu_memory.h"   /* vm_base, vm_read64, vm_write32 */
  #include <stdio.h>
  #include <string.h>
-@@ -128,6 +129,8 @@ typedef struct {
+@@ -128,6 +129,11 @@
      /* For address reporting to guest */
      u64                  port_addr;      /* guest-visible buffer address */
      u64                  read_idx_addr;  /* guest-visible read index address */
 +    int                  level_set;      /* cellAudioSetPortLevel has been called */
 +    float                set_level;
++    int                  active;         /* the last block read held sound */
++    u32                  held;           /* periods waited in a row for its next block */
++    u64                  held_total;     /* periods waited in all (they play, so timestamps count them) */
  } AudioPortSlot;
  
  static int            s_audio_initialized = 0;
-@@ -165,6 +168,7 @@ static float s_mix_buffer[CELL_AUDIO_BLOCK_SAMPLES * 2];
+@@ -137,11 +143,27 @@
+ typedef struct {
+     int  in_use;
+     u64  key;
++    u64  last_us;     /* when its last tick event went in (host us), for the log */
++    u32  pushed;      /* tick events that went in */
++    u32  failed;      /* tick events with no queue to go to, or a full one */
+ } AudioNotifySlot;
+ static AudioNotifySlot s_notify_queues[CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES];
+ 
+ /* Timestamp anchor for cellAudioGetPortTimestamp (microseconds, set at init) */
+ static u64            s_audio_start_us = 0;
++
++/* The same clock, now. */
++static u64 audio_now_us(void)
++{
++#ifdef _WIN32
++    LARGE_INTEGER f, c;
++    QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c);
++    return (u64)(c.QuadPart / f.QuadPart) * 1000000ULL + (u64)(c.QuadPart % f.QuadPart) * 1000000ULL / (u64)f.QuadPart;
++#else
++    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
++    return (u64)ts.tv_sec * 1000000ULL + (u64)ts.tv_nsec / 1000ULL;
++#endif
++}
+ 
+ /* Mixing thread */
+ static unsigned long long g_audio_dropped;   /* frames the device had no room for */
+@@ -165,6 +187,7 @@
  #if AUDIO_BACKEND_SDL2
  
  static SDL_AudioDeviceID s_sdl_audio_dev = 0;
@@ -137,7 +167,7 @@ index 02b751b2..be61c533 100644
  
  static int audio_backend_init(void)
  {
-@@ -189,6 +193,7 @@ static int audio_backend_init(void)
+@@ -189,6 +212,7 @@
          return -1;
      }
  
@@ -145,7 +175,117 @@ index 02b751b2..be61c533 100644
      SDL_PauseAudioDevice(s_sdl_audio_dev, 0); /* Start playback */
      return 0;
  }
-@@ -467,6 +472,7 @@ static void audio_mix_one_block(void)
+@@ -433,12 +457,107 @@
+     return f;
+ }
+ 
+-/* Mix one block from all active ports into s_mix_buffer (stereo float) */
+-static void audio_mix_one_block(void)
++#ifdef _WIN32   /* a Windows debugging aid (it reads the performance counter) */
++/* AUDIO_RINGLOG=<file>: one line per block read: time in us, port, read counter, slot, how many
++ * blocks from this one on already hold data (the writer's lead), the ring map, the PS3_AB_PERIOD
++ * phase of PS3_AB_WHAT=jcprio or audhold (-1 when neither is alternated), and "H" for a period
++ * spent waiting for a late block (nothing read). */
++static void audio_ringlog(int p, const AudioPortSlot* port, u32 block_idx, int held)
++{
++    static FILE* rl = (FILE*)-1;
++    if (rl == (FILE*)-1) { const char* e = getenv("AUDIO_RINGLOG"); rl = e ? fopen(e, "w") : NULL; }
++    if (!rl) return;
++    const u32 nch = (u32)port->param.nChannel, nblock = (u32)port->param.nBlock;
++    LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f);
++    u32 lead = 0, b;
++    for (b = 0; b < nblock; b++) {
++        const float* bp = port->buffer + ((block_idx + b) % nblock) * CELL_AUDIO_BLOCK_SAMPLES * nch;
++        int nz = 0;
++        for (u32 s2 = 0; s2 < CELL_AUDIO_BLOCK_SAMPLES * nch; s2++)
++            if (bp[s2] != 0.0f) { nz = 1; break; }
++        if (!nz) break;
++        lead++;
++    }
++    char map[36]; u32 m;
++    for (m = 0; m < nblock && m < 32; m++) {
++        const float* bp = port->buffer + m * CELL_AUDIO_BLOCK_SAMPLES * nch;
++        int nz = 0;
++        for (u32 s2 = 0; s2 < CELL_AUDIO_BLOCK_SAMPLES * nch; s2++)
++            if (bp[s2] != 0.0f) { nz = 1; break; }
++        map[m] = nz ? '#' : '.';
++    }
++    map[m] = 0;
++    extern int ps3_ab_on(const char* what);
++    int ab = ps3_ab_on("jcprio");
++    if (ab < 0) ab = ps3_ab_on("audhold");
++    fprintf(rl, "%llu %d %llu %u %u %s %d%s%c", (unsigned long long)(q.QuadPart * 1000000 / f.QuadPart), p,
++            (unsigned long long)port->read_index, block_idx, lead, map, ab, held ? " H" : "", 10);
++    if ((port->read_index & 255) == 0) fflush(rl);
++}
++#endif
++
++/* Periods spent waiting for a late block: in all, and the longest wait (for the log). */
++static unsigned long long s_audio_holds, s_audio_hold_runs;
++static u32 s_audio_hold_longest;
++
++/* Mix one block from all active ports into s_mix_buffer (stereo float). Returns 1 when the period
++ * was spent waiting for a late writer instead: silence, nothing read, and no notify to send. */
++static int audio_mix_one_block(void)
+ {
+     memset(s_mix_buffer, 0, sizeof(s_mix_buffer));
+ 
+     mutex_lock(&s_audio_mutex);
++
++    /* A writer that is late gets its block waited for. GT5 writes its blocks in order, one per
++     * notify event, two blocks ahead of the reader. When the SPU job chain that makes them lost the
++     * CPU for longer than that (every core busy), the reader read the empty slot and moved on, the
++     * late blocks landed behind the reader, the whole ring played out empty before it came round to
++     * them (an 85 ms hole), and from then on the sound ran up to 80 ms late. Now, while a port that
++     * was playing finds its next block not yet written, the period plays silence and nothing moves:
++     * no block read, the read index unchanged, no notify sent, so when the writer catches up its
++     * lead is what it was. At most AUDIO_HOLD_MAX periods in a row (default 16, one ring of GT5's;
++     * 0 = never wait, the old behaviour), so a port that went quiet by writing zeros is read on.
++     * PS3_AB_WHAT=audhold alternates it with the old behaviour. */
++    {
++        static int hold_max = -1;
++        /* Capped at 64 (340 ms): no tick goes out while waiting, and GT5's tick thread gives up on
++         * its queue after a second without one. */
++        if (hold_max < 0) { const char* e = getenv("AUDIO_HOLD_MAX"); hold_max = e && *e ? atoi(e) : 16;
++                            if (hold_max > 64) hold_max = 64; }
++        extern int ps3_ab_on(const char* what);
++        int hold = -1;
++        if (hold_max > 0 && ps3_ab_on("audhold") != 0) {
++            for (int p = 0; p < CELL_AUDIO_PORT_MAX && hold < 0; p++) {
++                const AudioPortSlot* port = &s_ports[p];
++                if (!port->in_use || !port->running || !port->buffer || !port->active ||
++                    port->held >= (u32)hold_max)
++                    continue;
++                const u32 nch = (u32)port->param.nChannel, nblock = (u32)port->param.nBlock;
++                const u32* w = (const u32*)(port->buffer +
++                                            (u32)(port->read_index % nblock) * CELL_AUDIO_BLOCK_SAMPLES * nch);
++                u32 any = 0;
++                for (u32 s = 0; s < CELL_AUDIO_BLOCK_SAMPLES * nch && !any; s++) any = w[s];
++                if (!any) hold = p;
++            }
++        }
++        if (hold >= 0) {
++            for (int p = 0; p < CELL_AUDIO_PORT_MAX; p++) {
++                AudioPortSlot* port = &s_ports[p];
++                if (!port->in_use || !port->running || !port->buffer) continue;
++                port->held++;
++                port->held_total++;
++#ifdef _WIN32
++                audio_ringlog(p, port, (u32)(port->read_index % (u32)port->param.nBlock), 1);
++#endif
++            }
++            const u32 h = s_ports[hold].held;
++            s_audio_holds++;
++            if (h == 1) s_audio_hold_runs++;
++            if (h > s_audio_hold_longest) s_audio_hold_longest = h;
++            mutex_unlock(&s_audio_mutex);
++            return 1;
++        }
++    }
+ 
+     for (int p = 0; p < CELL_AUDIO_PORT_MAX; p++) {
+         AudioPortSlot* port = &s_ports[p];
+@@ -467,6 +586,7 @@
          float level = port->param.level;
          if (level <= 0.0f) level = 1.0f;
          if (level > 1.0f) level = 1.0f;
@@ -153,45 +293,23 @@ index 02b751b2..be61c533 100644
  
          /* Read one block at the current read_index */
          u32 block_idx = (u32)(port->read_index % nblock);
-@@ -492,6 +498,37 @@ static void audio_mix_one_block(void)
+@@ -492,6 +612,15 @@
                          p, (unsigned long long)port->read_index, block_idx, map);
              } } }
  
-+        /* AUDIO_RINGLOG=<file>: one line per block read: time in us, read counter, slot,
-+         * and how many blocks from this one on already hold data (the writer's lead). */
-+#ifdef _WIN32   /* a Windows debugging aid (it reads the performance counter) */
-+        { static FILE* _rl = (FILE*)-1;
-+          if (_rl == (FILE*)-1) { const char* e = getenv("AUDIO_RINGLOG"); _rl = e ? fopen(e, "w") : NULL; }
-+          if (_rl) {
-+              LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f);
-+              u32 lead = 0, b;
-+              for (b = 0; b < nblock; b++) {
-+                  const float* bp = port->buffer + ((block_idx + b) % nblock) * CELL_AUDIO_BLOCK_SAMPLES * nch;
-+                  int nz = 0;
-+                  for (u32 s2 = 0; s2 < CELL_AUDIO_BLOCK_SAMPLES * nch; s2++)
-+                      if (bp[s2] != 0.0f) { nz = 1; break; }
-+                  if (!nz) break;
-+                  lead++;
-+              }
-+              char map[36]; u32 m;
-+              for (m = 0; m < nblock && m < 32; m++) {
-+                  const float* bp = port->buffer + m * CELL_AUDIO_BLOCK_SAMPLES * nch;
-+                  int nz = 0;
-+                  for (u32 s2 = 0; s2 < CELL_AUDIO_BLOCK_SAMPLES * nch; s2++)
-+                      if (bp[s2] != 0.0f) { nz = 1; break; }
-+                  map[m] = nz ? '#' : '.';
-+              }
-+              map[m] = 0;
-+              fprintf(_rl, "%llu %d %llu %u %u %s%c", (unsigned long long)(q.QuadPart * 1000000 / f.QuadPart), p,
-+                      (unsigned long long)port->read_index, block_idx, lead, map, 10);
-+              if ((port->read_index & 255) == 0) fflush(_rl);
-+          } }
++#ifdef _WIN32
++        audio_ringlog(p, port, block_idx, 0);
 +#endif
++        /* Does the block hold anything (any non-zero word)? Decides whether the port is playing,
++         * for the late-writer wait above. */
++        { const u32* w = (const u32*)src; u32 any = 0;
++          for (u32 s = 0; s < CELL_AUDIO_BLOCK_SAMPLES * nch && !any; s++) any = w[s];
++          port->active = any != 0; port->held = 0; }
 +
          for (u32 s = 0; s < CELL_AUDIO_BLOCK_SAMPLES; s++) {
              float left, right;
              if (nch >= 2) {
-@@ -527,16 +564,30 @@ static void audio_mix_one_block(void)
+@@ -527,22 +656,53 @@
           * ring slot to the guest. SurMixer multiplies this value by the block
           * size directly; an unbounded counter walks beyond the audio buffer. */
          port->read_index++;
@@ -218,16 +336,57 @@ index 02b751b2..be61c533 100644
      for (u32 i = 0; i < CELL_AUDIO_BLOCK_SAMPLES * 2; i++) {
 -        if (s_mix_buffer[i] > 1.0f) s_mix_buffer[i] = 1.0f;
 -        if (s_mix_buffer[i] < -1.0f) s_mix_buffer[i] = -1.0f;
+-    }
 +        const float x = s_mix_buffer[i], a = x < 0.0f ? -x : x;
 +        if (a > 0.75f) {
 +            const float over = (a - 0.75f) / 0.25f;
 +            const float y = 0.75f + 0.25f * over / (1.0f + over);
 +            s_mix_buffer[i] = x < 0.0f ? -y : y;
 +        }
++    }
++    return 0;
+ }
+ 
+ /* ---------------------------------------------------------------------------
+  * Mixing thread
+  * -----------------------------------------------------------------------*/
++
++/* Once a minute, if the reader had to wait for late blocks: how often. Many waits mean the title's
++ * sound work runs short of CPU (on GT5, its SPU job chain): in play.err for reports. */
++static void audio_hold_report(void)
++{
++    static unsigned n;
++    static unsigned long long h0, r0;
++    if (++n < 11250) return;   /* 60 s of blocks */
++    n = 0;
++    if (s_audio_holds != h0)
++        fprintf(stderr, "[audio] waited for late sound blocks %llu times in the last minute, %llu periods "
++                "(%.0f ms) in all, longest %u\n", s_audio_hold_runs - r0, s_audio_holds - h0,
++                (double)(s_audio_holds - h0) * CELL_AUDIO_BLOCK_SAMPLES * 1000.0 / CELL_AUDIO_SAMPLE_RATE,
++                (unsigned)s_audio_hold_longest);
++    h0 = s_audio_holds; r0 = s_audio_hold_runs; s_audio_hold_longest = 0;
++}
+ 
+ static void audio_notify_event_queues(void)
+ {
+@@ -553,9 +713,13 @@
+     for (int i = 0; i < CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES; i++) {
+         if (!s_notify_queues[i].in_use) continue;
+         uint32_t qid = sys_event_find_queue_by_key(s_notify_queues[i].key);
+-        if (qid)
+-            sys_event_queue_push_by_id(qid, s_notify_queues[i].key,
+-                                       0 /*CELL_AUDIO_EVENT_MIX*/, 0, 0);
++        if (qid && sys_event_queue_push_by_id(qid, s_notify_queues[i].key,
++                                              0 /*CELL_AUDIO_EVENT_MIX*/, 0, 0) == 0) {
++            s_notify_queues[i].pushed++;
++            s_notify_queues[i].last_us = audio_now_us();
++        } else {
++            s_notify_queues[i].failed++;
++        }
      }
  }
  
-@@ -565,6 +616,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -565,6 +729,7 @@
  {
      (void)arg;
      ps3_thread_name("audio mix");
@@ -235,7 +394,7 @@ index 02b751b2..be61c533 100644
      printf("[cellAudio] Mixing thread started\n");
  
      /* The device deadline is every few ms and the guest threads keep every
-@@ -587,10 +639,33 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -587,10 +752,33 @@
       * With no device, pace on the performance counter instead. */
      LARGE_INTEGER qf, q0; QueryPerformanceFrequency(&qf); QueryPerformanceCounter(&q0);
      unsigned long long blocks = 0;
@@ -269,7 +428,29 @@ index 02b751b2..be61c533 100644
          /* Device queue under half a block: it is about to play silence (an
           * audible click/stutter). AUDIO_RATE reports how often. */
          if (room >= 0 && blocks > 64 &&
-@@ -649,22 +724,53 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -608,8 +796,8 @@
+                     (long long)(blocks * CELL_AUDIO_BLOCK_SAMPLES * qf.QuadPart / CELL_AUDIO_SAMPLE_RATE);
+         }
+         blocks++;
+-        /* Mix and submit one block */
+-        audio_mix_one_block();
++        /* Mix and submit one block (silence while waiting for a late one) */
++        const int held = audio_mix_one_block();
+         /* AUDIO_PEAK=1: report the mixed block's peak amplitude periodically so
+          * "is any port producing sound" is answerable (LBP Bink movie audio). */
+         { static int _ap = -1; if (_ap < 0) _ap = getenv("AUDIO_PEAK") ? 1 : 0;
+@@ -641,30 +829,63 @@
+ #endif
+                 n = z = 0; d0 = g_audio_dropped; u0 = g_audio_underruns; t0 = now; } } }
+ 
+-        /* Notify event queues */
+-        audio_notify_event_queues();
++        /* Notify event queues: one per block read, none while waiting for a late one */
++        if (!held) audio_notify_event_queues();
++        audio_hold_report();
+     }
+ 
+     printf("[cellAudio] Mixing thread stopped\n");
      return 0;
  }
  #else
@@ -294,6 +475,7 @@ index 02b751b2..be61c533 100644
 +    clock_gettime(CLOCK_MONOTONIC, &ts);
 +    long long due = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
      while (s_mix_thread_running) {
+-        audio_mix_one_block();
 +        clock_gettime(CLOCK_MONOTONIC, &ts);
 +        const long long now = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 +        const int device = audio_backend_room() >= 0;
@@ -309,9 +491,9 @@ index 02b751b2..be61c533 100644
 +        /* More than 50 ms behind (a debugger stop, a stalled device): no burst to catch up. */
 +        if (now - due > 50000000LL) due = now;
 +        due += block_ns + (device ? (queued - target) * 1000000000LL / CELL_AUDIO_SAMPLE_RATE / 32 : 0);
-         audio_mix_one_block();
++        const int held = audio_mix_one_block();
          audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
-         audio_notify_event_queues();
+-        audio_notify_event_queues();
 -
 -        u32 queued = audio_backend_queued_samples();
 -        if (queued > CELL_AUDIO_BLOCK_SAMPLES * 4) {
@@ -319,6 +501,8 @@ index 02b751b2..be61c533 100644
 -        } else {
 -            usleep(2000);
 -        }
++        if (!held) audio_notify_event_queues();
++        audio_hold_report();
 +        /* AUDIO_RATE=1: blocks mixed per second (187.5 is real time) and the device queue. */
 +        { static int on = -1; static long long t0; static unsigned n;
 +          if (on < 0) on = getenv("AUDIO_RATE") ? 1 : 0;
@@ -330,7 +514,17 @@ index 02b751b2..be61c533 100644
      }
  
      printf("[cellAudio] Mixing thread stopped\n");
-@@ -889,11 +995,39 @@ s32 cellAudioPortClose(u32 portNum)
+@@ -832,6 +1053,9 @@
+     port->param.nBlock   = nblk;
+     port->read_index  = 0;
+     port->write_index = 0;
++    port->active = 0;
++    port->held = 0;
++    port->held_total = 0;
+ 
+     /* Allocate the audio buffer in GUEST memory so portAddr/readIndexAddr are
+      * real guest addresses (the game's mixer -- FMOD here -- writes PCM there
+@@ -889,11 +1113,39 @@
  
      s_ports[portNum].in_use  = 0;
      s_ports[portNum].running = 0;
@@ -370,6 +564,61 @@ index 02b751b2..be61c533 100644
  s32 cellAudioPortStart(u32 portNum)
  {
      printf("[cellAudio] PortStart(port=%u)\n", portNum);
+@@ -909,6 +1161,8 @@
+ 
+     mutex_lock(&s_audio_mutex);
+     s_ports[portNum].running = 1;
++    s_ports[portNum].active = 0;
++    s_ports[portNum].held = 0;
+     mutex_unlock(&s_audio_mutex);
+ 
+     return CELL_OK;
+@@ -975,11 +1229,14 @@
+ 
+     mutex_lock(&s_audio_mutex);
+     u64 global_counter = s_ports[portNum].read_index;
++    /* Periods spent waiting for a late block played too (as silence): count them, so the stamp
++     * stays the time the block is heard rather than falling behind the clock with every wait. */
++    const u64 held = s_ports[portNum].held_total;
+     mutex_unlock(&s_audio_mutex);
+     if (tag > global_counter)
+         return CELL_AUDIO_ERROR_TAG_NOT_FOUND;
+ 
+-    u64 t = s_audio_start_us + tag * 256000000ULL / 48000ULL;
++    u64 t = s_audio_start_us + (tag + held) * 256000000ULL / 48000ULL;
+     vm_write64(stamp_ea, t);
+     return CELL_OK;
+ }
+@@ -1026,6 +1283,7 @@
+         if (!s_notify_queues[i].in_use) { slot = i; break; }
+     }
+     if (slot < 0) { mutex_unlock(&s_audio_mutex); return CELL_AUDIO_ERROR_PARAM; }
++    memset(&s_notify_queues[slot], 0, sizeof s_notify_queues[slot]);
+     s_notify_queues[slot].in_use = 1;
+     s_notify_queues[slot].key    = k;
+     mutex_unlock(&s_audio_mutex);
+@@ -1049,6 +1307,7 @@
+ 
+     for (int i = 0; i < CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES; i++) {
+         if (!s_notify_queues[i].in_use) {
++            memset(&s_notify_queues[i], 0, sizeof s_notify_queues[i]);
+             s_notify_queues[i].in_use = 1;
+             s_notify_queues[i].key = key;
+             mutex_unlock(&s_audio_mutex);
+@@ -1072,6 +1331,13 @@
+ 
+     for (int i = 0; i < CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES; i++) {
+         if (s_notify_queues[i].in_use && s_notify_queues[i].key == key) {
++            /* A title takes its queue off when it shuts its sound down, and GT5's tick thread also
++             * when a wait for a tick fails (a 1 s timeout, or an error): after that its sound comes
++             * in one-second bursts. Say how the ticks stood, so a log tells the two apart. */
++            const AudioNotifySlot* s = &s_notify_queues[i];
++            fprintf(stderr, "[cellAudio] notify queue 0x%llX removed: %u ticks went in, %u found no room or no "
++                    "queue, the last %.1f ms ago\n", (unsigned long long)key, s->pushed, s->failed,
++                    s->pushed ? (double)(audio_now_us() - s->last_us) / 1000.0 : -1.0);
+             s_notify_queues[i].in_use = 0;
+             mutex_unlock(&s_audio_mutex);
+             return CELL_OK;
 diff --git a/libs/codec/cellAdec.c b/libs/codec/cellAdec.c
 index 9bacce2d..0efdfde4 100644
 --- a/libs/codec/cellAdec.c
@@ -8030,7 +8279,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      { static int _n = 0;
        if (PS3_LOG_FIRST(_n, 8))
            printf("[cellSpurs] JobGuardNotify(0x%08X) -> %u remaining\n",
-@@ -2610,32 +2930,36 @@
+@@ -2610,32 +2930,56 @@
      return CELL_OK;
  }
  
@@ -8039,6 +8288,25 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
 - * forever). An unknown guard opens immediately -- a chain guarded by something
 - * we never saw initialised must not deadlock the walker. */
 -static int jg_wait(u32 ea)
++/* The chain walker's host priority, set when it starts and on every lap. A sound engine's chain has a
++ * deadline: GT5 runs 13 jobs per 5.33 ms block and keeps two blocks ahead of the reader. At normal
++ * priority it queued behind the SPU workers and pollers whenever every core was busy, missed the
++ * block, and the reader played it empty: a dropout. SPURS_JC_PRIO=<n> (a THREAD_PRIORITY_* value;
++ * default 1, above normal; 0 = normal, as before); PS3_AB_WHAT=jcprio alternates it with normal. */
++#if defined(_MSC_VER)
++static __declspec(thread) int t_jc_prio = -100;
++#else
++static __thread int t_jc_prio = -100;
++#endif
++static void jc_apply_prio(void)
++{
++    extern int ps3_ab_on(const char* what);
++    static int level = -100;
++    if (level == -100) { const char* e = getenv("SPURS_JC_PRIO"); level = e && *e ? atoi(e) : THREAD_PRIORITY_ABOVE_NORMAL; }
++    const int want = ps3_ab_on("jcprio") == 0 ? THREAD_PRIORITY_NORMAL : level;
++    if (want != t_jc_prio) { SetThreadPriority(GetCurrentThread(), want); t_jc_prio = want; }
++}
++
 +/* Wait for a guard to be released. Returns 1 if it opened, 0 if the chain was shut down
 + * meanwhile. An unknown guard opens immediately -- a chain guarded by something we never
 + * saw initialised must not deadlock the walker.
@@ -8052,6 +8320,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      if (i < 0) return 1;
 -    for (int spin = 0; spin < 20000; spin++) {     /* ~20 s at 1 ms */
 -        if (s_jobguards[i].pending >= s_jobguards[i].reset) {
++    jc_apply_prio();
 +    for (;;) {
 +        const long pending = s_jobguards[i].pending;
 +        if ((u32)pending >= s_jobguards[i].reset) {
@@ -8078,7 +8347,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  }
  
  /* Tell the application a lap of chain work is done.
-@@ -2671,6 +2995,14 @@
+@@ -2671,6 +3015,14 @@
  
  static void jc_signal_done(u32 jc_ea, int job_index)
  {
@@ -8093,7 +8362,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      /* Carry the job's mailbox answer in the completion event. On hardware the
       * SPU's outbound/interrupt mailbox is what the SPURS event delivers; a
       * synthetic payload means the caller reads back zero for whatever it
-@@ -2724,7 +3056,7 @@
+@@ -2724,7 +3076,7 @@
      }
  }
  
@@ -8102,7 +8371,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  {
      u32 pc = entry_ea, ret_pc = 0;
      int jobs = 0;
-@@ -2738,6 +3070,7 @@
+@@ -2738,6 +3090,7 @@
      int idle = 0;
      for (;; idle++) {
          if (idle > 4096) break;
@@ -8110,7 +8379,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
          u64 cmd = vm_read64(pc);
          u32 op  = (u32)(cmd & 7);
          u32 ext = (u32)(cmd & 127);
-@@ -2745,7 +3078,13 @@
+@@ -2745,7 +3098,13 @@
          if (cmd != 0 && op == 0) {                    /* JOB */
              { extern u32 g_spurs_job_ls_handle; g_spurs_job_ls_handle = jc_ea; }
              int idx = jobs++;
@@ -8125,7 +8394,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
              idle = 0;                    /* real work: the chain is healthy */
              /* Signal per JOB, not per lap. The application waits once for each
               * unit of work it queued -- this title notified the guard 7 times
-@@ -2775,7 +3114,10 @@
+@@ -2775,7 +3134,10 @@
          }
          if (op == 7 && ext == (7 | (1 << 3))) {           /* GUARD */
              u32 g_ea = (u32)(cmd & ~127ull);
@@ -8137,15 +8406,16 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
              pc += 8; continue;
          }
          /* NOP(0) / SYNC+LWSYNC(2, one virtual SPU: nothing to wait for) /
-@@ -2791,6 +3133,7 @@
+@@ -2791,6 +3153,8 @@
  {
      int slot = (int)(intptr_t)p;
      ps3_thread_name("spurs jc %d", slot);
 +    ps3_thread_on_fast_cores();   /* a sound engine's chain runs on a deadline */
++    jc_apply_prio();
      /* TIMING PROBE (SPURS_JC_DELAY=ms): the real jm2 chain walker is async and
       * picks up jobs as the PPU appends them + fills their descriptors. Our walk
       * is one-shot; if it reads descriptors before the PPU populates the I/O
-@@ -2799,11 +3142,14 @@
+@@ -2799,11 +3163,14 @@
      { const char* d = getenv("SPURS_JC_DELAY");
        if (d && *d) Sleep((unsigned)atoi(d)); }
      jc_execute(s_jobchains[slot].entry_ea, s_jobchains[slot].jc_ea,
@@ -8164,7 +8434,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      return 0;
  }
  
-@@ -2834,8 +3180,12 @@
+@@ -2834,8 +3201,12 @@
              jc_dump_commands(who, s_jobchains[i].entry_ea, 16);
          }
          if (s_off || !s_jobchains[i].entry_ea) return CELL_OK;
@@ -8177,7 +8447,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
              HANDLE th = CreateThread(NULL, 1u << 20, jc_thread, (LPVOID)(intptr_t)i, 0, NULL);
              if (th) CloseHandle(th);
              else s_jobchains[i].running = 0;
-@@ -2859,8 +3209,12 @@
+@@ -2859,8 +3230,12 @@
   * r3, so the caller reads a garbage result for "did the shutdown take?" and a
   * title that checks it can decide the subsystem failed and tear itself down.
   *
@@ -8192,7 +8462,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
   * Found in Tokyo Jungle, whose sound engine shuts its chain down during init
   * and then reports "failed to recv data from SPU" when the handshake does not
   * complete. */
-@@ -2870,7 +3224,7 @@
+@@ -2870,7 +3245,7 @@
      if (PS3_LOG_FIRST(_n, 8)) printf("[cellSpurs] ShutdownJobChain(jc=0x%08X)\n", (u32)jc_ea);
      for (int i = 0; i < MAX_JOBCHAINS; i++) {
          if (s_jobchains[i].jc_ea == (u32)jc_ea) {
@@ -28366,3 +28636,14 @@ diff --git a/runtime/spu/spu_coh_bitmap.h b/runtime/spu/spu_coh_bitmap.h
  #ifdef __cplusplus
  }
  #endif
+diff --git a/libs/audio/tests/test_audio_ring.c b/libs/audio/tests/test_audio_ring.c
+--- a/libs/audio/tests/test_audio_ring.c
++++ b/libs/audio/tests/test_audio_ring.c
+@@ -16,6 +16,7 @@
+ void spu_coh_notify_write(uint32_t a) { (void)a; }
+ void spu_lockline_lock(void) {}
+ void spu_lockline_unlock(void) {}
++int ps3_ab_on(const char* what) { (void)what; return -1; }
+ 
+ int main(void)
+ {
