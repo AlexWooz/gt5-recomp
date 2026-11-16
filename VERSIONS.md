@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.72](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.72) | 16 Nov 2026 | Steer with the mouse (#37): in races the mouse turns the emulated G27, left button throttle, right brake; off by default |
 | [v0.1.71](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.71) | 15 Nov 2026 | Vulkan draws at 1080p in the 1080p mode; its title shows FPS and the resolution (the DirectX 12 title's resolution fixed too) |
 | [v0.1.70](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.70) | 15 Nov 2026 | Update now opens an update window (progress over your Photo Mode pictures, details one click away); crash reports name the DLL a crash happened in |
 | [v0.1.69](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.69) | 15 Nov 2026 | Wheels: Thrustmaster pedal layout (normal and combined mode), a button as a pedal, reverse on a button (MT) |

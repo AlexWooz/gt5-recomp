@@ -7,6 +7,32 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 > or repeated frames (fixed on 4 Nov and 9 Nov), so treat them as rough before-and-after comparisons.
 > From 9 Nov on, numbers are the game's own frames.
 
+## 16 Nov 2026
+
+🏷️ Released as **v0.1.72**
+
+🖱️ **Steer with the mouse** ([#37](https://github.com/MormonFTP-hub/gt5-recomp/issues/37), asked for by Arpadiam)
+- New, and off unless you turn it on: **Steer with the mouse** on the launcher's Controls page (or
+  `set "PS3_MOUSE_STEER=1"` in `play.bat`). In races, move the mouse left and right to steer; **left button
+  = throttle, right button = brake, middle button = straighten the wheel**. The keyboard and pads keep
+  working alongside (Z still accelerates).
+- The mouse plays the emulated Logitech G27 that real wheels use, so GT5 steers straight from it, with the
+  wheel's fine steering (16,384 steps from lock to lock). Feeding the pad's left stick instead was tried
+  too: it steers the car as well, but with 256 steps, and a stick held off-centre moves GT5's menu cursor.
+- Only in races. At the menus and while paused (when GT5 plays the wheel's menu spring) the mouse
+  steers, presses and moves nothing and the cursor is yours, so the menus work as before with the
+  keyboard or a pad. While it steers, the cursor is hidden and kept inside the window, so a click can't
+  land on another program mid-corner; Alt+Tab frees it at any time.
+- Two settings: **Mouse steering speed** (`PS3_MOUSE_STEER_SENS`, percent; at 100, mouse movement about
+  the width of a 1080p screen turns the wheel from straight ahead to full lock. The mouse is read raw, so
+  Windows' pointer speed and acceleration don't change it) and **Wheel straightens by itself**
+  (`PS3_MOUSE_STEER_CENTER`, off by default: once the mouse stops, the wheel goes back to straight ahead).
+- A real wheel isn't used while mouse steering is on. Tested with a virtual mouse in Arcade races (the
+  real mouse can't be moved here): GT5's own wheel driver read the steering step by step as the mouse
+  moved, the left button took a Fiat 500 from standstill to 44 mph and the car turned with the mouse, and
+  pausing with Start made the mouse do nothing until the race went on. At the menus, a mouse moving and
+  clicking every 3 seconds changed nothing the game read, and the menus were driven to a race as usual.
+
 ## 15 Nov 2026
 
 🏷️ Released as **v0.1.71**

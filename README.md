@@ -95,7 +95,7 @@ launcher: every setting in one window, then **Play**. No more editing `play.bat`
   card is the limit, the window title then shows both numbers, e.g. `FPS: 15 (game 30)`), screen shape
   (ultrawide), **borderless full screen**, maximized or a window size, watch mode, SPU threads.
 - **Controls:** steering wheel on/off, wheel rotation, force feedback strength and direction, pad in the
-  background, mouse clipping.
+  background, mouse clipping, [mouse steering](#mouse-steering).
 - **Game:** the game's language (as far as your disc has it), your mods from `GT5\mods`, the launcher's
   own language (English or 中文).
 - **Updates:** shows your version and the newest one with what's new, and **Update now** does the
@@ -215,6 +215,22 @@ Esc quits the game, after asking (`set "PS3_ESC_CONFIRM=0"` in `play.bat` quits 
 A steering wheel works too, with force feedback (new; one real wheel tried so far): see the
 [FAQ](#faq).
 
+<a id="mouse-steering"></a>
+
+**Mouse steering** (new, off unless you turn it on): tick *Steer with the mouse* on the launcher's
+Controls page, or `set "PS3_MOUSE_STEER=1"` in `play.bat`. In races, move the mouse left and right to
+steer: **left button = throttle, right button = brake, middle button = straighten the wheel**. The
+keyboard and pads keep working alongside (Z still accelerates). While you steer, the cursor is hidden
+and kept inside the window; at the menus and when paused the mouse does nothing (move through the menus
+with the keyboard or a pad as before), and Alt+Tab frees it at any time. The game sees a steering wheel
+(the same emulated G27 a real wheel uses, with its fine steering), so a real wheel isn't used while
+mouse steering is on.
+
+| Setting (launcher, or `play.bat`) | Default | What it does |
+|---|---|---|
+| Mouse steering speed, `PS3_MOUSE_STEER_SENS` | 100 | Percent. At 100, mouse movement about the width of a 1080p screen (at Windows' default pointer speed) turns the wheel from straight ahead to full lock; 200 is twice as quick. GT5 turns sharply on little wheel, so small movements go a long way. Windows' pointer speed and acceleration don't change it. |
+| Wheel straightens by itself, `PS3_MOUSE_STEER_CENTER` | off | Once you stop moving the mouse, the wheel goes back to straight ahead, at this percent of full lock a second (the launcher's Slowly / Medium / Quickly are 50 / 100 / 200). Off: it stays where you left it. |
+
 <a id="current-state"></a>
 
 ## 📋 Current state
@@ -255,7 +271,7 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Force feedback? | 🧪 New, with wheel support, also untried on a real wheel |
 | Widescreen (16:9)? | ✅ Yes, GT5 is a 16:9 game |
 | Ultrawide (21:9, 32:9)? | ✅ New: a wider view, with the HUD kept 16:9 in the middle |
-| Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard |
+| Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard; new: [steering with the mouse](#mouse-steering) |
 | US copy (BCUS98114)? | ✅ Yes, players have raced on it |
 | Version 1.02, or a game update (2.xx)? | 🧪 New: game updates run: 2.17 (the last) tested on the US and European releases, 2.01 on the Asian one, 2.11 with the Master Mod on the US one by a player ([how to set one up](#game-updates)); 1.02 untried |
 | Settings without editing files? | ✅ New: the [launcher](#launcher) |
@@ -386,7 +402,8 @@ in `GT5\shadercache` (cleared by ClearShaders.bat with the rest).
 **Q: Which controllers work?**
 
 **A: DualSense and DualShock 4 (USB or Bluetooth), Xbox and other XInput pads, and the keyboard.** See
-[Controls](#controls) for the keyboard layout.
+[Controls](#controls) for the keyboard layout. The mouse can steer in races too (off by default): see
+[Mouse steering](#mouse-steering).
 
 **Q: Can I use a US copy?**
 
@@ -905,6 +922,7 @@ so the launcher's settings win. Some useful ones:
 | `PS3_VIDEO_MODE=1080` | The game's 1080p mode (default); `720` for its 720p mode on a slow graphics chip. See the [FAQ](#faq). |
 | `PAD_BACKGROUND=1` | The pad keeps working when another window has focus. |
 | `PS3_WHEEL=off` | Don't look for a steering wheel. The other `PS3_WHEEL_*` settings are in the [FAQ](#faq). |
+| `PS3_MOUSE_STEER=1` | Steer with the mouse in races (left button throttle, right brake). Its other settings are under [Mouse steering](#mouse-steering). |
 | `LD_WATCH=1` (or **F9** in the game) | Watch mode for B-Spec races and replays: draws every other frame while the race keeps full speed, draws nothing while minimized, and lowers the game's priority. Off unless you turn it on; with `LD_WATCH=1` it comes on after 10 s without input and goes off when you touch the controls. |
 | `PAD_CURSOR_CLIP=1` | Keep the mouse inside the window while the controller is in use (the old behaviour). By default the mouse is free, and only the mouse movement and clicks Steam makes from the controller are ignored. |
 | `GCM_DRAIN_STAT=1` | Timing lines every 5 s in `logs\play.err`. |

@@ -5000,10 +5000,10 @@ index 6d8dd233..f2f478fc 100644
  }
 diff --git a/libs/hardware/wheel.h b/libs/hardware/wheel.h
 new file mode 100644
-index 00000000..68b6a6c1
+index 00000000..ef097f86
 --- /dev/null
 +++ b/libs/hardware/wheel.h
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,114 @@
 +/*
 + * ps3recomp - steering wheel emulation (Logitech G27 on cellUsbd)
 + *
@@ -5017,10 +5017,12 @@ index 00000000..68b6a6c1
 + *                     report, and the force-feedback command decoder, which
 + *                     keeps four effect slots plus the default spring.
 + *   wheel_host_win.c  the PC wheel: DirectInput (Windows), polled on a thread
-+ *                     of its own, whose effects follow the decoder's slots.
++ *                     of its own, whose effects follow the decoder's slots. Or
++ *                     the mouse, in races (PS3_MOUSE_STEER=1).
 + *
 + * Everything is off unless a wheel is found on the host (PS3_WHEEL=off turns
-+ * it off even then), so a player with a pad sees no change.
++ * it off even then) or mouse steering is on, so a player with a pad sees no
++ * change.
 + */
 +#ifndef PS3RECOMP_WHEEL_H
 +#define PS3RECOMP_WHEEL_H
@@ -5053,6 +5055,7 @@ index 00000000..68b6a6c1
 +    int   hat;          /* 0 = up, 1 = up-right ... 7 = up-left, -1 = centred */
 +    u32   buttons;      /* 1 << WHEEL_BTN_* */
 +    int   shifter;      /* an H-shifter is attached (or PS3_WHEEL_SHIFTER=1) */
++    int   steer_g27;    /* steer is the G27's own position, not a PC wheel's (mouse steering) */
 +} WheelInput;
 +
 +/* ---- the force-feedback model the decoder keeps (wheel_g27.c) ---- */
@@ -5117,7 +5120,7 @@ index 00000000..68b6a6c1
 +#endif /* PS3RECOMP_WHEEL_H */
 diff --git a/libs/hardware/wheel_g27.c b/libs/hardware/wheel_g27.c
 new file mode 100644
-index 00000000..9b170855
+index 00000000..1e3c6464
 --- /dev/null
 +++ b/libs/hardware/wheel_g27.c
 @@ -0,0 +1,411 @@
@@ -5239,7 +5242,7 @@ index 00000000..9b170855
 +     * at 100 degrees and saturates past it, as the real wheel would. */
 +    int game_range = __atomic_load_n(&s_ffb.range_deg, __ATOMIC_RELAXED);
 +    if (game_range < 40 || game_range > 3600) game_range = host_range;
-+    float s = in->steer * (float)host_range / (float)game_range;
++    float s = in->steer_g27 ? in->steer : in->steer * (float)host_range / (float)game_range;
 +    if (s < -1.f) s = -1.f;
 +    if (s > 1.f) s = 1.f;
 +    int st = 0x2000 + (int)(s * 8192.f);
@@ -5534,10 +5537,10 @@ index 00000000..9b170855
 +}
 diff --git a/libs/hardware/wheel_host_win.c b/libs/hardware/wheel_host_win.c
 new file mode 100644
-index 00000000..9f32353f
+index 00000000..09047972
 --- /dev/null
 +++ b/libs/hardware/wheel_host_win.c
-@@ -0,0 +1,1052 @@
+@@ -0,0 +1,1377 @@
 +/*
 + * ps3recomp - the PC steering wheel behind the emulated G27 (see wheel.h)
 + *
@@ -5574,12 +5577,15 @@ index 00000000..9f32353f
 + *   PS3_WHEEL_SHIFTER    1/0: report an H-shifter attached or not (default: once
 + *                        a gear is engaged).
 + *   PS3_WHEEL_TRACE      1 = log what the wheel and the game exchange.
++ *
++ * Or the mouse steers the G27 (PS3_MOUSE_STEER=1, off by default; see "Mouse steering" below).
 + */
 +#include "wheel.h"
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
 +#include <ctype.h>
++#include <math.h>
 +
 +static int s_trace = -1;
 +int wheel_trace_on(void)
@@ -5613,7 +5619,7 @@ index 00000000..9f32353f
 +/* The d-pad on buttons, for wheels without one: hat directions 0, 2, 4, 6. */
 +static const char* const k_dpad_name[4] = { "up", "right", "down", "left" };
 +
-+enum { MODE_OFF, MODE_AUTO, MODE_MATCH, MODE_VIRTUAL };
++enum { MODE_OFF, MODE_AUTO, MODE_MATCH, MODE_VIRTUAL, MODE_MOUSE };
 +
 +typedef struct {
 +    int  steer;
@@ -5647,6 +5653,12 @@ index 00000000..9f32353f
 +    else if (!strcmp(v, "list")) s_mode = MODE_AUTO;   /* kept: the list is always printed once now */
 +    else if (!strcmp(v, "virtual")) s_mode = MODE_VIRTUAL;
 +    else { s_mode = MODE_MATCH; snprintf(s_match, sizeof s_match, "%s", v); }
++    /* Mouse steering takes the G27 over: a PC wheel isn't looked for while it's on. */
++    e = getenv("PS3_MOUSE_STEER");
++    if (e && *e) {
++        char m[16]; snprintf(m, sizeof m, "%s", e); lower(m);
++        if (!strcmp(m, "1") || !strcmp(m, "on") || !strcmp(m, "yes")) s_mode = MODE_MOUSE;
++    }
 +    e = getenv("PS3_WHEEL_FFB");
 +    if (e && *e) { s_gain = atoi(e); if (s_gain < 0) s_gain = 0; if (s_gain > 100) s_gain = 100; }
 +    e = getenv("PS3_WHEEL_FFB_INVERT");
@@ -6406,6 +6418,321 @@ index 00000000..9f32353f
 +}
 +
 +/* ---------------------------------------------------------------------------
++ * Mouse steering (PS3_MOUSE_STEER=1), GitHub #37
++ *
++ * The G27 steered with the mouse, as in PC racing games. In a race, moving the mouse sideways
++ * turns the rim: raw mouse counts (so Windows' pointer speed and acceleration don't change it)
++ * into the G27's 14-bit rim position, so even a small movement steers. The left button is the
++ * throttle, the right one the brake, the middle one puts the rim straight; the keyboard and a
++ * pad keep working alongside (Cross still accelerates). While it steers, the cursor is hidden
++ * and kept inside the window, so a click can't land on another program.
++ * At the game's menus and while it's paused (GT5 plays its menu centring spring then, see
++ * wheel_g27_in_menus) the mouse steers, presses and moves nothing and the cursor is free: the
++ * menus work as before, with the keyboard or a pad. The same while another window (or the
++ * game's Quit box) is in front, so Alt+Tab lets go of the mouse at any time.
++ * The pad's left stick was tried as well (16 Nov 2026), and the same steering in a race reached
++ * the car both ways, but the stick has 256 steps to the G27's 16,384, no way to tell a race from
++ * the menus (where a deflected stick moves GT5's menu cursor) and no pedals for the buttons.
++ *
++ *   PS3_MOUSE_STEER         1 = on (off by default).
++ *   PS3_MOUSE_STEER_SENS    percent, 100: full lock (the G27's 450 degrees) is 2000 mouse counts
++ *                           from the centre, about the width of a 1920-pixel screen at Windows'
++ *                           default pointer speed. 200 = twice as quick. GT5 turns hard on little
++ *                           rim (a tenth of lock swung a Fiat 500 across a lane at 45 mph), so
++ *                           1000 counts, tried first, made a few millimetres of mouse a big turn.
++ *   PS3_MOUSE_STEER_CENTER  0 (default): the rim stays where the mouse left it. N: once the mouse
++ *                           stops (150 ms), the rim goes back to the centre at N% of full lock a second.
++ *   PS3_MOUSE_STEER_TEST_FILE (tests): a virtual mouse instead of the real one, which is left alone,
++ *                           cursor included, and the window needn't be in front. A test writes
++ *                           "<what> <ms>" there, as for PS3_WHEEL_VIRTUAL_FILE: "move=300 500" moves
++ *                           the mouse 300 counts right over 500 ms, "left 2000" holds a button
++ *                           (left, right, middle), '+' joins them: "move=-200+left 1000".
++ * -------------------------------------------------------------------------*/
++static float s_ms_counts = 2000.f;  /* mouse counts from the centre to full lock */
++static float s_ms_center;           /* back to the centre, in full locks a second (0 = never) */
++static LONG  s_ms_dx;               /* raw counts not taken yet (the mouse thread only) */
++static LONG  s_ms_abs_x;            /* a mouse that reports positions (a tablet, a remote desktop) */
++static int   s_ms_abs_have;
++
++static LRESULT CALLBACK mouse_raw_proc(HWND h, UINT m, WPARAM w, LPARAM l)
++{
++    if (m == WM_INPUT) {
++        RAWINPUT ri;
++        UINT sz = sizeof ri;
++        if (GetRawInputData((HRAWINPUT)l, RID_INPUT, &ri, &sz, sizeof(RAWINPUTHEADER)) != (UINT)-1 &&
++            ri.header.dwType == RIM_TYPEMOUSE) {
++            const RAWMOUSE* r = &ri.data.mouse;
++            if (r->usFlags & MOUSE_MOVE_ABSOLUTE) {
++                /* Positions over the screen, 0-65535: the step is the change, in pixels. */
++                const int cx = GetSystemMetrics((r->usFlags & MOUSE_VIRTUAL_DESKTOP) ? SM_CXVIRTUALSCREEN : SM_CXSCREEN);
++                if (s_ms_abs_have) s_ms_dx += (LONG)((double)(r->lLastX - s_ms_abs_x) * (double)cx / 65535.0);
++                s_ms_abs_x = r->lLastX;
++                s_ms_abs_have = 1;
++            } else {
++                s_ms_dx += r->lLastX;
++            }
++        }
++    }
++    return DefWindowProcW(h, m, w, l);
++}
++
++/* The game's own window in front: not its Quit or text-entry box, nor another program. */
++static HWND game_window_in_front(void)
++{
++    HWND fg = GetForegroundWindow();
++    DWORD pid = 0;
++    char cls[64] = "";
++    if (!fg) return NULL;
++    GetWindowThreadProcessId(fg, &pid);
++    if (pid != GetCurrentProcessId()) return NULL;
++    GetClassNameA(fg, cls, sizeof cls);
++    return (!strcmp(cls, "ps3recomp_null") || !strcmp(cls, "ps3recomp_d3d12") || !strcmp(cls, "SDL_app")) ? fg : NULL;
++}
++
++/* Only the game window's own thread can take the cursor away (on WM_SETCURSOR), so that window
++ * gets a window procedure in front of its own that sets no cursor while the mouse steers. */
++static HWND          s_cur_hwnd;
++static WNDPROC       s_cur_next;
++static int           s_cur_wide;
++static volatile LONG s_cur_hide;
++
++static LRESULT CALLBACK cursor_proc(HWND h, UINT m, WPARAM w, LPARAM l)
++{
++    if (m == WM_SETCURSOR && LOWORD(l) == HTCLIENT && s_cur_hide) { SetCursor(NULL); return TRUE; }
++    return s_cur_wide ? CallWindowProcW(s_cur_next, h, m, w, l) : CallWindowProcA(s_cur_next, h, m, w, l);
++}
++
++/* While the mouse steers: the cursor hidden over the game window and kept inside it (a click
++ * outside would hand the mouse to another program mid-corner). Otherwise it's left alone. */
++static void cursor_hold(HWND gw, int on)
++{
++    static int clipped;
++    static ULONGLONG clip_at;
++    const ULONGLONG now = GetTickCount64();
++    if (s_cur_hwnd && !IsWindow(s_cur_hwnd)) s_cur_hwnd = NULL;   /* gone, and our procedure with it */
++    if (on && gw && !s_cur_hwnd) {
++        s_cur_wide = IsWindowUnicode(gw) ? 1 : 0;
++        s_cur_next = (WNDPROC)(s_cur_wide ? GetWindowLongPtrW(gw, GWLP_WNDPROC) : GetWindowLongPtrA(gw, GWLP_WNDPROC));
++        if (s_cur_next) {
++            if (s_cur_wide) SetWindowLongPtrW(gw, GWLP_WNDPROC, (LONG_PTR)cursor_proc);
++            else            SetWindowLongPtrA(gw, GWLP_WNDPROC, (LONG_PTR)cursor_proc);
++            s_cur_hwnd = gw;
++        }
++    }
++    const LONG hide = on && gw && gw == s_cur_hwnd;
++    if (InterlockedExchange(&s_cur_hide, hide) != hide && s_cur_hwnd) {
++        /* Now rather than at the next mouse movement, if the cursor is over the window. */
++        POINT pt;
++        if (GetCursorPos(&pt) && WindowFromPoint(pt) == s_cur_hwnd)
++            PostMessageW(s_cur_hwnd, WM_SETCURSOR, (WPARAM)s_cur_hwnd, MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
++    }
++    if (on && gw) {
++        if (!clipped || now - clip_at >= 250) {   /* Windows drops a clip now and then: renew it */
++            RECT r;
++            POINT o = { 0, 0 };
++            if (GetClientRect(gw, &r) && ClientToScreen(gw, &o) && r.right > 0 && r.bottom > 0) {
++                OffsetRect(&r, o.x, o.y);
++                ClipCursor(&r);
++                clipped = 1;
++                clip_at = now;
++            }
++        }
++    } else if (clipped) {
++        ClipCursor(NULL);
++        clipped = 0;
++    }
++}
++
++/* PS3_MOUSE_STEER_TEST_FILE: the virtual mouse's current command. */
++typedef struct {
++    LONG      move, given;   /* counts to move in all, and moved so far */
++    ULONGLONG from, until;
++    int       buttons;       /* 1 left, 2 right, 4 middle, held until `until` */
++} MsVirtual;
++
++static void ms_virtual_poll(const char* vf, MsVirtual* v, ULONGLONG now)
++{
++    if (now >= v->until) {
++        if (v->given != v->move) { s_ms_dx += v->move - v->given; v->given = v->move; }
++        v->buttons = 0;
++        FILE* f = fopen(vf, "rb");
++        if (f) {
++            char line[96] = "", what[64] = "";
++            int ms = 150;
++            const int got = fgets(line, sizeof line, f) != NULL;
++            fclose(f);
++            if (got && sscanf(line, "%63s %d", what, &ms) >= 1 && *what) {
++                f = fopen(vf, "wb");
++                if (f) fclose(f);
++                lower(what);
++                memset(v, 0, sizeof *v);
++                int known = 0;
++                for (char* w = what; w && *w; ) {
++                    char* plus = strchr(w, '+');
++                    if (plus) *plus = 0;
++                    if (!strncmp(w, "move=", 5))   { v->move = atol(w + 5); known = 1; }
++                    else if (!strcmp(w, "left"))   { v->buttons |= 1; known = 1; }
++                    else if (!strcmp(w, "right"))  { v->buttons |= 2; known = 1; }
++                    else if (!strcmp(w, "middle")) { v->buttons |= 4; known = 1; }
++                    else if (!strcmp(w, "none"))   known = 1;
++                    if (plus) *plus = '+';
++                    w = plus ? plus + 1 : NULL;
++                }
++                if (ms < 1) ms = 1;
++                if (!known) { v->move = 0; v->buttons = 0; }
++                v->from = now;
++                v->until = known ? now + (ULONGLONG)ms : now;
++                fprintf(stderr, "[mouse] virtual: %s for %d ms%s\n", what, ms, known ? "" : " (unknown, ignored)");
++            }
++        }
++    }
++    if (now < v->until && v->move) {   /* spread over the time, as a hand moves a mouse */
++        const LONG target = (LONG)((double)v->move * (double)(now - v->from) / (double)(v->until - v->from));
++        s_ms_dx += target - v->given;
++        v->given = target;
++    }
++}
++
++static DWORD mouse_thread(void)
++{
++    const char* e = getenv("PS3_MOUSE_STEER_SENS");
++    int sens = (e && *e) ? atoi(e) : 100;
++    if (sens < 10) sens = 10;
++    if (sens > 1000) sens = 1000;
++    s_ms_counts = 2000.f * 100.f / (float)sens;
++    e = getenv("PS3_MOUSE_STEER_CENTER");
++    int ctr = (e && *e) ? atoi(e) : 0;
++    if (ctr < 0) ctr = 0;
++    if (ctr > 1000) ctr = 1000;
++    s_ms_center = (float)ctr / 100.f;
++    const char* vf = getenv("PS3_MOUSE_STEER_TEST_FILE");
++    const int test = vf && *vf;
++
++    WNDCLASSEXW wc;
++    memset(&wc, 0, sizeof wc);
++    wc.cbSize = sizeof wc;
++    wc.lpfnWndProc = mouse_raw_proc;
++    wc.hInstance = GetModuleHandleW(NULL);
++    wc.lpszClassName = L"ps3recomp_mouse";
++    RegisterClassExW(&wc);
++    HWND mw = CreateWindowExW(0, wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, wc.hInstance, NULL);
++    if (!test) {
++        /* Raw input, delivered even while another window is in front (INPUTSINK); it's only used
++         * while the game is. */
++        RAWINPUTDEVICE rid;
++        rid.usUsagePage = 0x01;   /* generic desktop: mouse */
++        rid.usUsage = 0x02;
++        rid.dwFlags = RIDEV_INPUTSINK;
++        rid.hwndTarget = mw;
++        if (!mw || !RegisterRawInputDevices(&rid, 1, sizeof rid))
++            fprintf(stderr, "[mouse] can't read the mouse (raw input, error %lu): it won't steer\n", GetLastError());
++    }
++    char ctr_txt[48] = "off";
++    if (ctr) snprintf(ctr_txt, sizeof ctr_txt, "%d%% of full lock a second", ctr);
++    fprintf(stderr, "[mouse] mouse steering on: in races the mouse steers the emulated G27, full lock %.0f counts "
++                    "from the centre (PS3_MOUSE_STEER_SENS=%d), self-centring %s; left button throttle, right brake, "
++                    "middle straightens the wheel. Not at the game's menus%s\n",
++            s_ms_counts, sens, ctr_txt, test ? "; a test's virtual mouse (PS3_MOUSE_STEER_TEST_FILE)" : "");
++
++    WheelInput in;
++    memset(&in, 0, sizeof in);
++    in.connected = 1;
++    in.hat = -1;
++    in.steer_g27 = 1;
++    publish(&in);
++    MsVirtual v;
++    memset(&v, 0, sizeof v);
++    float steer = 0.f, logged = 0.f;
++    int seen_menus = 0, was = -1, logged_btn = 0;
++    unsigned said = 0, lines = 0, stat_lines = 0;
++    ULONGLONG prev = GetTickCount64(), moved_at = 0, stat_from = 0;
++    LONG stat_counts = 0;
++    float stat_lo = 0.f, stat_hi = 0.f;
++    unsigned stat_n = 0, stat_thr = 0, stat_brk = 0;
++    while (!s_stop) {
++        MSG msg;
++        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
++        const ULONGLONG now = GetTickCount64();
++        if (test) ms_virtual_poll(vf, &v, now);
++        const LONG dx = s_ms_dx;
++        s_ms_dx = 0;
++        HWND gw = test ? NULL : game_window_in_front();
++        const int menus = wheel_g27_in_menus();
++        if (menus) seen_menus = 1;
++        const int front = test || gw != NULL;
++        /* Before the game's driver has taken the G27 it plays no spring yet: that isn't a race. */
++        const int steering = front && !menus && seen_menus;
++        if (steering != was) {
++            if (said < 200) {
++                said++;
++                if (steering)
++                    fprintf(stderr, "[mouse] in a race with the game in front: the mouse steers%s\n",
++                            test ? "" : " (cursor hidden and kept in the window)");
++                else
++                    fprintf(stderr, "[mouse] not steering: %s\n",
++                            !front ? "another window is in front" : menus ? "at the game's menus or paused"
++                                                                          : "the game hasn't taken the wheel yet");
++            }
++            was = steering;
++            steer = 0.f;   /* each race, and each return from the menus or another window, starts straight */
++        }
++        const float dt = (float)(now - prev) / 1000.f;
++        prev = now;
++        int buttons = 0;
++        if (steering) {
++            if (dx) { steer += (float)dx / s_ms_counts; moved_at = now; }
++            if (steer > 1.f) steer = 1.f;
++            if (steer < -1.f) steer = -1.f;
++            buttons = test ? v.buttons
++                           : ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? 1 : 0) |
++                             ((GetAsyncKeyState(VK_RBUTTON) & 0x8000) ? 2 : 0) |
++                             ((GetAsyncKeyState(VK_MBUTTON) & 0x8000) ? 4 : 0);
++            if (buttons & 4) steer = 0.f;
++            if (s_ms_center > 0.f && !dx && now - moved_at >= 150) {
++                const float step = s_ms_center * dt;
++                steer = steer > step ? steer - step : steer < -step ? steer + step : 0.f;
++            }
++        } else {
++            steer = 0.f;
++        }
++        in.steer = steer;
++        in.throttle = (buttons & 1) ? 1.f : 0.f;
++        in.brake = (buttons & 2) ? 1.f : 0.f;
++        publish(&in);
++        if (!test) cursor_hold(gw, steering);
++
++        /* PS3_WHEEL_TRACE (and tests): each change, and every 10 s what the mouse did. */
++        if ((wheel_trace_on() || test) && steering) {
++            if ((fabsf(steer - logged) >= 0.01f || (buttons & 3) != logged_btn) && lines < 5000) {
++                lines++;
++                logged = steer;
++                logged_btn = buttons & 3;
++                fprintf(stderr, "[mouse] t=%llu steer %+.3f (G27 %d)%s%s\n", now, steer,
++                        0x2000 + (int)(steer * 8192.f), (buttons & 1) ? " throttle" : "", (buttons & 2) ? " brake" : "");
++            }
++            if (!stat_from) { stat_from = now; stat_lo = stat_hi = steer; }
++            stat_counts += dx < 0 ? -dx : dx;
++            stat_n++;
++            stat_thr += buttons & 1;
++            stat_brk += (buttons >> 1) & 1;
++            if (steer < stat_lo) stat_lo = steer;
++            if (steer > stat_hi) stat_hi = steer;
++            if (now - stat_from >= 10000) {
++                if (stat_lines++ < 360)
++                    fprintf(stderr, "[mouse] in %llu s: %ld counts of movement, steer %+.2f to %+.2f, throttle held %u%%, "
++                                    "brake %u%%\n", (now - stat_from) / 1000, (long)stat_counts, stat_lo, stat_hi,
++                            stat_n ? stat_thr * 100 / stat_n : 0, stat_n ? stat_brk * 100 / stat_n : 0);
++                stat_from = 0; stat_counts = 0; stat_n = stat_thr = stat_brk = 0;
++            }
++        }
++        MsgWaitForMultipleObjects(0, NULL, FALSE, 2, QS_ALLINPUT);
++    }
++    if (!test) cursor_hold(NULL, 0);
++    if (mw) DestroyWindow(mw);
++    return 0;
++}
++
++/* ---------------------------------------------------------------------------
 + * Thread
 + * -------------------------------------------------------------------------*/
 +static LRESULT CALLBACK helper_proc(HWND h, UINT m, WPARAM w, LPARAM l) { return DefWindowProcW(h, m, w, l); }
@@ -6417,6 +6744,7 @@ index 00000000..9f32353f
 +     * priority; this one must still read the wheel every millisecond or two. Its work per
 +     * read is a few microseconds, then it sleeps. */
 +    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
++    if (s_mode == MODE_MOUSE) return mouse_thread();
 +    if (s_mode == MODE_VIRTUAL) {
 +        /* For testing the game side: PS3_WHEEL_VIRTUAL=steer=0.5,throttle=1
 +         * holds the rim and pedals where it says, from DELAY seconds on.

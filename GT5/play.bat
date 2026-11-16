@@ -46,6 +46,13 @@ REM set "PS3_WHEEL_FFB=60"         force strength in percent
 REM set "PS3_WHEEL_RANGE=900"      the rotation your wheel is set to, in degrees
 REM set "PS3_WHEEL_TRACE=1"        log every pedal, button and force, to fix a mapping
 REM set "PS3_WHEEL=off"            don't look for a wheel
+REM Mouse steering, off unless you turn it on: in races, move the mouse left and right to steer;
+REM left button = throttle, right = brake, middle = straighten the wheel. The keyboard keeps working,
+REM at the menus the mouse does nothing, and Alt+Tab frees it. (It plays the wheel, so a real wheel
+REM isn't used while it's on.) Remove a REM to use a line:
+REM set "PS3_MOUSE_STEER=1"
+REM set "PS3_MOUSE_STEER_SENS=150"    steering speed in percent (100 = a 1080p screen's width to full lock)
+REM set "PS3_MOUSE_STEER_CENTER=100"  the wheel straightens by itself when the mouse stops (0 = off)
 REM Screen shape. auto = your monitor's: on an ultrawide (21:9, 32:9) the game draws a wider view,
 REM more of the track at the sides, with the HUD and menus kept 16:9 in the middle. The window opens
 REM at that shape; maximize it. On a 16:9 monitor nothing changes. Or a fixed shape: 21:9, 32:9,

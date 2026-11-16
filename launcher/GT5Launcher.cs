@@ -183,6 +183,17 @@ namespace Gt5Launcher
             { "range.help", new[] { "Set it to what your wheel is set to.", "设置为方向盘自身的转角设定。" } },
             { "ffb", new[] { "Force feedback strength", "力反馈强度" } },
             { "ffbinv", new[] { "Forces push the wrong way (invert)", "力反馈方向相反（反转）" } },
+            { "mouse", new[] { "Steer with the mouse", "用鼠标转向" } },
+            { "mouse.help", new[] { "In races, move the mouse left and right to steer. Left button = throttle, right button = brake, middle button = straighten the wheel; the keyboard and pads keep working. At the menus the mouse does nothing, and Alt+Tab frees it at any time. The game sees a steering wheel, so a real wheel isn't used while this is on.", "比赛中左右移动鼠标即可转向。左键 = 油门，右键 = 刹车，中键 = 方向盘回正；键盘和手柄仍然可用。在菜单中鼠标不起作用，随时按 Alt+Tab 即可释放鼠标。游戏会把它当作方向盘，所以开启时不会使用真实方向盘。" } },
+            { "msens", new[] { "Mouse steering speed", "鼠标转向灵敏度" } },
+            { "msens.help", new[] { "Normal: mouse movement about the width of a 1080p screen turns the wheel from straight ahead to full lock (at Windows' default pointer speed).", "正常：鼠标移动约一个 1080p 屏幕的宽度，方向盘从正前方转到打满（按 Windows 默认指针速度）。" } },
+            { "msens.normal", new[] { "Normal", "正常" } },
+            { "mcenter", new[] { "Wheel straightens by itself", "方向盘自动回正" } },
+            { "mcenter.help", new[] { "When you stop moving the mouse. Off: the wheel stays where the mouse left it.", "停止移动鼠标时回正。关：方向盘停留在鼠标留下的位置。" } },
+            { "mcenter.slow", new[] { "Slowly", "慢" } },
+            { "mcenter.mid", new[] { "Medium", "中" } },
+            { "mcenter.fast", new[] { "Quickly", "快" } },
+            { "mouse.short", new[] { "Mouse steering", "鼠标转向" } },
             { "keys", new[] { "Keyboard: Z = Cross (OK), X = Circle, A = Square, S = Triangle, arrows = D-pad, Enter = Start, Tab = Select. DualSense, DualShock 4 and Xbox pads work too.", "键盘：Z = ✕（确定），X = ○，A = □，S = △，方向键 = 十字键，Enter = Start，Tab = Select。也支持 DualSense、DualShock 4 和 Xbox 手柄。" } },
             // Game
             { "lang", new[] { "Game language", "游戏语言" } },
@@ -278,6 +289,7 @@ namespace Gt5Launcher
             new[] { "GT5_LAUNCHER_HIDE", "1" }, new[] { "GT5_LAUNCHER_AUTOCHECK", "1" },
             new[] { "GT5_SPEED", "" }, new[] { "PS3_SKIP_INTRO", "1" }, new[] { "LD_WATCH_DRAW", "" },
             new[] { "LD_FRAMEGEN", "" }, new[] { "GT5_RENDERER", "" },
+            new[] { "PS3_MOUSE_STEER", "" }, new[] { "PS3_MOUSE_STEER_SENS", "" }, new[] { "PS3_MOUSE_STEER_CENTER", "" },
         };
         // True when there was no settings.bat yet: the launcher's first start on this install.
         public bool Fresh;
@@ -1091,7 +1103,7 @@ namespace Gt5Launcher
             string res = S.Get("PS3_VIDEO_MODE") == "720" ? "720p" : "1080p";
             string shape = S.Get("PS3_ASPECT"); if (shape == "" || shape == "auto") shape = T.Get("shape.auto");
             string win = S.Get("GT5_LAUNCH_WINDOW") == "borderless" ? T.Get("window.borderless") : S.Get("GT5_LAUNCH_WINDOW") == "max" ? T.Get("window.max") : T.Get("window.windowed");
-            string wheel = S.Get("PS3_WHEEL") == "off" ? T.Get("off") : T.Get("wheel.on");
+            string wheel = S.Get("PS3_MOUSE_STEER") == "1" ? T.Get("mouse.short") : S.Get("PS3_WHEEL") == "off" ? T.Get("off") : T.Get("wheel.on");
             var sb = new StringBuilder();
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("res"), res));
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("shape"), shape));
@@ -1139,6 +1151,9 @@ namespace Gt5Launcher
             for (int v = 100; v >= 0; v -= 10) ffb.Add(new Choice(v.ToString(), v + "%"));
             y = AddCombo(p, "ffb", null, "PS3_WHEEL_FFB", ffb.ToArray(), y);
             y = AddCheck(p, "ffbinv", null, "PS3_WHEEL_FFB_INVERT", "1", y);
+            y = AddCheck(p, "mouse", "mouse.help", "PS3_MOUSE_STEER", "1", y + 10);
+            y = AddCombo(p, "msens", "msens.help", "PS3_MOUSE_STEER_SENS", new[] { new Choice("50", "50%"), new Choice("75", "75%"), new Choice("", T.Get("msens.normal") + " (100%)"), new Choice("150", "150%"), new Choice("200", "200%"), new Choice("300", "300%") }, y);
+            y = AddCombo(p, "mcenter", "mcenter.help", "PS3_MOUSE_STEER_CENTER", new[] { new Choice("", T.Get("off")), new Choice("50", T.Get("mcenter.slow")), new Choice("100", T.Get("mcenter.mid")), new Choice("200", T.Get("mcenter.fast")) }, y);
             y = AddHelp(p, T.Get("keys"), y + 10, 0);
             return p;
         }
