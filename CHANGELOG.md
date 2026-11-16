@@ -9,6 +9,43 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.77**
+
+🌗 **Vulkan: races no longer washed out (or too dark)** ([#38](https://github.com/MormonFTP-hub/gt5-recomp/issues/38), [#20](https://github.com/MormonFTP-hub/gt5-recomp/issues/20))
+- GT5 sets its exposure from a tiny copy of the race it makes on the graphics chip: it shrinks the
+  picture into a corner of one big target, halves that twice in place, and reads the 16x8 result back.
+  To halve in place, the port gives each step a copy of the part it reads, and on Vulkan that copy came
+  from the first surface in its list covering that memory. An older, taller surface left from an
+  earlier screen covered it too (the memory is reused), so each step was made from a frozen patch of
+  that old screen, and the game set its exposure for whatever the patch showed: long washed-out white
+  stretches, or a race too dark. Whether that old surface was still around depended on what had been
+  shown since the game started, so some sessions were fine and others not. It's the mistake DirectX 12
+  had in v0.1.46, in another place.
+- Now the copy comes from the closest surface (the one being drawn). In one race, switching between the
+  old and new way every 20 s: the 16x8 sample the game reads averaged **0.6 (black) the old way and 92
+  the new way** (45-163, following the scene); the old way's stretches came out white, the new way's
+  looked right once the game's exposure caught up (it adapts over a few seconds).
+- The Vulkan renderer is the only one on Linux, so this is for Linux too. `VK_WIN_FIRST=1` goes back to
+  the old way. DirectX 12 doesn't use this code. `VK_RB_LOG=10` puts the sample the game reads into
+  `play.err` (`[rb-meter]` lines, alpha 0 = the exposure sample), like `LD_RB_LOG` on DirectX 12.
+
+⚡ **Vulkan: small readbacks don't wait any more, and earlier sessions' shaders are ready at start** ([#38](https://github.com/MormonFTP-hub/gt5-recomp/issues/38))
+- The small copies GT5 reads back every frame (the exposure sample above and its brightness chain) land a
+  frame later instead of stopping the command thread until the graphics chip is idle, as on DirectX 12
+  (`VK_RB_ASYNC`, on by default on Windows now). With the exposure fixed, switching it every 20 s kept the
+  same picture (frames 94 vs 83 bright on average, 4% over 180 either way) at **26 instead of 15 game
+  frames a second** on a busy PC (+12% on a quiet one). `VK_RB_ASYNC=0` turns it off.
+- Every Vulkan pipeline made is now noted in `vk_pipelines.lst` beside the shader cache, and at the next
+  start a background thread builds them all again (about 1,800 here, done in seconds with a warm cache),
+  so what you've seen before doesn't skip objects while its shaders build. The same session with and
+  without the list: **322 instead of 1,813 new pipelines, 479 instead of 2,790 draws skipped**, a race
+  start 295 instead of ~950. A race whose shaders aren't in the list yet still builds them as it goes,
+  so it gets better the more you play. On by default on Windows; `VK_PIPELINE_PREBUILD=0` turns it off
+  (`=1` turns both on on Linux).
+- Tried and left out: keeping two frames in flight at the present (31.3 vs 30.7 game frames a second,
+  noise: the wait there is for the command batch two back, not the frame before), and filtering GT5's
+  scaled 2D copies as the PS3 does (no change to the exposure).
+
 🏷️ Released as **v0.1.76**
 
 🐧 **Linux: your own keyboard keys, and the small-CPU setting from Windows**
