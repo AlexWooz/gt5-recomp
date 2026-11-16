@@ -460,6 +460,14 @@ try {
     if ($c.Firmware) { Set-ItemProperty -Path $RegKey -Name Firmware -Value $c.Firmware }
 } catch {}
 Say "Installing to $base" "White"
+# On a drive that doesn't record who owns a file (exFAT, FAT32, many USB and network drives) git refuses
+# to work in the install folder ("detected dubious ownership", #41). Trust it for the git this installer
+# and the scripts it starts run, through git's environment config; the player's git settings stay as they are.
+if ($env:GT5_GIT_SAFE -ne "1") {
+    $gn = 0; if ("$env:GIT_CONFIG_COUNT" -match '^\d+$') { $gn = [int]$env:GIT_CONFIG_COUNT }
+    Set-Item "env:GIT_CONFIG_KEY_$gn" "safe.directory"; Set-Item "env:GIT_CONFIG_VALUE_$gn" "*"
+    $env:GIT_CONFIG_COUNT = "$($gn + 1)"; $env:GT5_GIT_SAFE = "1"
+}
 
 # ---- 1. Tools --------------------------------------------------------------------------------------
 Step 1 "Tools: Git, Python, Microsoft C++ build tools"

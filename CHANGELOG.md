@@ -9,6 +9,18 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.87**
+
+🧰 **Installer and updates work on exFAT and FAT32 drives (#41)**
+- Installed to a drive that doesn't record who owns a file (exFAT, FAT32, many USB drives), setup stopped
+  with "fetching or patching ps3recomp failed": git refuses to work in a folder on such a drive ("detected
+  dubious ownership"), and the first update reported it as "couldn't reach GitHub".
+- The installer, `setup.ps1`, `update.ps1` and the Vulkan add-on script now tell git to trust the folders
+  they work in, for their own git commands only; your own git settings are not changed. Tested on an exFAT
+  drive: git refused the folder before and works in it now.
+- An install that already stopped there: download **GT5-Installer.bat** again and run it. It picks up
+  where it stopped.
+
 🏷️ Released as **v0.1.86**
 
 🚀 **Launcher: your own lines in settings.bat are kept, however and wherever you write them**

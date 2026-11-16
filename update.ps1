@@ -16,6 +16,14 @@ param([string]$Version, [switch]$List, [switch]$Dev, [switch]$NoBuild, [switch]$
 # Errors are checked through exit codes: with "Stop", Windows PowerShell turns git's progress messages
 # on stderr into errors.
 $ErrorActionPreference = "Continue"
+# On a drive that doesn't record who owns a file (exFAT, FAT32, many USB and network drives) git refuses
+# to work in the install folder ("detected dubious ownership", #41). Trust it for git run from here and
+# what this starts, through git's environment config; the player's own git settings stay as they are.
+if ($env:GT5_GIT_SAFE -ne "1") {
+    $gn = 0; if ("$env:GIT_CONFIG_COUNT" -match '^\d+$') { $gn = [int]$env:GIT_CONFIG_COUNT }
+    Set-Item "env:GIT_CONFIG_KEY_$gn" "safe.directory"; Set-Item "env:GIT_CONFIG_VALUE_$gn" "*"
+    $env:GIT_CONFIG_COUNT = "$($gn + 1)"; $env:GT5_GIT_SAFE = "1"
+}
 $base = $PSScriptRoot
 $gt5 = Join-Path $base "GT5"
 $rc = Join-Path $base "ps3recomp"

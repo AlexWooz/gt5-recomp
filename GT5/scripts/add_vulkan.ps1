@@ -20,6 +20,13 @@ param(
 )
 # Continue: git and cmake write progress to stderr; each step's exit code says whether it worked.
 $ErrorActionPreference = 'Continue'
+# A drive that doesn't record file owners (exFAT, FAT32) makes git refuse the folders it clones here
+# ("dubious ownership", #41): trust them for this script's git, through git's environment config.
+if ($env:GT5_GIT_SAFE -ne '1') {
+    $gn = 0; if ("$env:GIT_CONFIG_COUNT" -match '^\d+$') { $gn = [int]$env:GIT_CONFIG_COUNT }
+    Set-Item "env:GIT_CONFIG_KEY_$gn" 'safe.directory'; Set-Item "env:GIT_CONFIG_VALUE_$gn" '*'
+    $env:GIT_CONFIG_COUNT = "$($gn + 1)"; $env:GT5_GIT_SAFE = '1'
+}
 $gt5 = Split-Path -Parent $PSScriptRoot
 $build = Join-Path $gt5 'build'
 $deps = Join-Path $gt5 'deps\vulkan'
