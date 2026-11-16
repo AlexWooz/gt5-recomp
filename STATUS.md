@@ -135,7 +135,10 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **16 Nov 2026:** Linux: your own keyboard keys (`PS3_KEYS` in `GT5/settings.sh`) and the small-CPU setting up to
+- **16 Nov 2026:** texture dumping and HD texture packs on DirectX 12: `PS3_TEX_DUMP=1` (or the launcher's Display page)
+  writes the game's textures to `GT5\textures\dump`, and files named by the same hash in `GT5\textures\replace` are used
+  instead at any size, PNG or DDS ([MODDING.md](MODDING.md#2-textures-and-hd-texture-packs)) (v0.1.78); Vulkan: no more washed-out (or too dark) races, as the exposure is measured from the right surface;
+  readbacks without a wait and shaders built ahead at start-up are on by default on Windows (v0.1.77); Linux: your own keyboard keys (`PS3_KEYS` in `GT5/settings.sh`) and the small-CPU setting up to
   12 threads, as on Windows (v0.1.76); a wider cockpit view and the seat moved forward, back, up or down (launcher Display > Cockpit
   view, off by default; only the view from the driver's seat changes) (v0.1.75); your own keyboard keys: every pad button can take the keys you choose, on the launcher's Controls
   page (labelled with what each button does in GT5) or with `PS3_KEYS` (v0.1.74); Vulkan: frame generation works there too (57 new pictures a second instead of 26 at Speed 30 fps),

@@ -1010,6 +1010,8 @@ so the launcher's settings win. Some useful ones:
 | `RSX_SHADER_CACHE_DIR=<dir>` | Where compiled shaders are cached (default `scratch\rsx_shader_cache_v2`). |
 | `LD_ASYNC_SHADERS=0` | Compile new shaders one at a time on the graphics thread, as before 13 Nov, instead of on up to 8 threads alongside it. |
 | `GT5_MOD_<NAME>=1` | Turns on a game-code mod from `GT5\mods` (see [MODDING.md](MODDING.md)). |
+| `PS3_TEX_DUMP=1` | Writes every texture the game shows to `GT5\textures\dump` (DDS and PNG), for making texture packs (also a tick box on the launcher's Display page). See [MODDING.md](MODDING.md#2-textures-and-hd-texture-packs). DirectX 12 only for now. |
+| `PS3_TEX_REPLACE=0` | Don't use the texture files in `GT5\textures\replace` (an HD texture pack); they're used whenever there are any. |
 
 Most speed-ups in the patch can be switched off one by one to rule them out when something looks
 wrong; each is described in a comment next to its `getenv` in the patch.
@@ -1050,8 +1052,8 @@ with, endorsed by, or connected to Sony Interactive Entertainment or Polyphony D
 
 Forks are welcome; take whatever you like (MIT license). If you make something good, open a pull
 request or [show it here](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=4-my-fork-or-mod.yml)
-so it can come back into the main repo. [MODDING.md](MODDING.md) covers the ways in: switchable
-game-code mods in `GT5\mods`, the graphics, controller and sound code, and the tools for finding
+so it can come back into the main repo. [MODDING.md](MODDING.md) covers the ways in: texture dumps
+and HD texture packs, switchable game-code mods in `GT5\mods`, the graphics, controller and sound code, and the tools for finding
 your way around. [CONTRIBUTING.md](CONTRIBUTING.md) has the few rules.
 
 <a id="credits"></a>

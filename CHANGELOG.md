@@ -9,6 +9,39 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.78**
+
+🖼️ **Texture dumping and HD texture packs (DirectX 12)**
+- `PS3_TEX_DUMP=1` (or the new tick box on the launcher's Display page) writes every texture the game
+  shows to `GT5\textures\dump\`, once, on a background thread. DXT textures (nearly everything on the
+  tracks and cars) come out as DDS holding the game's own compressed data, nothing lost; the rest
+  (menus, HUD) as PNG. Each name starts with a 16-digit hash of the texture's pixels, so a texture has
+  the same name on every PC and wherever GT5 keeps it in video memory (it moves textures around and
+  keeps a copy per car). What the game keeps rewriting (movies, animated backgrounds), render targets,
+  cube maps and 3D textures are left out.
+- A file in `GT5\textures\replace\` (sub-folders are fine) whose name starts with that hash is used
+  instead of the game's texture, at any size: PNG, or DDS in BC1/DXT1, BC3/DXT5, BC7 or 32-bit RGBA,
+  with the file's own mipmaps or ones made when it loads. Files load in the background the first time
+  their texture appears and stay for the session. `PS3_TEX_REPLACE=0` turns them off, `PS3_TEX_DIR`
+  points at another folder. How-to, names and formats: [MODDING.md](MODDING.md#2-textures-and-hd-texture-packs).
+  Dumped textures come off the game disc: share only your own work, never the dumps, and never on this
+  project's GitHub.
+- Tested in Arcade races. One run from the menus into a High Speed Ring race wrote 588 textures
+  (1,392 files over the test runs, 160 MB, every one opens in an image viewer). The track's billboard sheet (1024x1024 DXT5) swapped for a recoloured
+  4096x4096 PNG showed on the billboards at once, beside a 2048x2048 RGBA DDS with its own 12 mipmaps
+  and a same-size BC3 DDS without mipmaps. With all 335 race textures replaced by tinted copies, the
+  whole race came out tinted, files reused for each car's copy (one file at up to 5 addresses). At
+  Eiger, with 452 tinted files, nothing on the track kept its own colours, and a 2048x2048 texture that
+  turned up at a second address during the track load got its file there too.
+- Costs: with no `replace` folder and dumping off nothing is hashed; old and new build alternated on
+  the same busy PC gave 37.6 / 51.2 and 53.1 / 29.3 race fps, a spread between runs of one build
+  larger than any difference. Dumping or replacing hashes each texture the game decodes: about 0.2 s
+  in the first minute (start-up and menus), then under 0.5 ms per 10 s in a race (1.3 ms during the
+  track load). 178 files loaded in 0.4 s on the background thread; no slow frame when the 4096x4096
+  file reached the graphics card.
+- Not yet: the Vulkan renderer (and so Linux), cube maps, and a new size for the few textures the game
+  reads by pixel (`_rect` in the name: replace those at their own size).
+
 🏷️ Released as **v0.1.77**
 
 🌗 **Vulkan: races no longer washed out (or too dark)** ([#38](https://github.com/MormonFTP-hub/gt5-recomp/issues/38), [#20](https://github.com/MormonFTP-hub/gt5-recomp/issues/20))

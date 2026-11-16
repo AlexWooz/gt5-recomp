@@ -157,6 +157,8 @@ namespace Gt5Launcher
             { "watch.help", new[] { "Comes on after 10 s without input (B-Spec, replays): draws fewer frames (see the next setting) and lowers the game's priority. F9 toggles it any time.", "10 秒无操作后自动开启（B-Spec、回放）：减少绘制的帧数（见下一项）并降低游戏优先级。随时可按 F9 切换。" } },
             { "framegen", new[] { "Frame generation (beta)", "帧生成（测试版）" } },
             { "framegen.help", new[] { "Fills the frames that 30 fps and watch mode leave out with frames made on the graphics card, so the picture stays at 60. The game and its CPU work are unchanged; the newest frame reaches the screen one refresh later. Off: only drawn frames are shown.", "用显卡生成的帧补上 30 fps 和观看模式省略的帧，让画面保持 60 帧。游戏本身和 CPU 负载不变；最新的一帧会晚一次刷新显示。关闭时只显示实际绘制的帧。" } },
+            { "texdump", new[] { "Dump textures (for texture packs)", "导出纹理（用于制作纹理包）" } },
+            { "texdump.help", new[] { "Writes every texture the game shows to GT5\\textures\\dump (DDS and PNG), to make HD texture packs from (see MODDING.md). Costs a little speed: turn it off when you are done. DirectX 12 only.", "把游戏显示的每个纹理写入 GT5\\textures\\dump（DDS 和 PNG），用来制作高清纹理包（见 MODDING.md）。会稍微降低速度，用完请关闭。仅限 DirectX 12。" } },
             { "renderer", new[] { "Renderer", "渲染器" } },
             { "renderer.help", new[] { "DirectX 12 is the port's main renderer and the fastest. Vulkan (the Linux and Android renderer) is here to try: on Windows it's slower for now, some effects may look different, and frame generation and the F9 watch-mode key are DirectX 12 only. Picking Vulkan the first time adds it to your gt5.exe (a one-time build).", "DirectX 12 是本移植的主要渲染器，也是最快的。Vulkan（Linux 和 Android 版使用的渲染器）可供试用：目前在 Windows 上较慢，部分效果可能不同，帧生成和 F9 观看模式快捷键只在 DirectX 12 下可用。第一次选择 Vulkan 时会把它编译进 gt5.exe（只需一次）。" } },
             { "renderer.dx12", new[] { "DirectX 12 (recommended)", "DirectX 12（推荐）" } },
@@ -345,7 +347,7 @@ namespace Gt5Launcher
             new[] { "GT5_LAUNCH_WINDOW", "windowed" }, new[] { "GT5_LAUNCHER_LANG", "" },
             new[] { "GT5_LAUNCHER_HIDE", "1" }, new[] { "GT5_LAUNCHER_AUTOCHECK", "1" },
             new[] { "GT5_SPEED", "" }, new[] { "PS3_SKIP_INTRO", "1" }, new[] { "LD_WATCH_DRAW", "" },
-            new[] { "LD_FRAMEGEN", "" }, new[] { "GT5_RENDERER", "" },
+            new[] { "LD_FRAMEGEN", "" }, new[] { "GT5_RENDERER", "" }, new[] { "PS3_TEX_DUMP", "" },
             new[] { "PS3_MOUSE_STEER", "" }, new[] { "PS3_MOUSE_STEER_SENS", "" }, new[] { "PS3_MOUSE_STEER_CENTER", "" },
             new[] { "PS3_KEYS", "" },
             new[] { "PS3_COCKPIT_FOV", "" }, new[] { "PS3_COCKPIT_SEAT", "" }, new[] { "PS3_COCKPIT_HEIGHT", "" },
@@ -1325,6 +1327,7 @@ namespace Gt5Launcher
             y = AddCheck(p, "watch", "watch.help", "LD_WATCH", "1", y);
             y = AddCombo(p, "wdraw", "wdraw.help", "LD_WATCH_DRAW", new[] { new Choice("", T.Get("wdraw.2")), new Choice("3", T.Get("wdraw.3")), new Choice("4", T.Get("wdraw.4")) }, y);
             y = AddCheck(p, "framegen", "framegen.help", "LD_FRAMEGEN", "1", y);
+            y = AddCheck(p, "texdump", "texdump.help", "PS3_TEX_DUMP", "1", y);
             y = AddCombo(p, "spus", "spus.help", "SPURS_EXTRA_SPUS", new[] { new Choice("0", "0"), new Choice("1", "1"), new Choice("2", "2"), new Choice("3", "3"), new Choice("4", "4") }, y);
             // Cockpit view (GT5\src\gt5_cockpit.cpp): "" = the game's own camera.
             p.Controls.Add(new Label { Text = T.Get("cockpit"), Font = Look.F(11f, FontStyle.Bold), ForeColor = Look.Text, AutoSize = true, Location = new Point(0, y + 8) });

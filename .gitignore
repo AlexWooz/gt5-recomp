@@ -34,12 +34,15 @@ GT5/spu/
 GT5/src/gen/
 GT5/analysis/
 GT5/scratch/
-# Saves, logs, screenshots
+# Saves, logs, screenshots, texture dumps and packs (never on GitHub)
 GT5/hdd0/
 GT5/hdd1/
 GT5/test_save/
 GT5/logs/
 GT5/scripts/refs/
+GT5/textures/
+*.dds
+*.DDS
 *.png
 !docs/banner.png
 !docs/social.png
