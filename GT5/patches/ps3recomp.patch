@@ -18080,7 +18080,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  #include "vulkan/rsx_vk_fallback_vert.spv.h"
  #include "vulkan/rsx_vk_fallback_frag.spv.h"
  
-@@ -58,13 +61,37 @@
+@@ -58,13 +61,46 @@
  #include <SDL2/SDL.h>
  #include <SDL2/SDL_vulkan.h>
  
@@ -18114,11 +18114,20 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +__declspec(dllimport) long __stdcall GetWindowLongA(void* hwnd, int index);
 +__declspec(dllimport) long __stdcall SetWindowLongA(void* hwnd, int index, long value);
 +__declspec(dllimport) unsigned long __stdcall GetCurrentProcessId(void);
++/* The shader workers' priority, CPU count and own CPU time (vk_async_shaders, VK_SHADER_LOG). */
++__declspec(dllimport) void* __stdcall GetCurrentThread(void);
++__declspec(dllimport) void* __stdcall GetCurrentProcess(void);
++__declspec(dllimport) int __stdcall SetThreadPriority(void* thread, int priority);
++__declspec(dllimport) int __stdcall QueryThreadCycleTime(void* thread, unsigned long long* cycles);
++__declspec(dllimport) int __stdcall GetProcessAffinityMask(void* process, unsigned long long* mask, unsigned long long* sys);
++#include <intrin.h>   /* __rdtsc */
++#else
++#include <time.h>
 +#endif
  
  /* ---------------------------------------------------------------------------
   * Run-time loaded entry points (Vulkan 1.0 core only)
-@@ -99,9 +126,10 @@
+@@ -99,9 +135,11 @@
      X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) \
      X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) X(vkCmdPushConstants) \
      X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdDraw) \
@@ -18127,11 +18136,12 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) \
 -    X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCmdBlitImage)
 +    X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCmdBlitImage) \
-+    X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkCmdClearAttachments)
++    X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkCmdClearAttachments) \
++    X(vkCreatePipelineCache) X(vkDestroyPipelineCache) X(vkGetPipelineCacheData)
  /* Window-system entry points, loaded only when a window was requested, so a
   * headless run never depends on a driver that can present. */
  #define VK_WSI_INSTANCE_FNS(X) \
-@@ -140,6 +168,11 @@
+@@ -140,6 +178,11 @@
      VkImage        img;
      VkDeviceMemory mem;
      VkImageView    view;
@@ -18143,7 +18153,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  } vk_image;
  
  #define VK_SAMPLER_CACHE 32
-@@ -214,6 +247,7 @@
+@@ -214,6 +257,7 @@
      int              eng_active;      /* the register-file engine drives us */
      int              bc_ok;           /* textureCompressionBC enabled       */
      int              depth_bounds_ok; /* depthBounds enabled                */
@@ -18151,7 +18161,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      int              indep_blend_ok;  /* independentBlend: per-target MRT state */
      u32              max_dim;         /* maxImageDimension2D of the device  */
      int              windowed;
-@@ -235,6 +269,11 @@
+@@ -235,6 +279,11 @@
      u32              presented;
      const char*      dump_path;
      u32              dump_every;       /* write every nth presented frame */
@@ -18163,7 +18173,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  } vk_state;
  
  static vk_state s_vk;
-@@ -251,7 +290,11 @@
+@@ -251,7 +300,11 @@
   * -------------------------------------------------------------------------*/
  static int vk_load_library(void)
  {
@@ -18175,7 +18185,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      for (size_t i = 0; i < sizeof names / sizeof names[0] && !s_vk.lib; i++)
          s_vk.lib = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
      if (!s_vk.lib) {
-@@ -353,7 +396,11 @@
+@@ -353,7 +406,11 @@
      if (n == 0) { VK_LOG("no Vulkan physical devices\n"); return -1; }
      if (n > 16) n = 16;
      VkPhysicalDevice devs[16];
@@ -18188,7 +18198,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  
      int best = -1, best_rank = -1;
      const char* forced = getenv("PS3RECOMP_VK_DEVICE");
-@@ -407,10 +454,113 @@
+@@ -407,10 +464,113 @@
      return -1;
  }
  
@@ -18302,7 +18312,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      VkImageCreateInfo ici = {
          .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
          .format = fmt, .extent = { w, h, 1 }, .mipLevels = levels, .arrayLayers = 1,
-@@ -429,6 +579,7 @@
+@@ -429,6 +589,7 @@
      VkMemoryAllocateInfo mai = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
                                   .allocationSize = req.size, .memoryTypeIndex = type };
      VK_CHECK(pvkAllocateMemory(s_vk.device, &mai, NULL, &im->mem), "vkAllocateMemory(image)");
@@ -18310,7 +18320,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      VK_CHECK(pvkBindImageMemory(s_vk.device, im->img, im->mem, 0), "vkBindImageMemory");
      VkImageViewCreateInfo vci = {
          .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = im->img,
-@@ -436,6 +587,8 @@
+@@ -436,6 +597,8 @@
          .subresourceRange = { aspect, 0, levels, 0, 1 },
      };
      VK_CHECK(pvkCreateImageView(s_vk.device, &vci, NULL, &im->view), "vkCreateImageView");
@@ -18319,7 +18329,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      return 0;
  }
  
-@@ -444,6 +597,72 @@
+@@ -444,6 +607,82 @@
  {
      return vk_create_image_levels(im, fmt, w, h, 1, usage, aspect);
  }
@@ -18376,7 +18386,17 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +    u64           queued;        /* pipelines handed to the workers */
 +    u64           on_walker;     /* queued ones a draw needed at once: built on the walker */
 +    u64           waited;        /* ... or waited for, a worker having it already */
++    u64           built;         /* taken from the queue and finished by a worker */
++    u64           assisted;      /* scene pipelines the walker built after VK_SHADER_ASSIST_MS */
++    u32           busy;          /* workers building one now */
++    u64           w_ticks, w_cpu_ns;   /* the workers' wall time and own CPU time on builds */
++    u64           draws;         /* engine draws (VK_SHADER_LOG) */
++    u64           shared;        /* new engine pipelines that were a Vulkan pipeline made already */
 +} s_async_sh = { -1 };
++static u32 s_vk_present_no;     /* engine presents (vk_hitch_frame) */
++static u32 vk_async_waiting(void);
++static int vk_shader_log_on(void);
++static void vk_pcd_save(u32 least);   /* VK_PIPELINE_DISK_CACHE */
 +
 +/* PS3RECOMP_VK_ASYNC_SKIP_ALL=1 (tests): skip every draw whose pipeline is still building, as
 + * v0.1.49-v0.1.60 did, full-screen passes included (vk_eng_pipe_build_now). */
@@ -18392,7 +18412,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  
  static void vk_present_wait_gpu(void);
  
-@@ -452,7 +671,8 @@
+@@ -452,7 +691,8 @@
   * results flushes them first, so everything else keeps the invariant that
   * all earlier work has completed. */
  static u32 s_eb_pending;
@@ -18402,7 +18422,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  static int vk_eb_active(void);       /* batching decided on and on */
  static u32 vk_eb_max(void);
  static void vk_eb_recorded(void);   /* one more command in the open batch */
-@@ -460,14 +680,82 @@
+@@ -460,14 +700,82 @@
  static int vk_eb_upload(VkImage img, VkBufferImageCopy* region, const void* src, size_t tight,
                          u32 rows, u32 row_bytes);   /* -2: not batched, do it the old way */
  
@@ -18487,7 +18507,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      memset(im, 0, sizeof *im);
  }
  
-@@ -525,7 +813,7 @@
+@@ -525,7 +833,7 @@
  
  static void vk_destroy_buffer(vk_buffer* b)
  {
@@ -18496,7 +18516,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      if (b->ptr) pvkUnmapMemory(s_vk.device, b->mem);
      if (b->buf) pvkDestroyBuffer(s_vk.device, b->buf, NULL);
      if (b->mem) pvkFreeMemory(s_vk.device, b->mem, NULL);
-@@ -551,6 +839,7 @@
+@@ -551,6 +859,7 @@
   * -------------------------------------------------------------------------*/
  static VkResult vk_queue_submit(const VkSubmitInfo* si, VkFence fence)
  {
@@ -18504,7 +18524,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      pthread_mutex_lock(&s_vk.queue_mu);
      const VkResult r = pvkQueueSubmit(s_vk.queue, 1, si, fence);
      pthread_mutex_unlock(&s_vk.queue_mu);
-@@ -575,8 +864,25 @@
+@@ -575,8 +884,25 @@
  
  /* A full execution and memory dependency on everything submitted before
   * this command buffer, the present's copy included. */
@@ -18530,7 +18550,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      VkMemoryBarrier mb = { .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
                             .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
                             .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT };
-@@ -584,9 +890,9 @@
+@@ -584,9 +910,9 @@
                            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
  }
  
@@ -18543,7 +18563,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      VK_CHECK(pvkResetCommandBuffer(s_vk.cmd, 0), "vkResetCommandBuffer");
      VkCommandBufferBeginInfo bi = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
-@@ -595,25 +901,65 @@
+@@ -595,25 +921,65 @@
       * to draw over: order everything here after it. Set only by a present,
       * which never runs alongside the walker's recording. */
      if (s_vk.present_order) { vk_cmd_after_everything(s_vk.cmd); s_vk.present_order = 0; }
@@ -18612,7 +18632,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      VkImageMemoryBarrier b = {
          .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
          .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
-@@ -963,7 +1309,9 @@
+@@ -963,7 +1329,9 @@
      /* A 1x1 magenta dummy keeps the descriptor valid before any bind --
       * the same "not bound" colour the null backend's sampler returns. */
      static const u8 magenta[4] = { 0xFF, 0x00, 0xFF, 0xFF };
@@ -18623,7 +18643,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      vk_write_texture_descriptor();
      return 0;
  }
-@@ -1714,9 +2062,16 @@
+@@ -1714,9 +2082,16 @@
      return v && v[0] && v[0] != '0';
  }
  
@@ -18641,7 +18661,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      if (s_vk.device && pvkDeviceWaitIdle) {
          vk_device_idle();
          for (u32 i = 0; i < 8; i++)
-@@ -1725,6 +2080,7 @@
+@@ -1725,6 +2100,7 @@
                  s_vk.sc_done[i] = VK_NULL_HANDLE;
              }
          if (s_vk.sem_acquire) pvkDestroySemaphore(s_vk.device, s_vk.sem_acquire, NULL);
@@ -18649,7 +18669,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          if (s_vk.swapchain && pvkDestroySwapchainKHR)
              pvkDestroySwapchainKHR(s_vk.device, s_vk.swapchain, NULL);
      }
-@@ -1742,6 +2098,14 @@
+@@ -1742,6 +2118,14 @@
      s_vk.windowed = 0;
  }
  
@@ -18664,7 +18684,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  static void vk_window_open(const char* title)
  {
      if (!vk_env_on("PS3RECOMP_VK_WINDOW")) return;
-@@ -1749,11 +2113,35 @@
+@@ -1749,11 +2133,35 @@
          VK_LOG("window disabled, continuing headless: SDL video init failed: %s\n", SDL_GetError());
          return;
      }
@@ -18703,7 +18723,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      s_vk.windowed = 1;          /* so vk_window_drop also shuts SDL video down */
      if (!s_vk.window) {
          char why[256];
-@@ -1761,6 +2149,17 @@
+@@ -1761,6 +2169,17 @@
          vk_window_drop(why);
          return;
      }
@@ -18721,7 +18741,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      unsigned n = 0;
      if (!SDL_Vulkan_GetInstanceExtensions(s_vk.window, &n, NULL) || n == 0 || n > 16 ||
          !SDL_Vulkan_GetInstanceExtensions(s_vk.window, &n, s_vk.inst_exts)) {
-@@ -1785,25 +2184,37 @@
+@@ -1785,25 +2204,37 @@
          VK_LOG("swapchain images cannot be blit destinations\n"); return -1;
      }
  
@@ -18768,7 +18788,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      VkFormatProperties fp;
      pvkGetPhysicalDeviceFormatProperties(s_vk.phys, fmt.format, &fp);
      if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT)) {
-@@ -1821,6 +2232,19 @@
+@@ -1821,6 +2252,19 @@
          if (ext.height > caps.maxImageExtent.height) ext.height = caps.maxImageExtent.height;
      }
      if (!ext.width || !ext.height) { VK_LOG("window has no drawable area\n"); return -1; }
@@ -18788,7 +18808,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  
      u32 count = caps.minImageCount + 1;
      if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
-@@ -1841,7 +2265,7 @@
+@@ -1841,7 +2285,7 @@
          .imageExtent = ext, .imageArrayLayers = 1,
          .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
          .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
@@ -18797,7 +18817,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          .presentMode = VK_PRESENT_MODE_FIFO_KHR,   /* the one mode every driver has */
          .clipped = VK_TRUE, .oldSwapchain = old,
      };
-@@ -1868,32 +2292,184 @@
+@@ -1868,32 +2312,200 @@
  
      s_vk.sc_extent = ext;
      s_vk.sc_count = n;
@@ -18877,13 +18897,29 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +#if !defined(__ANDROID__)
 +/* A minimised window has no drawing area (Windows reports 0x0), so no swapchain can be made for it.
 + * That used to give the window up for good ("continuing headless"); now presents wait until the
-+ * window is back and the swapchain is made again then. */
++ * window is back and the swapchain is made again then.
++ * Whether it is back is asked of the surface itself (the extent a swapchain would get, as
++ * vk_create_swapchain reads it), not of SDL's MINIMIZED flag: that flag only changes when SDL's
++ * events are pumped and seen, and a player's window came back black and stayed black, the log
++ * saying "window minimised" and never "window back" while the game ran on (16 Nov, v0.1.77).
++ * VK_WIN_SDL_FLAG=1 = the old test. */
 +static int s_win_wait;
 +static int vk_window_has_area(void)
 +{
++    static int old = -1;
++    if (old < 0) { const char* e = getenv("VK_WIN_SDL_FLAG"); old = e && *e && atoi(e) != 0; }
 +    int w = 0, h = 0;
-+    if (!s_vk.window || (SDL_GetWindowFlags(s_vk.window) & SDL_WINDOW_MINIMIZED)) return 0;
-+    SDL_Vulkan_GetDrawableSize(s_vk.window, &w, &h);
++    if (!s_vk.window) return 0;
++    if (old) {
++        if (SDL_GetWindowFlags(s_vk.window) & SDL_WINDOW_MINIMIZED) return 0;
++        SDL_Vulkan_GetDrawableSize(s_vk.window, &w, &h);
++        return w > 0 && h > 0;
++    }
++    VkSurfaceCapabilitiesKHR caps;
++    if (s_vk.surface && pvkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_vk.phys, s_vk.surface, &caps) == VK_SUCCESS &&
++        caps.currentExtent.width != 0xFFFFFFFFu)
++        return caps.currentExtent.width > 0 && caps.currentExtent.height > 0;
++    SDL_Vulkan_GetDrawableSize(s_vk.window, &w, &h);   /* the surface leaves the size to us */
 +    return w > 0 && h > 0;
 +}
 +#endif
@@ -18992,7 +19028,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      if (pvkResetCommandBuffer(cb, 0) != VK_SUCCESS) { VK_LOG("vkResetCommandBuffer (window) failed\n"); return; }
      VkCommandBufferBeginInfo bi = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
-@@ -1929,16 +2505,17 @@
+@@ -1929,16 +2541,17 @@
      VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
      VkSubmitInfo si = {
          .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -19014,7 +19050,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  
      VkPresentInfoKHR pi = {
          .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-@@ -1946,14 +2523,781 @@
+@@ -1946,14 +2559,781 @@
          .swapchainCount = 1, .pSwapchains = &s_vk.swapchain, .pImageIndices = &idx,
      };
      r = vk_queue_present(&pi);
@@ -19798,7 +19834,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      fprintf(f, "P6\n%u %u\n255\n", s_vk.width, s_vk.height);
      for (size_t i = 0; i < (size_t)s_vk.width * s_vk.height; i++)
          fwrite(rgba + i * 4, 1, 3, f);
-@@ -1983,8 +3327,23 @@
+@@ -1983,8 +3363,23 @@
   * alongside the walker. */
  static void vk_present_wait_gpu(void)
  {
@@ -19822,7 +19858,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  }
  
  /* present_mu held. */
-@@ -1994,13 +3353,43 @@
+@@ -1994,13 +3389,43 @@
      pvkWaitForFences(s_vk.device, 1, &s_vk.present_fence, VK_TRUE, UINT64_MAX);
      __atomic_store_n(&s_vk.present_inflight, 0, __ATOMIC_RELEASE);
  
@@ -19872,7 +19908,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  }
  
  /* present_mu held: a previous present finished, the present's command
-@@ -2022,27 +3411,36 @@
+@@ -2022,27 +3447,36 @@
  static void vk_present_record_end(VkCommandBuffer cb)
  {
      vk_barrier_image_on(cb, s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
@@ -19926,7 +19962,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      __atomic_store_n(&s_vk.present_inflight, 1, __ATOMIC_RELEASE);
      s_vk.present_order = 1;
      if (!(s_vk.present_split && s_vk.eng_active)) vk_present_complete_locked();
-@@ -2092,6 +3490,7 @@
+@@ -2092,6 +3526,7 @@
      u8       cube;                   /* TEXTURE: six layers, a CUBE view    */
      u8       snapshot;               /* COLOR: a feedback copy, never a target */
      u32      mips;                   /* TEXTURE: levels the image was created with */
@@ -19934,7 +19970,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  } vk_eng_obj;
  
  static vk_eng_obj s_eobj[VK_ENG_MAX_OBJ];
-@@ -2294,12 +3693,14 @@
+@@ -2294,12 +3729,14 @@
  }
  
  static void vk_eng_snapshot_pool_drain(void);
@@ -19949,7 +19985,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      vk_eb_release();
      vk_destroy_buffer(&s_rb_stage);
      vk_destroy_buffer(&s_up_stage);
-@@ -2308,7 +3709,7 @@
+@@ -2308,7 +3745,7 @@
  static void vk_eng_submit_and_wait(void* user, u32 reason)
  {
      (void)user; (void)reason;      /* every other submission has already completed */
@@ -19958,7 +19994,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  }
  
  static u32 vk_eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
-@@ -2333,13 +3734,21 @@
+@@ -2333,13 +3770,21 @@
      }
      o->kind = VK_ENG_COLOR; o->fmt = vf; o->bpp = bpp; o->w = w; o->h = h;
      /* UNDEFINED -> GENERAL, then the guest's own bytes when the engine could
@@ -19983,7 +20019,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      if (seed && seed_row_bytes)
          vk_eng_upload(o->im.img, 0, 0, w, h, bpp, seed, seed_row_bytes);
      return hd;
-@@ -2359,18 +3768,24 @@
+@@ -2359,18 +3804,24 @@
          vk_destroy_image(&o->im); return 0;
      }
      o->kind = VK_ENG_DEPTH; o->fmt = s_vk.depth_format; o->w = w; o->h = h;
@@ -20011,7 +20047,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      (void)user;
      if (count > RSX_BE_MAX_COLOR_TARGETS) count = RSX_BE_MAX_COLOR_TARGETS;
      for (u32 i = 0; i < RSX_BE_MAX_COLOR_TARGETS; i++)
-@@ -2419,29 +3834,219 @@
+@@ -2419,29 +3870,245 @@
      else vk_submit_and_wait();
  }
  
@@ -20132,6 +20168,27 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +static void vk_hitch_frame(void)
 +{
 +    static u64 last, skipped0; static u32 shown, frame;
++    s_vk_present_no++;
++    if (vk_shader_log_on()) {   /* VK_SHADER_LOG=1: the shader queue, once a second */
++        static u64 t1, d1, sk1, q1, b1, w1, a1, wt1, wc1, sh1; static u32 f1;
++        const u64 now1 = SDL_GetPerformanceCounter(), hz1 = SDL_GetPerformanceFrequency();
++        if (!t1) t1 = now1;
++        if (now1 - t1 >= hz1) {
++            const double sec = (double)(now1 - t1) / (double)hz1;
++            VK_LOG("[vkq] t=%.1f frames %u draws %llu skipped %llu | queued %llu built %llu walker %llu assisted %llu"
++                   " waiting %u shared %llu | workers %.0f ms busy, %.0f ms CPU\n",
++                   (double)SDL_GetTicks() / 1000.0, (unsigned)((s_vk_present_no - f1) / sec + 0.5),
++                   (unsigned long long)(s_async_sh.draws - d1), (unsigned long long)(s_async_sh.skipped - sk1),
++                   (unsigned long long)(s_async_sh.queued - q1), (unsigned long long)(s_async_sh.built - b1),
++                   (unsigned long long)(s_async_sh.on_walker - w1), (unsigned long long)(s_async_sh.assisted - a1),
++                   vk_async_waiting(), (unsigned long long)(s_async_sh.shared - sh1),
++                   (double)(s_async_sh.w_ticks - wt1) * 1000.0 / (double)hz1,
++                   (double)(s_async_sh.w_cpu_ns - wc1) / 1e6);
++            t1 = now1; f1 = s_vk_present_no; d1 = s_async_sh.draws; sk1 = s_async_sh.skipped;
++            q1 = s_async_sh.queued; b1 = s_async_sh.built; w1 = s_async_sh.on_walker; a1 = s_async_sh.assisted;
++            wt1 = s_async_sh.w_ticks; wc1 = s_async_sh.w_cpu_ns; sh1 = s_async_sh.shared;
++        }
++    }
 +    if (!vk_hitch_ms()) return;
 +    const u64 now = SDL_GetPerformanceCounter();
 +    const double k = 1000.0 / (double)SDL_GetPerformanceFrequency();
@@ -20177,21 +20234,26 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +    skipped0 = s_async_sh.skipped;
 +    {   /* With PS3RECOMP_VK_ASYNC_SHADERS: what the workers took and what was not drawn, every 5 s
 +         * that had any. */
-+        static u64 t5, sk5, q5, ow5, wt5;
++        static u64 t5, sk5, q5, ow5, wt5, b5, as5, sh5;
 +        const u64 hz = SDL_GetPerformanceFrequency();
 +        if (!t5) t5 = now;
 +        if (now - t5 >= 5 * hz) {
-+            if (s_async_sh.queued != q5 || s_async_sh.skipped != sk5)
++            if (s_async_sh.queued != q5 || s_async_sh.skipped != sk5 || s_async_sh.shared != sh5)
 +                VK_LOG("engine: async shaders: %llu new pipelines queued (%llu needed at once by a"
 +                       " full-screen or 2D draw: %llu built on the walker, %llu waited for), %llu"
-+                       " scene draws skipped meanwhile (last 5 s)\n",
++                       " scene draws skipped meanwhile; %llu built by %d workers, %llu by the walker after"
++                       " waiting too long, %u still to build, %llu more were one built already (last 5 s)\n",
 +                       (unsigned long long)(s_async_sh.queued - q5),
 +                       (unsigned long long)(s_async_sh.on_walker - ow5 + s_async_sh.waited - wt5),
 +                       (unsigned long long)(s_async_sh.on_walker - ow5),
 +                       (unsigned long long)(s_async_sh.waited - wt5),
-+                       (unsigned long long)(s_async_sh.skipped - sk5));
-+            t5 = now; sk5 = s_async_sh.skipped; q5 = s_async_sh.queued;
++                       (unsigned long long)(s_async_sh.skipped - sk5),
++                       (unsigned long long)(s_async_sh.built - b5), s_async_sh.threads,
++                       (unsigned long long)(s_async_sh.assisted - as5), vk_async_waiting(),
++                       (unsigned long long)(s_async_sh.shared - sh5));
++            t5 = now; sk5 = s_async_sh.skipped; q5 = s_async_sh.queued; sh5 = s_async_sh.shared;
 +            ow5 = s_async_sh.on_walker; wt5 = s_async_sh.waited;
++            b5 = s_async_sh.built; as5 = s_async_sh.assisted;
 +        }
 +    }
 +    last = now;
@@ -20234,7 +20296,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
                                                                          : VK_FILTER_LINEAR);
          }
          vk_present_record_end(cb);
-@@ -2466,6 +4071,7 @@
+@@ -2466,6 +4133,7 @@
  static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
                              void* out, u32 out_pitch)
  {
@@ -20242,7 +20304,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      (void)user;
      vk_eng_obj* o = vk_eng_get(surface, VK_ENG_COLOR);
      if (!o || !out || !out_pitch || !w || !h || x + w > o->w || y + h > o->h) return;
-@@ -2495,23 +4101,162 @@
+@@ -2495,23 +4163,162 @@
      }
  }
  
@@ -20410,7 +20472,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      const int cube = (faces == 6);
      if ((faces != 1 && !cube) || (cube && w != h)) return 0;   /* cube faces are square */
      if (!mips) mips = 1;
-@@ -2527,35 +4272,73 @@
+@@ -2527,35 +4334,73 @@
          .sharingMode = VK_SHARING_MODE_EXCLUSIVE, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
      VkMemoryRequirements req;
      u32 type;
@@ -20498,7 +20560,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      /* A BC row is a row of 4x4 blocks; the engine's `rows` already counts them. */
      const size_t tight = o->block ? (size_t)((w + 3u) / 4u) * o->block : (size_t)w * o->bpp;
      vk_eng_upload_rows(o->im.img, face, mip, w, h, tight, rows, src, row_bytes);
-@@ -2622,8 +4405,171 @@
+@@ -2622,8 +4467,171 @@
      vk_destroy_buffer(&s_snap_st);
  }
  
@@ -20670,7 +20732,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      (void)user;
      const vk_eng_obj* t = vk_eng_get(surface, VK_ENG_COLOR);
      if (!t || t->snapshot) return 0;
-@@ -2676,6 +4622,7 @@
+@@ -2676,6 +4684,7 @@
   * invalidates and asks again; it goes when the depth target goes. */
  static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
  {
@@ -20678,7 +20740,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      vk_eng_obj* z = vk_eng_get(depth, VK_ENG_DEPTH);
      if (!z) return 0;
      if (s_vk.depth_format != VK_FORMAT_D32_SFLOAT &&
-@@ -2746,17 +4693,276 @@
+@@ -2746,17 +4755,276 @@
          pvkCmdCopyBufferToImage(s_vk.cmd, st.buf, t->im.img, VK_IMAGE_LAYOUT_GENERAL, 1, &in);
          if (batch) {
              vk_barrier_image(t->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
@@ -20956,7 +21018,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      (void)user;
      vk_eng_obj* z = vk_eng_get(depth, VK_ENG_DEPTH);
      if (!z || !out || !w || !h || x + w > z->w || y + h > z->h ||
-@@ -2821,9 +5027,23 @@
+@@ -2821,9 +5089,33 @@
      VkFormat            rt_fmt;          /* picks the render pass it is built against */
      u32                 cube_mask;       /* TextureCube units: the split set layout */
      VkPipeline          variant[VK_ENG_TOPOLOGIES];
@@ -20971,6 +21033,16 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +    int                 claimed;
 +    /* VK_PIPELINE_PREBUILD: its programs' names in the SPIR-V cache, and the state key */
 +    u64                 vs_h, ps_h, rs_h;
++    /* VK_SHADER_BOOST: draws skipped waiting for it, the frame (vk_hitch_frame's count + 1) the last
++     * one was in, and when the first was (the walker's clock) */
++    u32                 skips, last_skip;
++    u64                 first_skip;
++    /* VK_SHADER_BOOST: its Vulkan identity (vk_eng_vk_key) and its render state's part of it; alias =
++     * the pipeline (slot + 1) it shares everything with, being the same Vulkan pipeline; refs = how many
++     * share this one; orphan = the engine released it while others still share it. */
++    u64                 dkey, nrs_h;
++    u32                 alias, refs;
++    int                 orphan;
  } vk_eng_pipe;
  
  static vk_eng_pipe s_epipe[VK_ENG_MAX_PIPE];
@@ -20980,7 +21052,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  
  static struct {
      VkRenderPass rp[VK_ENG_RT_FORMATS][RSX_BE_MAX_COLOR_TARGETS + 1]; /* by format, colour count */
-@@ -2834,6 +5054,8 @@
+@@ -2834,6 +5126,8 @@
      u32          pipeline;
      u32          vs_bytes, ps_bytes;
      u8*          ucpu;                /* the constants, in the shared UBO's layout */
@@ -20989,7 +21061,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      u32          tex[RSX_BE_MAX_TEXTURES];
      rsx_be_sampler_desc samp[RSX_BE_MAX_TEXTURES];
      u32          tex_mask;
-@@ -2842,6 +5064,7 @@
+@@ -2842,6 +5136,7 @@
      int          have_vp, have_sc;
      u32          stencil_ref;
      float        depth_bounds[2];     /* min, max for the next draw */
@@ -20997,7 +21069,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      vk_buffer    indices;
      u32          warned;
      /* The split set layout (vk_eng_split_layout) and its one set, made the
-@@ -2860,7 +5083,17 @@
+@@ -2860,7 +5155,17 @@
  
  static void vk_eng_drop_framebuffers(void)
  {
@@ -21016,7 +21088,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      for (u32 i = 0; i < s_e2.fb_count; i++)
          if (s_e2.fb[i].fb) pvkDestroyFramebuffer(s_vk.device, s_e2.fb[i].fb, NULL);
      s_e2.fb_count = 0;
-@@ -2958,17 +5191,164 @@
+@@ -2958,17 +5263,313 @@
      return s;
  }
  
@@ -21058,14 +21130,94 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 + * walker that was a frozen frame of 300 ms or more (the [slow-frame] lines say
 + * how much of a long frame was this). Skipped draws mean an object can be
 + * missing for the first frames it is on screen. Off (0) by default; 1 picks a
-+ * thread count from the CPU count, 2..8 that many. (Its state, s_async_sh, is
-+ * with the [slow-frame] counters near the top.) */
++ * thread count from the CPU count (vk_shader_threads_auto), 2..8 that many. (Its state, s_async_sh,
++ * is with the [slow-frame] counters near the top.) */
++
++/* ---- VK_SHADER_BOOST (on unless =0): the backlog a new scene leaves, built in seconds -------------
++ * A race start queues 200-500 new pipelines. A laptop's Intel driver takes ~25 ms of CPU for each
++ * (the [slow-frame] lines of an i5-1135G7 + Iris Xe), and the two workers ran at normal priority beside
++ * a dozen busy game threads on 8 logical CPUs: they got a fraction of a core each, the queue took one
++ * to two minutes to empty, and every scene draw waiting for it was left out meanwhile (black sky,
++ * missing track), 25,000-57,000 draws per 5 s. Now, unless VK_SHADER_BOOST=0:
++ *  - workers: half the logical CPUs the game may use (its affinity), 2..8, where it was a quarter of
++ *    all the PC's CPUs (an 8-thread laptop got 2, now 4);
++ *  - they build above normal priority (Windows; they only run while something is queued), so a busy
++ *    game no longer starves them;
++ *  - each takes the queued pipeline the most skipped draws are waiting for, not the oldest;
++ *  - a pipeline the start-up builder (VK_PIPELINE_PREBUILD) hasn't reached yet when a draw asks for it
++ *    is built once, by the workers, not a second time by that builder;
++ *  - a scene pipeline still queued VK_SHADER_ASSIST_MS (default 1500) after its first skipped draw is
++ *    built by the walker itself, one a frame, so no scene stays half-drawn however busy the PC is.
++ * VK_SHADER_LOG=1 prints a [vkq] line a second: draws, skipped, queued, built, waiting, worker time. */
++static int vk_shader_boost(void)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("VK_SHADER_BOOST"); on = !(e && *e && atoi(e) == 0); }
++    return on;
++}
++static int vk_shader_log_on(void)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("VK_SHADER_LOG"); on = e && *e && atoi(e) != 0; }
++    return on;
++}
++/* The logical CPUs this process may run on (its affinity on Windows). */
++static int vk_usable_cpus(void)
++{
++#ifdef _WIN32
++    unsigned long long pm = 0, sm = 0;
++    int n = 0;
++    if (GetProcessAffinityMask(GetCurrentProcess(), &pm, &sm))
++        for (; pm; pm &= pm - 1) n++;
++    if (n > 0) return n;
++#endif
++    return SDL_GetCPUCount();
++}
++static int vk_shader_threads_auto(void)
++{
++    int n = vk_shader_boost() ? vk_usable_cpus() / 2 : SDL_GetCPUCount() / 4;
++    return n < 2 ? 2 : n;
++}
++/* This thread's own CPU time, ns (the [vkq] line's worker CPU, VK_TEST_DRIVER_MS). */
++static u64 vk_thread_cpu_ns(void)
++{
++#ifdef _WIN32
++    static double ns_per_cycle;   /* QueryThreadCycleTime counts at the TSC's rate */
++    if (ns_per_cycle == 0.0) {
++        const u64 q0 = SDL_GetPerformanceCounter();
++        const unsigned long long t0 = __rdtsc();
++        SDL_Delay(20);
++        const unsigned long long t1 = __rdtsc();
++        const double ns = (double)(SDL_GetPerformanceCounter() - q0) * 1e9 / (double)SDL_GetPerformanceFrequency();
++        ns_per_cycle = t1 > t0 ? ns / (double)(t1 - t0) : 1.0;
++    }
++    unsigned long long c = 0;
++    QueryThreadCycleTime(GetCurrentThread(), &c);
++    return (u64)((double)c * ns_per_cycle);
++#else
++    struct timespec ts;
++    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts)) return 0;
++    return (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
++#endif
++}
++/* VK_TEST_DRIVER_MS=<ms> (tests): each pipeline build also spends that much of its thread's own CPU
++ * time, like a slow driver's compiler (an Iris Xe laptop's ~25 ms), on a PC whose driver is fast. */
++static void vk_test_driver_cost(void)
++{
++    static int ms = -1;
++    if (ms < 0) { const char* e = getenv("VK_TEST_DRIVER_MS"); ms = e ? atoi(e) : 0; if (ms < 0) ms = 0; }
++    if (!ms) return;
++    const u64 end = vk_thread_cpu_ns() + (u64)ms * 1000000ull;
++    volatile u32 x = 1;
++    while (vk_thread_cpu_ns() < end) for (int i = 0; i < 20000; i++) x = x * 1664525u + 1013904223u;
++}
++
 +static int vk_async_shaders(void)
 +{
 +    if (s_async_sh.threads >= 0) return s_async_sh.threads;
 +    const char* e = getenv("PS3RECOMP_VK_ASYNC_SHADERS");
 +    int n = e ? atoi(e) : 0;
-+    if (n == 1) { n = SDL_GetCPUCount() / 4; if (n < 2) n = 2; }
++    if (n == 1) n = vk_shader_threads_auto();
 +    if (n > 8) n = 8;
 +    if (n < 0) n = 0;
 +    s_async_sh.threads = n;
@@ -21078,23 +21230,43 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +{
 +    (void)arg;
 +    s_vk_in_worker = 1;
++#ifdef _WIN32
++    if (vk_shader_boost()) SetThreadPriority(GetCurrentThread(), 1 /* THREAD_PRIORITY_ABOVE_NORMAL */);
++#endif
 +    u32* spv = (u32*)malloc(VK_SPV_WORDS * sizeof(u32));
 +    char log[2048];
 +    for (;;) {
 +        SDL_LockMutex(s_async_sh.mu);
 +        while (s_async_sh.head == s_async_sh.tail && !s_async_sh.quit) SDL_CondWait(s_async_sh.cv, s_async_sh.mu);
 +        if (s_async_sh.head == s_async_sh.tail) { SDL_UnlockMutex(s_async_sh.mu); break; }
-+        const u32 slot = s_async_sh.queue[s_async_sh.head];
++        /* VK_SHADER_BOOST: one the frame being drawn needs (the latest skipped draw), the oldest of
++         * those, so a loading screen's leftovers wait behind the scene on screen; it trades places
++         * with the head, which is taken off. Else the oldest. */
++        u32 pick = s_async_sh.head;
++        if (vk_shader_boost()) {
++            u32 best = __atomic_load_n(&s_epipe[s_async_sh.queue[pick]].last_skip, __ATOMIC_RELAXED);
++            for (u32 i = (pick + 1u) % VK_ENG_MAX_PIPE; i != s_async_sh.tail; i = (i + 1u) % VK_ENG_MAX_PIPE) {
++                const u32 s = __atomic_load_n(&s_epipe[s_async_sh.queue[i]].last_skip, __ATOMIC_RELAXED);
++                if (s > best) { best = s; pick = i; }
++            }
++        }
++        const u32 slot = s_async_sh.queue[pick];
++        s_async_sh.queue[pick] = s_async_sh.queue[s_async_sh.head];
 +        s_async_sh.head = (s_async_sh.head + 1u) % VK_ENG_MAX_PIPE;
 +        /* Shutting down: the rest of the queue is dropped, not built (it ends
 +         * as a failed build would), so quitting after a scene change does not
 +         * wait for hundreds of shaders. */
 +        const int quitting = s_async_sh.quit;
++        s_async_sh.busy++;
 +        SDL_UnlockMutex(s_async_sh.mu);
 +
 +        vk_eng_pipe* P = &s_epipe[slot];
 +        /* The walker took it first (a draw that couldn't wait in line): it clears pending. */
-+        if (__atomic_exchange_n(&P->claimed, 1, __ATOMIC_ACQ_REL)) continue;
++        if (__atomic_exchange_n(&P->claimed, 1, __ATOMIC_ACQ_REL)) {
++            SDL_LockMutex(s_async_sh.mu); s_async_sh.busy--; SDL_UnlockMutex(s_async_sh.mu);
++            continue;
++        }
++        const u64 t0 = SDL_GetPerformanceCounter(), c0 = vk_thread_cpu_ns();
 +        int ok = spv != NULL && !quitting;
 +        if (ok && vk_eng_translate_buf(P->src[0], RSX_SHADER_STAGE_VERTEX, &P->vs, spv, log, sizeof log)) ok = 0;
 +        if (ok && vk_eng_translate_buf(P->src[1], RSX_SHADER_STAGE_FRAGMENT, &P->fs, spv, log, sizeof log)) ok = 0;
@@ -21111,9 +21283,28 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +        free(P->src[0]); free(P->src[1]);
 +        P->src[0] = P->src[1] = NULL;
 +        __atomic_store_n(&P->pending, 0, __ATOMIC_RELEASE);
++        const u64 dt = SDL_GetPerformanceCounter() - t0, dc = vk_thread_cpu_ns() - c0;
++        SDL_LockMutex(s_async_sh.mu);
++        s_async_sh.busy--;
++        s_async_sh.built++;
++        s_async_sh.w_ticks += dt;
++        s_async_sh.w_cpu_ns += dc;
++        const int drained = s_async_sh.head == s_async_sh.tail && s_async_sh.busy == 0;
++        SDL_UnlockMutex(s_async_sh.mu);
++        if (drained) vk_pcd_save(32);   /* VK_PIPELINE_DISK_CACHE: the queue is empty */
 +    }
 +    free(spv);
 +    return 0;
++}
++
++/* Pipelines queued and not finished yet (taken by no one, or being built). */
++static u32 vk_async_waiting(void)
++{
++    if (!s_async_sh.mu) return 0;
++    SDL_LockMutex(s_async_sh.mu);
++    const u32 n = (s_async_sh.tail + VK_ENG_MAX_PIPE - s_async_sh.head) % VK_ENG_MAX_PIPE + s_async_sh.busy;
++    SDL_UnlockMutex(s_async_sh.mu);
++    return n;
 +}
 +
 +/* On the walker: a draw that can't be skipped while its pipeline is still in the queue. Only
@@ -21124,26 +21315,55 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 + * frames, while its pipelines were new, gave a measurement of whatever those rows held before, and
 + * the race could stay far too dark (or too bright) until the scene was loaded again with the
 + * pipelines ready. Translated here if no worker has it yet, else waited for: one build at most. */
++/* vk_eng_pipe_build_now's part on the walker, P being claimed by it: the two programs translated here
++ * (the driver's part comes at the draw, vk_eng_variant). */
++static void vk_eng_pipe_translate_here(vk_eng_pipe* P)
++{
++    const u64 th = vk_hitch_t0();
++    int ok = P->src[0] && P->src[1];
++    if (ok && vk_eng_translate(P->src[0], RSX_SHADER_STAGE_VERTEX, &P->vs)) ok = 0;
++    if (ok && vk_eng_translate(P->src[1], RSX_SHADER_STAGE_FRAGMENT, &P->fs)) ok = 0;
++    if (!ok) {
++        if (P->vs) { pvkDestroyShaderModule(s_vk.device, P->vs, NULL); P->vs = VK_NULL_HANDLE; }
++        if (P->fs) { pvkDestroyShaderModule(s_vk.device, P->fs, NULL); P->fs = VK_NULL_HANDLE; }
++    }
++    vk_hitch_add(VH_TRANSLATE, th);
++    free(P->src[0]); free(P->src[1]);
++    P->src[0] = P->src[1] = NULL;
++    __atomic_store_n(&P->pending, 0, __ATOMIC_RELEASE);
++}
++
 +static void vk_eng_pipe_build_now(vk_eng_pipe* P)
 +{
 +    if (!__atomic_exchange_n(&P->claimed, 1, __ATOMIC_ACQ_REL)) {
-+        const u64 th = vk_hitch_t0();
-+        int ok = P->src[0] && P->src[1];
-+        if (ok && vk_eng_translate(P->src[0], RSX_SHADER_STAGE_VERTEX, &P->vs)) ok = 0;
-+        if (ok && vk_eng_translate(P->src[1], RSX_SHADER_STAGE_FRAGMENT, &P->fs)) ok = 0;
-+        if (!ok) {
-+            if (P->vs) { pvkDestroyShaderModule(s_vk.device, P->vs, NULL); P->vs = VK_NULL_HANDLE; }
-+            if (P->fs) { pvkDestroyShaderModule(s_vk.device, P->fs, NULL); P->fs = VK_NULL_HANDLE; }
-+        }
-+        vk_hitch_add(VH_TRANSLATE, th);
-+        free(P->src[0]); free(P->src[1]);
-+        P->src[0] = P->src[1] = NULL;
++        vk_eng_pipe_translate_here(P);
 +        s_async_sh.on_walker++;
-+        __atomic_store_n(&P->pending, 0, __ATOMIC_RELEASE);
 +        return;
 +    }
 +    while (__atomic_load_n(&P->pending, __ATOMIC_ACQUIRE)) SDL_Delay(1);   /* a worker has it */
 +    s_async_sh.waited++;
++}
++
++/* VK_SHADER_BOOST, on the walker at a scene draw whose pipeline is still queued: 1 when the walker
++ * has claimed it to build it now, because it is VK_SHADER_ASSIST_MS (1500) since its first skipped
++ * draw. One a frame, and never one a worker has started (that would be a wait). */
++static u64 s_assist_ticks;     /* the walker's time on them (from the decision to the built variant) */
++static int vk_shader_assist(vk_eng_pipe* P)
++{
++    static int ms = -1;
++    static u32 last = ~0u;
++    static u64 win_t0, win_ticks0;
++    if (ms < 0) { const char* e = getenv("VK_SHADER_ASSIST_MS"); ms = (e && *e) ? atoi(e) : 1500; }
++    if (!vk_shader_boost() || ms <= 0) return 0;
++    const u64 now = SDL_GetPerformanceCounter(), hz = SDL_GetPerformanceFrequency();
++    if (!P->first_skip) { P->first_skip = now; return 0; }
++    if (last == s_vk_present_no || (now - P->first_skip) * 1000u < (u64)ms * hz) return 0;
++    /* At most a quarter of the walker's time, a second at a time: the game's clock counts frames. */
++    if (now - win_t0 >= hz) { win_t0 = now; win_ticks0 = s_assist_ticks; }
++    if ((s_assist_ticks - win_ticks0) * 4u >= hz) return 0;
++    if (__atomic_exchange_n(&P->claimed, 1, __ATOMIC_ACQ_REL)) return 0;
++    last = s_vk_present_no;
++    return 1;
 +}
 +
 +/* On the walker. 0 = queued; -1 = no workers (translate here). */
@@ -21160,8 +21380,9 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +            started += s_async_sh.th[i] != NULL;
 +        }
 +        if (!started) { s_async_sh.threads = 0; return -1; }
-+        VK_LOG("engine: new shaders translate and build on %d threads (PS3RECOMP_VK_ASYNC_SHADERS);"
-+               " draws wait for nothing\n", started);
++        VK_LOG("engine: new shaders translate and build on %d threads (PS3RECOMP_VK_ASYNC_SHADERS%s);"
++               " draws wait for nothing\n", started,
++               vk_shader_boost() ? "; VK_SHADER_BOOST: above normal priority, most-waited-for first" : "");
 +    }
 +    s_async_sh.queued++;
 +    SDL_LockMutex(s_async_sh.mu);
@@ -21190,7 +21411,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  }
  
  /* A pixel program with a cube unit declares all sixteen units one by one
-@@ -3015,16 +5395,229 @@
+@@ -3015,16 +5616,345 @@
      return s_e2.split_pipe_layout;
  }
  
@@ -21242,7 +21463,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +    u64* seen; u32 nseen;
 +    vk_pb_ent* tab; u32 ntab;
 +    SDL_Thread* th;
-+    u32 built, taken, failed;
++    u32 built, taken, failed, left;   /* left: asked for before it was reached, so left to the workers */
 +} s_pb;
 +
 +static u64 vk_pb_fnv(const void* p, size_t n, u64 h)
@@ -21258,9 +21479,12 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +    const char c = (char)('0' + stage);
 +    return vk_pb_fnv(hlsl, strlen(hlsl), vk_pb_fnv(&c, 1, 0xcbf29ce484222325ull));
 +}
++static u64 vk_eng_vk_state_hash(const rsx_be_render_state* rs);
 +static int vk_pb_same(const vk_pb_rec* r, const vk_eng_pipe* P)
 +{
-+    return r->vs_h == P->vs_h && r->ps_h == P->ps_h && r->rs_h == P->rs_h && r->nslots == P->nslots &&
++    /* VK_SHADER_BOOST: one entry per Vulkan pipeline (vk_eng_vk_state_hash), not per GCM state */
++    const int st = vk_shader_boost() ? vk_eng_vk_state_hash(&r->rs) == P->nrs_h : r->rs_h == P->rs_h;
++    return r->vs_h == P->vs_h && r->ps_h == P->ps_h && st && r->nslots == P->nslots &&
 +           r->stride == P->stride && r->rt_count == P->rt_count && r->rt_fmt == (u32)P->rt_fmt &&
 +           r->cube_mask == P->cube_mask;
 +}
@@ -21298,10 +21522,84 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +    return m;
 +}
 +
++/* ---- VK_PIPELINE_DISK_CACHE (with VK_PIPELINE_PREBUILD; =0 off): the driver's compiled pipelines on disk ----
++ * The start-up builder makes every pipeline of the list again. NVIDIA's driver keeps its own disk
++ * cache, so each takes about a millisecond there (a pipeline cache of ours measured no better); a driver
++ * without one compiles them all again at every start (an Iris Xe laptop: ~25 ms each, a minute or more
++ * of its CPU for a full list). So a VkPipelineCache is read from vk_pipeline_cache.bin at the first
++ * pipeline, handed to every pipeline build, and written back (a temporary file, renamed) when the shader
++ * queue empties with 32 new pipelines or more made since, and when the builder is done if there was no
++ * file. A file another GPU or driver wrote is not handed over (its header's ids and UUID are checked). */
++static struct { VkPipelineCache pc; char path[1100]; u32 fresh; int saving, had_file; } s_pcd;
++static _Thread_local int s_vk_in_prebuild;   /* the builder's own builds: already in the file */
++
++static void vk_pcd_open(const char* dir)
++{
++    const char* e = getenv("VK_PIPELINE_DISK_CACHE");
++    if (e && *e && atoi(e) == 0) return;
++    snprintf(s_pcd.path, sizeof s_pcd.path, "%s/vk_pipeline_cache.bin", dir);
++    u8* data = NULL;
++    size_t n = 0;
++    int found = 0;
++    FILE* f = fopen(s_pcd.path, "rb");
++    if (f) {
++        long sz = -1;
++        found = 1;
++        if (fseek(f, 0, SEEK_END) == 0) sz = ftell(f);
++        if (sz > 32 && sz < (512L << 20) && fseek(f, 0, SEEK_SET) == 0 && (data = (u8*)malloc((size_t)sz)) != NULL &&
++            fread(data, 1, (size_t)sz, f) == (size_t)sz)
++            n = (size_t)sz;
++        fclose(f);
++    }
++    if (n) {   /* the header (Vulkan 1.0): its length, version 1, vendor id, device id, cache UUID */
++        VkPhysicalDeviceProperties p;
++        pvkGetPhysicalDeviceProperties(s_vk.phys, &p);
++        u32 h[4];
++        memcpy(h, data, sizeof h);
++        if (h[0] < 32u || h[1] != 1u || h[2] != p.vendorID || h[3] != p.deviceID ||
++            memcmp(data + 16, p.pipelineCacheUUID, VK_UUID_SIZE) != 0)
++            n = 0;
++    }
++    VkPipelineCacheCreateInfo ci = { .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
++                                     .initialDataSize = n, .pInitialData = n ? data : NULL };
++    if (pvkCreatePipelineCache(s_vk.device, &ci, NULL, &s_pcd.pc) != VK_SUCCESS) s_pcd.pc = VK_NULL_HANDLE;
++    s_pcd.had_file = n != 0;
++    VK_LOG("engine: pipeline cache %s: %s, %zu bytes (VK_PIPELINE_DISK_CACHE)\n", s_pcd.path,
++           !s_pcd.pc ? "could not be made" : n ? "read" : found ? "not this GPU's or driver's, a new one" : "new", n);
++    free(data);
++}
++
++/* Any thread: written back with `least` or more pipelines made since it last was. One writer at a time. */
++static void vk_pcd_save(u32 least)
++{
++    if (!s_pcd.pc) return;
++    const u32 fresh = __atomic_load_n(&s_pcd.fresh, __ATOMIC_RELAXED);
++    if (fresh < least || __atomic_exchange_n(&s_pcd.saving, 1, __ATOMIC_ACQ_REL)) return;
++    __atomic_sub_fetch(&s_pcd.fresh, fresh, __ATOMIC_RELAXED);
++    size_t n = 0;
++    if (pvkGetPipelineCacheData(s_vk.device, s_pcd.pc, &n, NULL) == VK_SUCCESS && n) {
++        void* d = malloc(n);
++        if (d && pvkGetPipelineCacheData(s_vk.device, s_pcd.pc, &n, d) == VK_SUCCESS) {
++            char tmp[1120];
++            snprintf(tmp, sizeof tmp, "%s.tmp", s_pcd.path);
++            FILE* f = fopen(tmp, "wb");
++            int ok = f && fwrite(d, 1, n, f) == n;
++            if (f) ok = (fclose(f) == 0) && ok;
++#ifdef _WIN32
++            if (ok) remove(s_pcd.path);       /* rename does not replace on Windows */
++#endif
++            if (!ok || rename(tmp, s_pcd.path) != 0) remove(tmp);
++        }
++        free(d);
++    }
++    __atomic_store_n(&s_pcd.saving, 0, __ATOMIC_RELEASE);
++}
++
 +static int SDLCALL vk_pb_thread(void* arg)
 +{
 +    (void)arg;
 +    s_vk_in_worker = 1;
++    s_vk_in_prebuild = 1;
 +    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
 +    for (u32 i = 0; ; i++) {
 +        SDL_LockMutex(s_pb.mu);
@@ -21325,7 +21623,9 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +        if (P.vs) pvkDestroyShaderModule(s_vk.device, P.vs, NULL);
 +        if (P.fs) pvkDestroyShaderModule(s_vk.device, P.fs, NULL);
 +    }
-+    VK_LOG("engine: %u pipelines built ahead from an earlier session's list (%u could not be)\n", s_pb.built, s_pb.failed);
++    VK_LOG("engine: %u pipelines built ahead from an earlier session's list (%u could not be, %u were"
++           " asked for first and left to the workers)\n", s_pb.built, s_pb.failed, s_pb.left);
++    if (!s_pcd.had_file) { __atomic_add_fetch(&s_pcd.fresh, 1u, __ATOMIC_RELAXED); vk_pcd_save(1); }
 +    return 0;
 +}
 +
@@ -21363,6 +21663,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +            vk_eng_pipe P; memset(&P, 0, sizeof P);
 +            P.vs_h = r.vs_h; P.ps_h = r.ps_h; P.rs_h = r.rs_h; P.nslots = r.nslots; P.stride = r.stride;
 +            P.rt_count = r.rt_count; P.rt_fmt = (VkFormat)r.rt_fmt; P.cube_mask = r.cube_mask; P.rs = r.rs;
++            P.nrs_h = vk_eng_vk_state_hash(&r.rs);
 +            u32 k = 0;
 +            while (k < s_pb.ntab && !vk_pb_same(&s_pb.tab[k].r, &P)) k++;
 +            if (k == s_pb.ntab) {
@@ -21378,18 +21679,21 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +    s_pb.on = 1;
 +    VK_LOG("engine: pipeline list %s: %u entries, %u pipelines to build ahead (VK_PIPELINE_PREBUILD)\n",
 +           s_pb.list, read, s_pb.ntab);
++    vk_pcd_open(dir);   /* VK_PIPELINE_DISK_CACHE, before anything builds */
 +    if (s_pb.ntab) s_pb.th = SDL_CreateThread(vk_pb_thread, "vk-prebuild", NULL);
 +    return 1;
 +}
 +
 +/* On the walker: P (its names, state key and layout set) is built already: take its programs and
-+ * variants. 1 when taken. */
++ * variants. 1 when taken. One the builder hasn't reached yet is left to the shader workers
++ * (VK_SHADER_BOOST): the builder skips it instead of building it a second time, later, for nothing. */
 +static int vk_pb_take(vk_eng_pipe* P)
 +{
 +    int got = 0;
 +    SDL_LockMutex(s_pb.mu);
 +    for (u32 k = 0; k < s_pb.ntab; k++) {
 +        vk_pb_ent* e = &s_pb.tab[k];
++        if (e->state == 0 && vk_shader_boost() && vk_pb_same(&e->r, P)) { e->state = 2; s_pb.left++; break; }
 +        if (e->state != 1 || !vk_pb_same(&e->r, P)) continue;
 +        P->vs = e->P.vs; P->fs = e->P.fs;
 +        memcpy(P->variant, e->P.variant, sizeof P->variant);
@@ -21422,10 +21726,43 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +        fflush(s_pb.out);
 +    }
 +    SDL_UnlockMutex(s_pb.mu);
++}
++
++/* VK_SHADER_BOOST: the render state as vk_eng_variant uses it. The alpha test is in the pixel program
++ * (ps_h); blend factors and equations mean nothing with blending off, the depth function and writes
++ * nothing with the depth test off, the stencil state nothing with the stencil test off (the back face's
++ * nothing when it is one-sided), the cull face nothing with culling off, and a colour mask byte only
++ * whether it is 0. The engine keys its pipelines on the GCM registers, so a race start asked for a third
++ * of its Vulkan pipelines twice or more (1,463 asked for, 967 different): each was built again. */
++static u64 vk_eng_vk_state_hash(const rsx_be_render_state* rs)
++{
++    rsx_be_render_state n = *rs;
++    n.alpha_test_enable = n.alpha_func = n.alpha_ref_raw = n.alpha_ref_format = 0;
++    n.rt_fp16 = 0;
++    if (!n.blend_enable && !n.blend_mrt) n.sf_rgb = n.df_rgb = n.sf_a = n.df_a = n.eq_rgb = n.eq_a = 0;
++    if (!n.depth_test) n.depth_write = n.depth_func = 0;
++    if (!n.stencil_enable) {
++        n.stencil_two_sided = n.s_func = n.s_func_mask = n.s_write_mask = n.s_fail = n.s_zfail = n.s_zpass = 0;
++        n.bs_func = n.bs_fail = n.bs_zfail = n.bs_zpass = 0;
++    } else if (!n.stencil_two_sided) {
++        n.bs_func = n.bs_fail = n.bs_zfail = n.bs_zpass = 0;
++    }
++    if (!n.cull_enable) n.cull_face = 0;
++    u32 cm = 0;
++    for (u32 b = 0; b < 32; b += 8) if ((n.color_mask >> b) & 0xFFu) cm |= 0xFFu << b;
++    n.color_mask = cm;
++    return rsx_draw_engine_hash_render_state(&n, 0x84222325cbf29ce4ull);
++}
++/* Everything vk_eng_variant builds a pipeline from, but the topology. */
++static u64 vk_eng_vk_key(const vk_eng_pipe* P)
++{
++    const u64 k[6] = { P->vs_h, P->ps_h, P->nrs_h, ((u64)P->nslots << 32) | P->stride,
++                       ((u64)P->rt_count << 32) | (u32)P->rt_fmt, P->cube_mask };
++    return vk_pb_fnv(k, sizeof k, 0xcbf29ce484222325ull);
  }
  
  static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_hlsl,
-@@ -3043,7 +5636,7 @@
+@@ -3043,7 +5973,7 @@
      if (!rt_count) rt_count = 1;
      if (rt_count > RSX_BE_MAX_COLOR_TARGETS) rt_count = RSX_BE_MAX_COLOR_TARGETS;
      u32 slot = VK_ENG_MAX_PIPE;
@@ -21434,16 +21771,34 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      if (slot == VK_ENG_MAX_PIPE) {
          if (!(s_e2.warned & 128u)) {
              VK_LOG("engine: pipeline table full (%u), draws will drop\n", (unsigned)VK_ENG_MAX_PIPE);
-@@ -3053,32 +5646,83 @@
+@@ -3053,32 +5983,112 @@
      }
      vk_eng_pipe* P = &s_epipe[slot];
      memset(P, 0, sizeof *P);
-+    if (vk_pb_on()) {   /* VK_PIPELINE_PREBUILD: built at start-up from an earlier session's list? */
++    const int pb = vk_pb_on();
++    if (pb || vk_shader_boost()) {
 +        P->vs_h = vk_spv_name(vs_hlsl, RSX_SHADER_STAGE_VERTEX);
 +        P->ps_h = vk_spv_name(ps_hlsl, RSX_SHADER_STAGE_FRAGMENT);
 +        P->rs_h = rsx_draw_engine_hash_render_state(rs, 0xcbf29ce484222325ull);
 +        P->nslots = layout->count; P->stride = vertex_stride; P->rt_count = rt_count; P->rt_fmt = cf;
 +        P->cube_mask = vk_eng_cube_units(ps_hlsl);
++    }
++    if (vk_shader_boost()) {   /* the same Vulkan pipeline as one made already: shared */
++        P->nrs_h = vk_eng_vk_state_hash(rs);
++        P->dkey = vk_eng_vk_key(P);
++        for (u32 i = 0; i < VK_ENG_MAX_PIPE; i++) {
++            vk_eng_pipe* C = &s_epipe[i];
++            if (i == slot || !C->used || C->alias || C->orphan || C->dkey != P->dkey) continue;
++            P->alias = i + 1u;
++            P->rs = *rs;
++            P->used = 1;
++            C->refs++;
++            s_async_sh.shared++;
++            s_epipe_free = slot + 1u;
++            return slot + 1u;
++        }
++    }
++    if (pb) {   /* VK_PIPELINE_PREBUILD: built at start-up from an earlier session's list? */
 +        if (vk_pb_take(P)) {
 +            P->rs = *rs;
 +            P->used = 1;
@@ -21451,7 +21806,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +            return slot + 1u;
 +        }
 +    }
-+    const u64 pb_vs = P->vs_h, pb_ps = P->ps_h, pb_rs = P->rs_h;
++    const u64 pb_vs = P->vs_h, pb_ps = P->ps_h, pb_rs = P->rs_h, pb_d = P->dkey, pb_n = P->nrs_h;
 +    if (vk_async_shaders()) {
 +        /* What a worker's vk_eng_variant reads but must not create: made here, on the walker. */
 +        const u32 cube_mask = vk_eng_cube_units(ps_hlsl);
@@ -21465,7 +21820,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +            P->rt_count = rt_count;
 +            P->rt_fmt = cf;
 +            P->cube_mask = cube_mask;
-+            P->vs_h = pb_vs; P->ps_h = pb_ps; P->rs_h = pb_rs;
++            P->vs_h = pb_vs; P->ps_h = pb_ps; P->rs_h = pb_rs; P->dkey = pb_d; P->nrs_h = pb_n;
 +            P->used = 1;
 +            P->pending = 1;
 +            if (vk_async_enqueue(slot) == 0) { s_epipe_free = slot + 1u; return slot + 1u; }
@@ -21487,7 +21842,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      P->rt_count = rt_count;
      P->rt_fmt = cf;
      P->cube_mask = vk_eng_cube_units(ps_hlsl);
-+    P->vs_h = pb_vs; P->ps_h = pb_ps; P->rs_h = pb_rs;
++    P->vs_h = pb_vs; P->ps_h = pb_ps; P->rs_h = pb_rs; P->dkey = pb_d; P->nrs_h = pb_n;
      P->used = 1;
 +    s_epipe_free = slot + 1u;
      return slot + 1u;
@@ -21500,6 +21855,17 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +    vk_eng_flush();
      if (!pipeline || pipeline > VK_ENG_MAX_PIPE || !s_epipe[pipeline - 1].used) return;
      vk_eng_pipe* P = &s_epipe[pipeline - 1];
++    if (s_e2.pipeline == pipeline) s_e2.pipeline = 0;
++    if (P->alias) {   /* VK_SHADER_BOOST: it only shared another's; that one goes with its last user */
++        const u32 c = P->alias;
++        memset(P, 0, sizeof *P);
++        if (pipeline - 1u < s_epipe_free) s_epipe_free = pipeline - 1u;
++        vk_eng_pipe* C = &s_epipe[c - 1];
++        if (C->refs) C->refs--;
++        if (C->orphan && !C->refs) { C->orphan = 0; vk_eng_pipeline_release(user, c); }
++        return;
++    }
++    if (P->refs) { P->orphan = 1; return; }   /* still shared: kept until the last one goes */
 +    while (__atomic_load_n(&P->pending, __ATOMIC_ACQUIRE)) SDL_Delay(1);   /* a worker has it */
      for (u32 t = 0; t < VK_ENG_TOPOLOGIES; t++)
          if (P->variant[t]) pvkDestroyPipeline(s_vk.device, P->variant[t], NULL);
@@ -21519,7 +21885,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  }
  
  static VkPipeline vk_eng_variant(vk_eng_pipe* P, u32 topo_idx)
-@@ -3125,6 +5769,8 @@
+@@ -3125,6 +6135,8 @@
                                                                             : VK_CULL_MODE_BACK_BIT,
          .frontFace = (rs->front_face == 0x0901u) ? VK_FRONT_FACE_COUNTER_CLOCKWISE
                                                   : VK_FRONT_FACE_CLOCKWISE,
@@ -21528,7 +21894,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          .lineWidth = 1.0f };
      VkPipelineMultisampleStateCreateInfo ms = {
          .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-@@ -3195,22 +5841,29 @@
+@@ -3195,22 +6207,31 @@
      VkPipelineColorBlendStateCreateInfo cb = {
          .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
          .attachmentCount = P->rt_count, .pAttachments = cba };
@@ -21549,20 +21915,23 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          .pViewportState = &vps, .pRasterizationState = &ras, .pMultisampleState = &ms,
          .pDepthStencilState = &ds, .pColorBlendState = &cb, .pDynamicState = &dy,
          .layout = layout, .renderPass = rp, .subpass = 0 };
+-    if (pvkCreateGraphicsPipelines(s_vk.device, VK_NULL_HANDLE, 1, &gci, NULL,
 +    const u64 th = s_vk_in_worker ? 0 : vk_hitch_t0();   /* the walker's frames only */
-     if (pvkCreateGraphicsPipelines(s_vk.device, VK_NULL_HANDLE, 1, &gci, NULL,
++    if (pvkCreateGraphicsPipelines(s_vk.device, s_pcd.pc, 1, &gci, NULL,
                                     &P->variant[topo_idx]) != VK_SUCCESS) {
          VK_LOG("engine: vkCreateGraphicsPipelines failed\n");
          P->variant[topo_idx] = VK_NULL_HANDLE;
 -    }
 +    } else {
 +        vk_pb_note(P, topo_idx);       /* VK_PIPELINE_PREBUILD: built ahead next time */
++        if (s_pcd.pc && !s_vk_in_prebuild) __atomic_add_fetch(&s_pcd.fresh, 1u, __ATOMIC_RELAXED);
 +    }
++    vk_test_driver_cost();             /* VK_TEST_DRIVER_MS (tests): a slow driver's compile */
 +    vk_hitch_add(VH_DRIVER, th);
      return P->variant[topo_idx];
  }
  
-@@ -3218,6 +5871,7 @@
+@@ -3218,6 +6239,7 @@
  
  static void vk_eng2_shutdown(void* user)
  {
@@ -21570,7 +21939,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      for (u32 i = 1; i <= VK_ENG_MAX_PIPE; i++) vk_eng_pipeline_release(user, i);
      vk_eng_drop_framebuffers();
      for (u32 f = 0; f < VK_ENG_RT_FORMATS; f++)
-@@ -3248,24 +5902,27 @@
+@@ -3248,24 +6270,27 @@
  static void vk_eng_bind_vs_constants(void* user, const void* data, u32 bytes)
  {
      (void)user;
@@ -21602,7 +21971,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      (void)user;
      for (u32 u = 0; u < RSX_BE_MAX_TEXTURES; u++) {
          const int on = (mask >> u) & 1u;
-@@ -3305,6 +5962,21 @@
+@@ -3305,6 +6330,21 @@
      (void)user;
      s_e2.depth_bounds[0] = vk_depth_bound(min, 0.0f);
      s_e2.depth_bounds[1] = vk_depth_bound(max, 1.0f);
@@ -21624,7 +21993,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  }
  
  static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, VkImageView dview,
-@@ -3410,11 +6082,13 @@
+@@ -3410,11 +6450,13 @@
  {
      if (!vk_eng_get(s_e2.dummy_cube, VK_ENG_TEXTURE)) {
          static const u8 magenta[4] = { 0xFF, 0x00, 0xFF, 0xFF };
@@ -21639,7 +22008,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      }
      return s_eobj[s_e2.dummy_cube].im.view;
  }
-@@ -3451,6 +6125,8 @@
+@@ -3451,6 +6493,8 @@
      u32              sets;
      unsigned long long draws, flushes;
  } s_eb = { .on = -1 };
@@ -21648,7 +22017,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  
  static int vk_eb_on(void)
  {
-@@ -3481,6 +6157,24 @@
+@@ -3481,6 +6525,24 @@
      }
      VK_LOG("draw batching: on (up to %u draws per submission)\n", s_eb.max_draws);
      s_eb.on = 1;
@@ -21673,7 +22042,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      return 1;
  }
  
-@@ -3488,11 +6182,23 @@
+@@ -3488,11 +6550,23 @@
   * decides again. Also frees what a failed vk_eb_on had already created. */
  static void vk_eb_release(void)
  {
@@ -21698,7 +22067,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      if (s_eb.pool) pvkDestroyDescriptorPool(s_vk.device, s_eb.pool, NULL);
      memset(&s_eb, 0, sizeof s_eb);
      s_eb.on = -1;
-@@ -3500,9 +6206,11 @@
+@@ -3500,9 +6574,11 @@
  
  static int vk_eb_active(void) { return s_eb.on == 1; }
  static u32 vk_eb_max(void) { return s_eb.max_draws; }
@@ -21711,7 +22080,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  
  /* A texture upload as one more batched operation: rows staged in the ring, the
   * copy recorded behind a full memory barrier (earlier draws of the batch may
-@@ -3514,11 +6222,11 @@
+@@ -3514,11 +6590,11 @@
  {
      if (!vk_eb_active()) return -2;
      const VkDeviceSize bytes = (VkDeviceSize)tight * rows;
@@ -21727,7 +22096,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          if (off == (VkDeviceSize)-1) return -2;
      }
      for (u32 y = 0; y < rows; y++)
-@@ -3528,15 +6236,117 @@
+@@ -3528,15 +6604,117 @@
      region->bufferOffset = off;
      pvkCmdCopyBufferToImage(s_vk.cmd, s_eb.sb.buf, img, VK_IMAGE_LAYOUT_GENERAL, 1, region);
      vk_barrier_image(img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
@@ -21849,7 +22218,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      s_eb.vb_head = s_eb.ib_head = s_eb.ub_head = s_eb.sb_head = 0;
      if (s_eb.sets) { pvkResetDescriptorPool(s_vk.device, s_eb.pool, 0); s_eb.sets = 0; }
      if ((++s_eb.flushes & 0x3FFFu) == 0)
-@@ -3579,6 +6389,23 @@
+@@ -3579,6 +6757,23 @@
          const int cube = (P->cube_mask >> u) & 1u;
          VkImageView v = ((s_e2.tex_mask >> u) & 1u) ? vk_eng_sample_view(s_e2.tex[u], cube)
                                                       : VK_NULL_HANDLE;
@@ -21873,7 +22242,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          VkSampler smp = v ? vk_eng_sampler(&s_e2.samp[u]) : s_vk.sampler;
          ii[u] = (VkDescriptorImageInfo){ VK_NULL_HANDLE,
                                           v ? v : (cube ? dummy_cube : s_vk.dummy.view),
-@@ -3610,14 +6437,90 @@
+@@ -3610,14 +6805,99 @@
      return set;
  }
  
@@ -21947,12 +22316,21 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
 +        vk_drop("topology", (u32)topology, 0); return; }
      vk_eng_pipe* P = &s_epipe[s_e2.pipeline - 1];
 -    if (!P->used || stride != P->stride) return;
++    if (P->alias) P = &s_epipe[P->alias - 1];              /* VK_SHADER_BOOST: the same Vulkan pipeline */
 +    if (!P->used || stride != P->stride) { vk_drop("stride", stride, P->stride); return; }
++    s_async_sh.draws++;
++    u64 assist_t0 = 0;
 +    if (__atomic_load_n(&P->pending, __ATOMIC_ACQUIRE)) {   /* PS3RECOMP_VK_ASYNC_SHADERS */
 +        if (!P->rs.depth_test && vk_async_skip_all() == 0) {
 +            vk_eng_pipe_build_now(P);                       /* not scene geometry: never skipped */
++        } else if (vk_shader_assist(P)) {
++            assist_t0 = SDL_GetPerformanceCounter();
++            vk_eng_pipe_translate_here(P);                  /* waited too long: the walker builds it */
++            s_async_sh.assisted++;
 +        } else {
 +            __atomic_or_fetch(&P->want, 1u << ((u32)topology - 1u), __ATOMIC_RELEASE);
++            __atomic_add_fetch(&P->skips, 1u, __ATOMIC_RELAXED);
++            __atomic_store_n(&P->last_skip, s_vk_present_no + 1u, __ATOMIC_RELAXED);
 +            s_async_sh.skipped++;
 +            vk_drop("pipeline still building", s_e2.pipeline, 0);
 +            return;
@@ -21967,7 +22345,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  
      /* Targets: every member of a set is target A's size (engine contract). */
      const u32 n = s_eng_bound.nrt;
-@@ -3636,60 +6539,71 @@
+@@ -3636,60 +6916,72 @@
      const u32 w = rt0->w, h = rt0->h;
      vk_eng_obj* zo = vk_eng_get(s_eng_bound.depth, VK_ENG_DEPTH);
      VkImageView dview = (zo && zo->w >= w && zo->h >= h) ? zo->im.view : vk_eng_scratch_depth(w, h);
@@ -21976,6 +22354,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      const u32 dkey = (zo && dview == zo->im.view) ? s_eng_bound.depth : 0xFFFFFFFFu;
  
      VkPipeline pipe = vk_eng_variant(P, (u32)topology - 1u);
++    if (assist_t0) s_assist_ticks += SDL_GetPerformanceCounter() - assist_t0;   /* VK_SHADER_ASSIST_MS's budget */
      VkRenderPass rp = vk_eng_render_pass(P->rt_fmt, n);
      VkFramebuffer fb = vk_eng_framebuffer(rp, s_eng_bound.rt, n, dview, dkey, w, h);
 -    if (!pipe || !rp || !fb) return;
@@ -22056,7 +22435,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      } else {
          if (s_eb_pending) vk_eng_flush();
          if (vk_ensure_vertex_buffer(vbytes)) return;
-@@ -3700,20 +6614,23 @@
+@@ -3700,20 +6992,23 @@
          }
          vbuf = s_vk.vertices.buf; ibuf = s_e2.indices.buf; voff = ioff = 0;
          if (!vk_eng_ucpu()) return;
@@ -22090,7 +22469,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      pvkCmdBindPipeline(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
      VkViewport vp = { 0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f };
      if (s_e2.have_vp && s_e2.vp[2] > 0.0f && s_e2.vp[3] > 0.0f) {
-@@ -3733,20 +6650,23 @@
+@@ -3733,20 +7028,23 @@
      pvkCmdSetStencilReference(s_vk.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, s_e2.stencil_ref & 0xFFu);
      if (s_vk.depth_bounds_ok)
          pvkCmdSetDepthBounds(s_vk.cmd, s_e2.depth_bounds[0], s_e2.depth_bounds[1]);
@@ -22119,7 +22498,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  }
  
  static const rsx_draw_backend s_vk_engine_backend = {
-@@ -3763,6 +6683,12 @@
+@@ -3763,6 +7061,12 @@
      .depth_target_create  = vk_eng_depth_target_create,
      .depth_target_release = vk_eng_release,
      .depth_snapshot       = vk_eng_depth_snapshot,
@@ -22132,7 +22511,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      .color_snapshot       = vk_eng_color_snapshot,
      .pipeline_create      = vk_eng_pipeline_create,
      .pipeline_release     = vk_eng_pipeline_release,
-@@ -3775,6 +6701,7 @@
+@@ -3775,6 +7079,7 @@
      .set_viewport         = vk_eng_set_viewport,
      .set_scissor          = vk_eng_set_scissor,
      .set_stencil_ref      = vk_eng_set_stencil_ref,
@@ -22140,7 +22519,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      .set_depth_bounds     = vk_eng_set_depth_bounds,
      .draw                 = vk_eng_draw,
      .clear_color          = vk_eng_clear_color,
-@@ -3786,6 +6713,10 @@
+@@ -3786,6 +7091,10 @@
      /* Every draw and every upload submits and waits, so an upload runs after
       * each earlier draw that sampled the old bytes has completed. */
      .texture_upload_ordered = 1,
@@ -22151,7 +22530,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  };
  
  static rsx_backend s_vulkan_backend = {
-@@ -3807,16 +6738,32 @@
+@@ -3807,16 +7116,32 @@
  {
      pthread_mutex_init(&s_vk.queue_mu, NULL);
      pthread_mutex_init(&s_vk.present_mu, NULL);
@@ -22184,7 +22563,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      if (vk_load_library()) return -1;
  
      VkApplicationInfo app = { .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-@@ -3862,15 +6809,34 @@
+@@ -3862,15 +7187,34 @@
      VkPhysicalDeviceFeatures have, want;
      memset(&want, 0, sizeof want);
      pvkGetPhysicalDeviceFeatures(s_vk.phys, &have);
@@ -22220,7 +22599,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      /* Per-target colour mask and blend enable (an MRT set's targets B..D
       * have their own); without it every target takes target A's. */
      want.independentBlend = have.independentBlend;
-@@ -3976,7 +6942,11 @@
+@@ -3976,7 +7320,11 @@
  void rsx_vulkan_backend_shutdown(void)
  {
      rsx_vulkan_backend_present_finish();   /* a host that began one and quit */
@@ -22232,7 +22611,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      if (s_vk.eng_active) { rsx_draw_engine_shutdown(); s_vk.eng_active = 0; }
      rsx_draw_engine_set_backend(NULL);
      if (s_vk.windowed && s_vk.swapchain && s_vk.presented && s_vk.hold_seconds > 0.0) {
-@@ -4014,6 +6984,7 @@
+@@ -4014,6 +7362,7 @@
          if (s_vk.pool)  pvkDestroyCommandPool(s_vk.device, s_vk.pool, NULL);
          if (s_vk.present_fence) pvkDestroyFence(s_vk.device, s_vk.present_fence, NULL);
          if (s_vk.window_fence)  pvkDestroyFence(s_vk.device, s_vk.window_fence, NULL);
@@ -22240,7 +22619,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
          if (s_vk.present_pool)  pvkDestroyCommandPool(s_vk.device, s_vk.present_pool, NULL);
          pvkDestroyDevice(s_vk.device, NULL);
      }
-@@ -4025,14 +6996,67 @@
+@@ -4025,14 +7374,67 @@
      memset(&s_vk, 0, sizeof s_vk);
  }
  
@@ -22309,7 +22688,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      }
      return quit ? -1 : 0;
  }
-@@ -4040,7 +7064,10 @@
+@@ -4040,7 +7442,10 @@
  void rsx_vulkan_backend_present(void)
  {
      rsx_vulkan_backend_present_begin();
@@ -22321,7 +22700,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
  }
  
  void rsx_vulkan_backend_present_begin(void)
-@@ -4054,6 +7081,7 @@
+@@ -4054,6 +7459,7 @@
  
  void rsx_vulkan_backend_present_finish(void)
  {
@@ -22329,7 +22708,7 @@ diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
      if (!s_vk.device) return;
      pthread_mutex_lock(&s_vk.present_mu);
      vk_present_complete_locked();
-@@ -4083,4 +7111,4 @@
+@@ -4083,4 +7489,4 @@
      return s_vk.eng_active && s_vk.depth_bounds_ok;
  }
  

@@ -9,6 +9,41 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.80**
+
+🧱 **Vulkan: new scenes no longer stay half-drawn for a minute on slow PCs** ([#38](https://github.com/MormonFTP-hub/gt5-recomp/issues/38), [#20](https://github.com/MormonFTP-hub/gt5-recomp/issues/20))
+- On Vulkan, the shaders a new scene needs (a race start, another car) are built in the background, and
+  anything whose shader isn't ready yet is left out of the picture until it is. On a 4-core laptop with
+  Intel graphics that took one to two minutes: black sky, missing track or crowd, 25,000-57,000 objects
+  left out every 5 seconds. Two builders at normal priority got a small share of a busy CPU, and Intel's
+  driver needs about 25 ms of CPU or more per shader.
+- Now:
+  - **The same shader is built once.** GT5 asked for a third of its shaders two or more times under
+    different settings that make no difference to Vulkan (blending factors with blending off, and so on):
+    in one session 1,463 asked for, 967 different. The repeats now share the first one.
+  - **The builders run above normal priority**, and there are half as many as the CPUs the game may use
+    (an 8-thread laptop gets 4 instead of 2). They only run while something is waiting to be built.
+  - **What the picture on screen needs is built first**, not leftovers from a loading screen.
+  - **A shader still missing after 1.5 s is built by the renderer itself**, one a frame and at most a
+    quarter of its time, so nothing stays missing however busy the PC is.
+  - Shaders the start-up builder (v0.1.77) hadn't reached when the game asked for them aren't built twice.
+  - The driver's compiled shaders are kept on disk too (`vk_pipeline_cache.bin` beside the shader cache),
+    so the start-up rebuild of everything seen before is quick even with a driver that keeps no cache of
+    its own. NVIDIA keeps one anyway; Intel and AMD untested here.
+- Measured on this PC's 4 slowest cores with every shader build made to cost 100 ms (like a slow driver),
+  from an empty shader cache, Arcade to a race: the longest stretch with things missing went from **61 s
+  to 18 s**, and the objects left out over the whole session from **137,200 to 4,807**. Race frame rate
+  afterwards unchanged (8.6-10.2 before, 8.9-10.9 after). At full speed on all cores the race starts
+  behaved the same as before (2,468 and 2,500 left out over a session, gone within 1-4 s).
+- 🪟 **Vulkan window back after minimising:** a minimised Vulkan window waits for the window to come back,
+  and that was judged from SDL's "minimised" flag. A player's window came back black and stayed black
+  with the game running on. Now the renderer asks the window's Vulkan surface whether it has a size again.
+  Minimised and restored here: drawn again at once.
+- `VK_SHADER_BOOST=0` goes back to the old way; `VK_SHADER_LOG=1` puts a line a second in `play.err`
+  (`[vkq]`: draws, left out, queued, built, waiting); `VK_PIPELINE_DISK_CACHE=0` turns the disk cache off;
+  `VK_WIN_SDL_FLAG=1` is the old window test. The Vulkan renderer is the only one on Linux, so this is for
+  Linux too (except the priority, which Linux doesn't let a game raise); Linux builds untested this time.
+
 🏷️ Released as **v0.1.79**
 
 🧰 **Installer: a Visual Studio without the Windows SDK gets it added, instead of a failed build (#35)**
