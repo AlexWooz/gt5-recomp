@@ -55,6 +55,15 @@ namespace Gt5Launcher
                 f.SaveScreenshots(args[1]);
                 return;
             }
+            // --update-window <install folder> <launcher> [update.ps1 arguments]: the update window (#39), run
+            // by "Update now" from a copy of this exe, so the build can replace GT5Launcher.exe meanwhile.
+            if (args.Length >= 3 && args[0] == "--update-window")
+            {
+                var rest = new string[args.Length - 3];
+                Array.Copy(args, 3, rest, 0, rest.Length);
+                Application.Run(new UpdateForm(args[1], args[2], rest));
+                return;
+            }
             // --play: press Play straight away (a "play directly" shortcut).
             var form = new LauncherForm(false);
             if (Array.IndexOf(args, "--play") >= 0) form.Shown += delegate { form.PlayNow(); };
@@ -66,9 +75,10 @@ namespace Gt5Launcher
     class Paths
     {
         public string Root, Gt5, PlayBat, Settings, Exe, Elf, Logs, Mods, VersionFile, Icon0, Update, Readme, Vol, FixFiles;
-        public Paths()
+        public Paths() : this(AppDomain.CurrentDomain.BaseDirectory) { }
+        public Paths(string dir)
         {
-            string here = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
+            string here = dir.TrimEnd('\\');
             // The launcher sits in the install folder (next to update.ps1); a bare GT5 folder works too.
             if (Directory.Exists(Path.Combine(here, "GT5"))) { Root = here; Gt5 = Path.Combine(here, "GT5"); }
             else { Gt5 = here; Root = Path.GetDirectoryName(here); }
@@ -196,6 +206,27 @@ namespace Gt5Launcher
             { "upd.notes", new[] { "What's new", "更新内容" } },
             { "upd.running", new[] { "The game is running: close it before updating.", "游戏正在运行：请先关闭游戏再更新。" } },
             { "upd.nogit", new[] { "Updating needs the install folder made by the installer (a git clone with update.ps1).", "更新需要由安装程序创建的安装文件夹（含 update.ps1 的 git 克隆）。" } },
+            // The update window
+            { "uw.title", new[] { "Updating Gran Turismo 5", "正在更新 Gran Turismo 5" } },
+            { "uw.start", new[] { "Starting the update", "正在开始更新" } },
+            { "uw.fetch", new[] { "Getting the new version", "正在获取新版本" } },
+            { "uw.prep", new[] { "Getting the build ready", "正在准备构建" } },
+            { "uw.relift", new[] { "Translating the game's code again (about 10 minutes)", "正在重新转换游戏代码（约 10 分钟）" } },
+            { "uw.build", new[] { "Building the game", "正在构建游戏" } },
+            { "uw.files", new[] { "{0:N0} of {1:N0} steps", "第 {0:N0} / {1:N0} 步" } },
+            { "uw.retry", new[] { "The build stopped; trying again with fewer jobs", "构建中断，正在以更少的并行任务重试" } },
+            { "uw.finish", new[] { "Finishing", "正在完成" } },
+            { "uw.done", new[] { "Updated to {0}", "已更新到 {0}" } },
+            { "uw.donegen", new[] { "Update finished", "更新完成" } },
+            { "uw.uptodate", new[] { "Already up to date", "已是最新版本" } },
+            { "uw.opening", new[] { "Opening the launcher...", "正在打开启动器..." } },
+            { "uw.failed", new[] { "The update stopped", "更新已中止" } },
+            { "uw.log", new[] { "The full text is in GT5\\logs\\update.log: attach it when you report this.", "完整内容在 GT5\\logs\\update.log：报告问题时请附上。" } },
+            { "uw.details", new[] { "Details", "详细信息" } },
+            { "uw.hide", new[] { "Hide details", "隐藏详细信息" } },
+            { "uw.open", new[] { "Open the launcher", "打开启动器" } },
+            { "uw.close", new[] { "Close", "关闭" } },
+            { "uw.stop", new[] { "The update is still running. Stop it?\n\nThe game may not start until an update finishes: run Update now again later.", "更新仍在进行。要停止吗？\n\n在更新完成之前游戏可能无法启动：之后请再次点击“立即更新”。" } },
             // Help
             { "help.logs", new[] { "Open the logs folder", "打开日志文件夹" } },
             { "help.save", new[] { "Save logs for a report", "保存日志用于报告" } },
@@ -377,6 +408,417 @@ namespace Gt5Launcher
             FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; Cursor = Cursors.Hand;
             FlatAppearance.MouseOverBackColor = hot; FlatAppearance.MouseDownBackColor = hot;
             Font = Look.F(10f, FontStyle.Regular); UseVisualStyleBackColor = false;
+        }
+    }
+
+    // ---- The update window (#39) -----------------------------------------------------------------------
+    // "Update now" used to open update.ps1 in a console window. The launcher can't show the progress
+    // itself, as it closes so the build can replace GT5Launcher.exe; it starts a copy of itself
+    // (GT5Updater.exe in %TEMP%) with --update-window, and the copy runs update.ps1 without a console:
+    // the player's own Photo Mode pictures behind it (the GT logo when there are none), a car that drives
+    // along one bar following the real steps (the build's own [n/total] count), the full text one click
+    // away and in GT5\logs\update.log, and the new launcher opened at the end.
+    class UpdateForm : Form
+    {
+        [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int v, int size);
+        static readonly Regex NinjaLine = new Regex(@"^\[(\d+)/(\d+)\]");
+        static readonly Regex SwitchLine = new Regex(@"^Switching from (.+) to (.+)$");
+        readonly Paths P;
+        readonly string relaunch;
+        readonly string[] updArgs;
+        Process proc;
+        readonly object qlock = new object();
+        readonly List<string> queue = new List<string>();
+        readonly List<string> tail = new List<string>();   // the last lines, for Details (the log has them all)
+        bool tailChanged;
+        StreamWriter log;
+        readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer();
+        readonly DateTime t0 = DateTime.Now;
+        DateTime stepT0 = DateTime.Now, exitSeen = DateTime.MinValue, doneAt = DateTime.MinValue;
+        // Each step owns a slice [lo, hi] of the bar. A step that prints no count creeps through its slice
+        // over about `secs`; the build follows ninja's own count.
+        double lo, hi = 0.05, within, shown, secs = 20;
+        bool counted, relifted, finished, failed, upToDate, opened;
+        string step, sub = "", raw = "", label = "", failMsg = "";
+        readonly List<string> photos = new List<string>();
+        Image bg, logo;
+        int photoIdx;
+        DateTime photoT = DateTime.Now;
+        float wheel;
+        readonly TextBox details;
+        readonly FlatButton detailsBtn, openBtn, closeBtn;
+
+        public UpdateForm(string root, string launcher, string[] args)
+        {
+            P = new Paths(root);
+            relaunch = launcher;
+            updArgs = args;
+            try { T.Zh = new Settings(P.Settings).Get("GT5_LAUNCHER_LANG") == "zh"; } catch { }
+            step = T.Get("uw.start");
+            Text = T.Get("uw.title");
+            ClientSize = new Size(960, 540);
+            StartPosition = FormStartPosition.CenterScreen;
+            FormBorderStyle = FormBorderStyle.FixedSingle; MaximizeBox = false;
+            BackColor = Look.Bg; ForeColor = Look.Text;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            try { if (File.Exists(P.Icon0)) logo = Image.FromStream(new MemoryStream(File.ReadAllBytes(P.Icon0))); } catch { }
+            FindPhotos();
+            NextPhoto();
+
+            details = new TextBox
+            {
+                Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, WordWrap = false,
+                BackColor = Color.FromArgb(10, 11, 15), ForeColor = Look.Dim, BorderStyle = BorderStyle.None,
+                Font = new Font("Consolas", 9f), Location = new Point(24, 24), Size = new Size(912, 330), Visible = false
+            };
+            Controls.Add(details);
+            detailsBtn = new FlatButton(T.Get("uw.details"), Look.Panel, Look.NavHot) { Size = new Size(130, 34), Location = new Point(806, 490) };
+            detailsBtn.Click += delegate { ShowDetails(!details.Visible); };
+            Controls.Add(detailsBtn);
+            openBtn = new FlatButton(T.Get("uw.open"), Look.Blue, Color.FromArgb(90, 160, 240)) { Size = new Size(170, 34), Location = new Point(482, 490), Visible = false };
+            openBtn.Click += delegate { OpenLauncher(); Close(); };
+            Controls.Add(openBtn);
+            closeBtn = new FlatButton(T.Get("uw.close"), Look.Panel, Look.NavHot) { Size = new Size(140, 34), Location = new Point(660, 490), Visible = false };
+            closeBtn.Click += delegate { Close(); };
+            Controls.Add(closeBtn);
+            foreach (var bt in new[] { detailsBtn, openBtn, closeBtn }) bt.Font = UF(10f, FontStyle.Regular);
+
+            tick.Interval = 40;
+            tick.Tick += delegate { OnTick(); };
+            Shown += delegate { Start(); };
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            try { int on = 1; if (DwmSetWindowAttribute(Handle, 20, ref on, 4) != 0) DwmSetWindowAttribute(Handle, 19, ref on, 4); } catch { }
+        }
+
+        // Photo Mode saves to hdd0\game\<disc>\USRDIR\photo: the newest pictures first.
+        void FindPhotos()
+        {
+            try
+            {
+                var found = new List<FileInfo>();
+                var games = Path.Combine(P.Gt5, "hdd0", "game");
+                if (Directory.Exists(games))
+                    foreach (var d in Directory.GetDirectories(games))
+                    {
+                        var ph = Path.Combine(d, "USRDIR", "photo");
+                        if (!Directory.Exists(ph)) continue;
+                        foreach (var f in new DirectoryInfo(ph).GetFiles("*.jpg"))
+                            if (!f.Name.EndsWith("_t.jpg", StringComparison.OrdinalIgnoreCase)) found.Add(f);   // not the thumbnails
+                    }
+                found.Sort(delegate(FileInfo a, FileInfo b) { return b.LastWriteTimeUtc.CompareTo(a.LastWriteTimeUtc); });
+                for (int i = 0; i < found.Count && i < 40; i++) photos.Add(found[i].FullName);
+            }
+            catch { }
+        }
+
+        void NextPhoto()
+        {
+            for (int tries = 0; tries < photos.Count; tries++)
+            {
+                string p = photos[photoIdx % photos.Count]; photoIdx++;
+                try
+                {
+                    var img = Image.FromStream(new MemoryStream(File.ReadAllBytes(p)));
+                    if (bg != null) bg.Dispose();
+                    bg = img;
+                    return;
+                }
+                catch { }
+            }
+        }
+
+        void Start()
+        {
+            if (!File.Exists(P.Update)) { Fail(T.Get("upd.nogit")); return; }
+            try
+            {
+                Directory.CreateDirectory(P.Logs);
+                string lp = Path.Combine(P.Logs, "update.log");
+                try { if (File.Exists(lp)) File.Copy(lp, Path.Combine(P.Logs, "update.prev.log"), true); } catch { }
+                log = new StreamWriter(lp, false, new UTF8Encoding(false));
+                log.AutoFlush = true;
+                log.WriteLine("update window " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + ", in " + P.Root);
+            }
+            catch { log = null; }
+            var a = new StringBuilder("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + P.Update + "\"");
+            foreach (var x in updArgs) a.Append(" \"" + x.Replace("\"", "") + "\"");
+            var psi = new ProcessStartInfo("powershell.exe", a.ToString());
+            psi.WorkingDirectory = P.Root;
+            psi.UseShellExecute = false; psi.CreateNoWindow = true;
+            psi.RedirectStandardOutput = true; psi.RedirectStandardError = true; psi.RedirectStandardInput = true;
+            psi.StandardOutputEncoding = Encoding.UTF8; psi.StandardErrorEncoding = Encoding.UTF8;
+            psi.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
+            try
+            {
+                proc = new Process { StartInfo = psi };
+                proc.OutputDataReceived += Got;
+                proc.ErrorDataReceived += Got;
+                proc.Start();
+                proc.StandardInput.Close();
+                proc.BeginOutputReadLine(); proc.BeginErrorReadLine();
+            }
+            catch (Exception e) { Fail(e.Message); return; }
+            tick.Start();
+        }
+
+        void Got(object s, DataReceivedEventArgs e)
+        {
+            if (e.Data == null) return;
+            lock (qlock) queue.Add(e.Data);
+        }
+
+        void Step(double l, double h, string text, double expect)
+        {
+            lo = Math.Max(l, shown); hi = Math.Max(h, lo); step = text; sub = ""; secs = expect;
+            within = 0; counted = false; stepT0 = DateTime.Now;
+        }
+
+        void Line(string l)
+        {
+            if (log != null) { try { log.WriteLine(l); } catch { } }
+            tail.Add(l); if (tail.Count > 1500) tail.RemoveRange(0, 300); tailChanged = true;
+            string t = l.Trim();
+            if (t.Length > 0) raw = t;
+            Match m = NinjaLine.Match(t);
+            if (m.Success)
+            {
+                double n = double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                double of = double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+                if (of > 0)
+                {
+                    if (n >= of) { Step(0.97, 0.995, T.Get("uw.finish"), 15); return; }
+                    if (!counted) { counted = true; stepT0 = DateTime.Now; }
+                    within = n / of;
+                    sub = string.Format(T.Get("uw.files"), n, of);
+                }
+                return;
+            }
+            m = SwitchLine.Match(t);
+            if (m.Success) { label = m.Groups[2].Value.Trim(); Step(0.02, 0.08, T.Get("uw.fetch"), 15); return; }
+            if (t.StartsWith("Reinstalling ")) { label = t.Substring(13).Trim(); Step(0.02, 0.08, T.Get("uw.fetch"), 15); return; }
+            if (t.StartsWith("Already on ")) { upToDate = true; return; }
+            if (t.StartsWith("ps3recomp:")) { Step(0.08, 0.12, T.Get("uw.prep"), 40); return; }
+            if (t.StartsWith("Re-lifting")) { relifted = true; Step(0.12, 0.55, T.Get("uw.relift"), 600); return; }
+            if (t.StartsWith("Building (only what changed)")) { Step(relifted ? 0.55 : 0.12, 0.97, T.Get("uw.build"), 300); return; }
+            if (t.StartsWith("The build stopped. Trying again")) { step = T.Get("uw.retry"); counted = false; return; }
+            if (t.StartsWith("update: ")) { failMsg = t.Substring(8); return; }
+        }
+
+        void OnTick()
+        {
+            List<string> got = null;
+            lock (qlock) { if (queue.Count > 0) { got = new List<string>(queue); queue.Clear(); } }
+            if (got != null) foreach (var l in got) Line(l);
+
+            if (!finished && proc != null && proc.HasExited)
+            {
+                // The last lines arrive just after the exit.
+                if (exitSeen == DateTime.MinValue) exitSeen = DateTime.Now;
+                else if ((DateTime.Now - exitSeen).TotalSeconds > 1.5) Finish(proc.ExitCode);
+            }
+            if (!finished && !counted)
+            {
+                double el = (DateTime.Now - stepT0).TotalSeconds;
+                within = Math.Min(0.95, 1 - Math.Exp(-el / Math.Max(1, secs)));
+            }
+            double target = finished && !failed ? 1.0 : lo + (hi - lo) * within;
+            if (target > shown) { double d = (target - shown) * 0.12; shown += Math.Max(d, Math.Min(0.0005, target - shown)); }
+            wheel += finished ? 0 : (float)(4 + 40 * Math.Max(0, target - shown) * 50);
+            if (photos.Count > 1 && (DateTime.Now - photoT).TotalSeconds > 9) { photoT = DateTime.Now; NextPhoto(); }
+            if (details.Visible && tailChanged) RefreshDetails();
+            if (finished && !failed && !opened && (DateTime.Now - doneAt).TotalSeconds > 2.5)
+            {
+                opened = true; OpenLauncher(); Close(); return;
+            }
+            Invalidate();
+        }
+
+        void Finish(int code)
+        {
+            finished = true; doneAt = DateTime.Now;
+            if (log != null) { try { log.WriteLine("update.ps1 ended with exit code " + code); } catch { } }
+            if (code != 0) { Fail(failMsg != "" ? failMsg : raw); return; }
+            within = 1; shown = Math.Max(shown, 0.999);
+            step = upToDate ? T.Get("uw.uptodate") : label != "" ? string.Format(T.Get("uw.done"), label) : T.Get("uw.donegen");
+            sub = T.Get("uw.opening");
+        }
+
+        // Segoe UI has no Chinese: Windows then mixes fonts character by character.
+        static Font UF(float size, FontStyle st)
+        {
+            return T.Zh ? new Font("Microsoft YaHei UI", size, st, GraphicsUnit.Point) : Look.F(size, st);
+        }
+
+        void Fail(string why)
+        {
+            finished = true; failed = true;
+            step = T.Get("uw.failed");
+            sub = why.Length > 0 ? char.ToUpperInvariant(why[0]) + why.Substring(1) : why;
+            raw = T.Get("uw.log");
+            openBtn.Visible = File.Exists(relaunch);
+            closeBtn.Visible = true;
+            ShowDetails(true);
+            Invalidate();
+        }
+
+        void ShowDetails(bool on)
+        {
+            details.Visible = on;
+            detailsBtn.Text = T.Get(on ? "uw.hide" : "uw.details");
+            if (on) RefreshDetails();
+        }
+
+        void RefreshDetails()
+        {
+            tailChanged = false;
+            details.Text = string.Join("\r\n", tail.ToArray());
+            details.SelectionStart = details.TextLength; details.ScrollToCaret();
+        }
+
+        void OpenLauncher()
+        {
+            try
+            {
+                if (!File.Exists(relaunch)) return;
+                var psi = new ProcessStartInfo(relaunch) { WorkingDirectory = P.Root, UseShellExecute = true };
+                Process.Start(psi);
+            }
+            catch { }
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (!finished && proc != null && !proc.HasExited && e.CloseReason == CloseReason.UserClosing)
+            {
+                if (MessageBox.Show(this, T.Get("uw.stop"), T.Get("uw.title"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                { e.Cancel = true; return; }
+                try
+                {
+                    // update.ps1 and everything it started (git, the build).
+                    var k = new ProcessStartInfo("taskkill.exe", "/T /F /PID " + proc.Id) { CreateNoWindow = true, UseShellExecute = false };
+                    Process.Start(k).WaitForExit(5000);
+                }
+                catch { }
+                if (log != null) { try { log.WriteLine("stopped from the update window"); } catch { } }
+            }
+            tick.Stop();
+            if (log != null) { try { log.Dispose(); } catch { } log = null; }
+            base.OnFormClosing(e);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            int W = ClientSize.Width, H = ClientSize.Height;
+            // The picture, filling the window.
+            if (bg != null)
+            {
+                float s = Math.Max((float)W / bg.Width, (float)H / bg.Height);
+                float iw = bg.Width * s, ih = bg.Height * s;
+                g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                g.DrawImage(bg, (W - iw) / 2, (H - ih) / 2, iw, ih);
+            }
+            else
+            {
+                using (var b = new LinearGradientBrush(new Rectangle(0, 0, W, H), Color.FromArgb(28, 32, 44), Look.Bg, 90f)) g.FillRectangle(b, 0, 0, W, H);
+                if (logo != null && !details.Visible)
+                {
+                    float lw = 480, lh = lw * logo.Height / logo.Width;
+                    g.DrawImage(logo, (W - lw) / 2, 70, lw, lh);
+                }
+            }
+            // A dark band at the bottom for the text.
+            var band = new Rectangle(0, H - 210, W, 210);
+            using (var b = new LinearGradientBrush(band, Color.FromArgb(0, 8, 9, 12), Color.FromArgb(235, 8, 9, 12), 90f))
+                g.FillRectangle(b, band.X, band.Y + 1, band.Width, band.Height);
+
+            using (var f = UF(9.5f, FontStyle.Bold))
+            using (var br = new SolidBrush(Color.FromArgb(200, Look.Text)))
+                if (!details.Visible) g.DrawString(T.Get("uw.title").ToUpperInvariant(), f, br, 24, 20);
+
+            // The step, its detail and the time so far.
+            using (var f = UF(15f, FontStyle.Bold))
+            using (var br = new SolidBrush(failed ? Look.AccentHot : Look.Text))
+                g.DrawString(step, f, br, 22, H - 190);
+            using (var f = UF(10f, FontStyle.Regular))
+            using (var br = new SolidBrush(Look.Text))
+                g.DrawString(sub, f, br, new RectangleF(24, H - 156, W - 48, 20), new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap });
+            var el = DateTime.Now - t0;
+            string right = (finished ? "" : ((int)(shown * 100)).ToString(CultureInfo.InvariantCulture) + "%   ") +
+                           string.Format(CultureInfo.InvariantCulture, "{0}:{1:00}", (int)el.TotalMinutes, el.Seconds);
+            using (var f = UF(10f, FontStyle.Regular))
+            using (var br = new SolidBrush(Look.Dim))
+            {
+                var sz = g.MeasureString(right, f);
+                g.DrawString(right, f, br, W - 24 - sz.Width, H - 184);
+            }
+
+            // The road and the car.
+            float rx = 24, rw = W - 48, ry = H - 92, rh = 10;
+            using (var b = new SolidBrush(Color.FromArgb(200, 40, 44, 56))) FillRound(g, b, rx, ry, rw, rh);
+            float carLen = 66, x = rx + carLen + (float)shown * (rw - carLen);
+            using (var b = new LinearGradientBrush(new RectangleF(rx, ry, rw, rh), Look.Blue, Color.FromArgb(120, 190, 255), 0f))
+                if (x - rx > 4) FillRound(g, b, rx, ry, x - rx - 6, rh);
+            using (var pen = new Pen(Color.FromArgb(110, 255, 255, 255), 2f) { DashPattern = new float[] { 6f, 6f } })
+                g.DrawLine(pen, x + 8, ry + rh / 2, rx + rw - 4, ry + rh / 2);
+            DrawCar(g, x, ry, failed ? Look.Dim : Look.Accent);
+
+            using (var f = UF(8.5f, FontStyle.Regular))
+            using (var br = new SolidBrush(Look.Dim))
+                g.DrawString(raw, f, br, new RectangleF(24, H - 70, W - 48 - 290, 18), new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap });
+        }
+
+        static void FillRound(Graphics g, Brush b, float x, float y, float w, float h)
+        {
+            if (w < h) w = h;
+            using (var p = new GraphicsPath())
+            {
+                p.AddArc(x, y, h, h, 90, 180);
+                p.AddArc(x + w - h, y, h, h, 270, 180);
+                p.CloseFigure();
+                g.FillPath(b, p);
+            }
+        }
+
+        // A low coupe seen from the side, its nose at x, its wheels on the road at y.
+        void DrawCar(Graphics g, float x, float y, Color body)
+        {
+            float b = y - 1;
+            using (var p = new GraphicsPath())
+            {
+                p.AddBezier(x - 66, b - 6, x - 66, b - 13, x - 60, b - 15, x - 50, b - 16);
+                p.AddBezier(x - 50, b - 16, x - 42, b - 26, x - 26, b - 27, x - 16, b - 17);
+                p.AddBezier(x - 16, b - 17, x - 6, b - 16, x, b - 12, x, b - 7);
+                p.AddLine(x, b - 7, x - 2, b - 3);
+                p.AddLine(x - 2, b - 3, x - 64, b - 3);
+                p.CloseFigure();
+                using (var br = new SolidBrush(body)) g.FillPath(br, p);
+            }
+            using (var p = new GraphicsPath())   // the side window
+            {
+                p.AddBezier(x - 46, b - 17, x - 40, b - 24, x - 28, b - 25, x - 21, b - 18);
+                p.AddLine(x - 21, b - 18, x - 46, b - 17);
+                p.CloseFigure();
+                using (var br = new SolidBrush(Color.FromArgb(220, 20, 24, 34))) g.FillPath(br, p);
+            }
+            foreach (float wx in new[] { x - 52, x - 15 })
+            {
+                using (var br = new SolidBrush(Color.FromArgb(18, 18, 22))) g.FillEllipse(br, wx - 6.5f, b - 9, 13, 13);
+                using (var br = new SolidBrush(Color.FromArgb(170, 176, 190))) g.FillEllipse(br, wx - 3.5f, b - 6, 7, 7);
+                using (var pen = new Pen(Color.FromArgb(18, 18, 22), 1.5f))
+                {
+                    double a = wheel * Math.PI / 180;
+                    float dx = (float)(Math.Cos(a) * 3.5), dy = (float)(Math.Sin(a) * 3.5);
+                    g.DrawLine(pen, wx - dx, b - 2.5f - dy, wx + dx, b - 2.5f + dy);
+                }
+            }
         }
     }
 
@@ -1015,6 +1457,18 @@ namespace Gt5Launcher
         {
             if (GameRunning() || running) { MessageBox.Show(this, T.Get("upd.running"), "GT5"); return; }
             if (!File.Exists(P.Update) || !Directory.Exists(Path.Combine(P.Root, ".git"))) { MessageBox.Show(this, T.Get("upd.nogit"), "GT5"); return; }
+            // The update window: a copy of this exe, since the launcher closes so the build can replace it.
+            string copy = Path.Combine(Path.GetTempPath(), "GT5Updater.exe");
+            try
+            {
+                File.Copy(Application.ExecutablePath, copy, true);
+                var w = new ProcessStartInfo(copy, string.Format("--update-window \"{0}\" \"{1}\"", P.Root, Application.ExecutablePath));
+                w.WorkingDirectory = P.Root; w.UseShellExecute = false;
+                Process.Start(w);
+                Close();
+                return;
+            }
+            catch { }   // a copy still open from an earlier update, say: the console as before
             try
             {
                 // The launcher closes, so update.ps1 can rebuild it; update.ps1 opens it again at the end.

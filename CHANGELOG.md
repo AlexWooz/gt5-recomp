@@ -9,6 +9,34 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.70**
+
+🏁 **Update now opens an update window instead of a console**
+([#39](https://github.com/MormonFTP-hub/gt5-recomp/issues/39), ideas from Arpadiam, brocolison and wurtexxd-dot)
+- The launcher's **Update now** used to open `update.ps1` in a black console window full of build text. It
+  now opens a window of its own: your newest Photo Mode pictures behind it, changing every few seconds (the
+  GT logo from your disc when you have none), the current step in plain words, and a car that drives along
+  the progress bar. The bar follows the real work: the build's own count of steps ("1,234 of 2,000 steps"),
+  and a slow creep through the steps that print no count (getting the new version, a re-lift).
+- **Details** shows the full text. Everything also goes to `GT5\logs\update.log` (the one before is kept as
+  `update.prev.log`). If the update stops, the window stays open with the reason, the text and a button
+  that opens the launcher; when it finishes, it opens the new launcher by itself.
+- How: the launcher has to close so the build can replace `GT5Launcher.exe`, so it starts a copy of itself
+  (`GT5Updater.exe` in your Temp folder) as the window, which runs `update.ps1` without a console.
+  `Update.bat` still runs the console version.
+- This version's own update still runs in the console, because your current launcher starts it. The
+  window comes with the next one.
+
+🩺 **Crash reports name the DLL a crash happened in**
+([#40](https://github.com/MormonFTP-hub/gt5-recomp/issues/40), brocolison: Vulkan closes at its first frame on Intel Iris Xe)
+- `play.err`'s `[CRASH]` block gave a crash's place as an offset in "the module" without saying which
+  one. In #40 the offset was the same in v0.1.60 and v0.1.64, so it wasn't gt5.exe, but the graphics
+  driver, the Vulkan loader and SDL2 were all possible.
+- The block now names the module and its file, the thread that crashed (the runtime names its threads),
+  and the whole call stack from the crash on as `module+offset`. A crash inside a driver then also shows
+  the first gt5.exe frame that called into it.
+- `PS3_CRASH_TEST=dll` (or `=exe`) in `settings.bat` crashes on purpose at start, to see the report.
+
 🏷️ Released as **v0.1.69**
 
 🎮 **Steering wheels: Thrustmaster pedals the right way round, a button as a pedal, reverse on a button**

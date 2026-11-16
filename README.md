@@ -99,7 +99,8 @@ launcher: every setting in one window, then **Play**. No more editing `play.bat`
 - **Game:** the game's language (as far as your disc has it), your mods from `GT5\mods`, the launcher's
   own language (English or 中文).
 - **Updates:** shows your version and the newest one with what's new, and **Update now** does the
-  whole update for you and opens the launcher again.
+  whole update for you in its own window (your newest Photo Mode pictures behind it, a car on the
+  progress bar, **Details** for the full text) and opens the launcher again.
 - **Help:** **Save logs for a report** puts your logs on the desktop as `.txt` files GitHub accepts,
   plus the logs folder, the problem form, this FAQ and **Clear the shader cache** (also
   `ClearShaders.bat` in the install folder; see the FAQ).
@@ -120,7 +121,8 @@ about new ones, click **Watch** at the top of this page, then **Custom** and tic
 ### The easy way
 
 - **The launcher** checks for a new version when it opens: its **Updates** page shows what's new, and
-  **Update now** does everything below and opens the launcher again.
+  **Update now** does everything below in an update window and opens the launcher again. If the update
+  stops, the window shows why and keeps the full text in `GT5\logs\update.log` for a report.
 - Or **double-click `Update.bat`** in your `gt5-recomp` folder.
 
 Both run `update.ps1`, so everything below applies. (No launcher or `Update.bat` yet? Your next update

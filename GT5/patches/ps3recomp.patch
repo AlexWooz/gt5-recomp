@@ -18376,7 +18376,6 @@ index 9cb50400..e38aea53 100644
      ps3_hle_register_ctx(ps3_compute_nid("sys_mmapper_unmap_memory"),   "sys_mmapper_unmap_memory",   crt_ok);
      ps3_hle_register_ctx(ps3_compute_nid("sys_mmapper_free_memory"),    "sys_mmapper_free_memory",    crt_ok);
 diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
-index a55afb05..13dd876e 100644
 --- a/runtime/ppu/tests/boot_main.cpp
 +++ b/runtime/ppu/tests/boot_main.cpp
 @@ -43,6 +43,19 @@
@@ -18399,7 +18398,7 @@ index a55afb05..13dd876e 100644
  extern "C" {
  uint32_t ppu_load_elf(const char* path);
  void     ppu_recomp_register(void);
-@@ -70,10 +83,54 @@ void     ps3_load_prx_modules(void) {}
+@@ -70,10 +83,54 @@
  #include <string.h>
  #include <stdlib.h>
  #include <signal.h>
@@ -18455,7 +18454,7 @@ index a55afb05..13dd876e 100644
  /* timeBeginPeriod: windows.h is included with WIN32_LEAN_AND_MEAN, which
   * excludes the multimedia timer API, so it must be asked for by name -- and
   * AFTER windows.h, since timeapi.h uses UINT and friends. */
-@@ -118,28 +175,28 @@ char* __cdecl cached_getenv(const char* name)
+@@ -118,28 +175,28 @@
          const char* k = s_env[i].key;
          MemoryBarrier();
          if (!k) break;
@@ -18506,7 +18505,90 @@ index a55afb05..13dd876e 100644
      }
      AcquireSRWLockExclusive(&s_env_lock);
      const char* val = NULL; int found = 0;
-@@ -282,7 +339,16 @@ static void harness_guest_caller(uint32_t opd, uint64_t a0, uint64_t a1,
+@@ -170,11 +227,40 @@
+ extern "C" const char* g_last_hle_name;
+ 
+ extern "C" PPU_THREAD_LOCAL ppu_context* g_active_ctx;
++
++/* The file name of the module that holds addr ("?" when none does): a crash in a graphics driver,
++ * the Vulkan loader or SDL2 shows the same offset in every gt5.exe version, so the name is what
++ * tells them apart (#40: Vulkan on Intel Iris Xe closed at its first frame inside such a DLL). */
++static HMODULE crash_module(const void* addr, char* name, size_t n, char* path, size_t pn)
++{
++    HMODULE m = NULL;
++    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)addr, &m);
++    char full[MAX_PATH];
++    DWORD len = m ? GetModuleFileNameA(m, full, MAX_PATH) : 0;
++    if (!len || len >= MAX_PATH) snprintf(full, sizeof full, "?");
++    const char* b = strrchr(full, '\\');
++    snprintf(name, n, "%s", b ? b + 1 : full);
++    if (path) snprintf(path, pn, "%s", full);
++    return m;
++}
++
+ static LONG WINAPI ydkj_crash_filter(EXCEPTION_POINTERS* ep)
+ {
+     EXCEPTION_RECORD* er = ep->ExceptionRecord;
+     fprintf(stderr, "\n[CRASH] code=0x%08lX rip=%p\n",
+             (unsigned long)er->ExceptionCode, er->ExceptionAddress);
++    /* Which host thread: the runtime names its threads (SetThreadDescription, Windows 10 1607+). */
++    typedef HRESULT (WINAPI* GetThreadDescription_t)(HANDLE, PWSTR*);
++    GetThreadDescription_t gtd = (GetThreadDescription_t)(void*)GetProcAddress(
++        GetModuleHandleA("kernel32.dll"), "GetThreadDescription");
++    PWSTR wname = NULL;
++    char tname[128] = "";
++    if (gtd && SUCCEEDED(gtd(GetCurrentThread(), &wname)) && wname) {
++        WideCharToMultiByte(CP_UTF8, 0, wname, -1, tname, (int)sizeof tname, NULL, NULL);
++        LocalFree(wname);
++    }
++    fprintf(stderr, "[CRASH] thread %lu \"%s\"\n", (unsigned long)GetCurrentThreadId(), tname);
+     fprintf(stderr, "[CRASH] last HLE NID 0x%08X (%s)\n",
+             g_last_hle_nid, g_last_hle_name ? g_last_hle_name : "");
+     if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2)
+@@ -183,23 +269,24 @@
+                 (unsigned long long)er->ExceptionInformation[1]);
+     if (g_active_ctx) fprintf(stderr, "[CRASH] guest ctr=0x%08X lr=0x%08X r3=0x%08X\n",
+           (uint32_t)g_active_ctx->ctr, (uint32_t)g_active_ctx->lr, (uint32_t)g_active_ctx->gpr[3]);
+-    HMODULE mod = NULL;
+-    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+-                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+-                       (LPCSTR)er->ExceptionAddress, &mod);
+-    fprintf(stderr, "[CRASH] module=%p rva=0x%llX  (llvm-symbolizer --obj=ydkj_boot.exe 0x%llX)\n",
+-            (void*)mod, (unsigned long long)((char*)er->ExceptionAddress - (char*)mod),
+-            (unsigned long long)((char*)er->ExceptionAddress - (char*)mod));
+-    /* Host call stack (RVAs) so the lifted caller can be symbolized. */
+-    void* frames[24];
+-    USHORT n = RtlCaptureStackBackTrace(0, 24, frames, NULL);
+-    for (USHORT i = 0; i < n; i++) {
+-        HMODULE m = NULL;
+-        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+-                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)frames[i], &m);
+-        if (m == mod)
+-            fprintf(stderr, "[CRASH]   #%-2u rva=0x%llX\n", i,
+-                    (unsigned long long)((char*)frames[i] - (char*)m));
++    char mname[MAX_PATH], mpath[MAX_PATH];
++    HMODULE mod = crash_module(er->ExceptionAddress, mname, sizeof mname, mpath, sizeof mpath);
++    fprintf(stderr, "[CRASH] module=%p %s rva=0x%llX  (llvm-symbolizer --obj=%s 0x%llX)\n",
++            (void*)mod, mname, (unsigned long long)((char*)er->ExceptionAddress - (char*)mod),
++            mname, (unsigned long long)((char*)er->ExceptionAddress - (char*)mod));
++    fprintf(stderr, "[CRASH] module file: %s\n", mpath);
++    /* Host call stack as module+RVA, from the faulting frame on (the frames before it are this
++     * filter and Windows' exception dispatch), so the first gt5.exe frame shows who called in. */
++    void* frames[32];
++    USHORT n = RtlCaptureStackBackTrace(0, 32, frames, NULL);
++    USHORT first = 0;
++    for (USHORT i = 0; i < n; i++)
++        if (frames[i] == er->ExceptionAddress) { first = i; break; }
++    for (USHORT i = first; i < n; i++) {
++        char fname[MAX_PATH];
++        HMODULE m = crash_module(frames[i], fname, sizeof fname, NULL, 0);
++        fprintf(stderr, "[CRASH]   #%-2u %s+0x%llX\n", i, fname,
++                (unsigned long long)((char*)frames[i] - (char*)m));
+     }
+     fflush(stderr);
+     return EXCEPTION_EXECUTE_HANDLER;
+@@ -282,7 +369,16 @@
   * backend's headless software path anywhere else -- the same selection
   * runtime/host/host_posix.c makes, so the ticker below is backend-agnostic
   * and a POSIX host gets a frame clock instead of no clock at all. */
@@ -18524,7 +18606,7 @@ index a55afb05..13dd876e 100644
  extern "C" int  rsx_d3d12_backend_init(uint32_t w, uint32_t h, const char* title);
  extern "C" void rsx_d3d12_backend_present(void);
  extern "C" int  rsx_d3d12_backend_pump_messages(void);
-@@ -307,6 +373,7 @@ extern "C" int  rsx_null_backend_pump_messages(void);
+@@ -307,6 +403,7 @@
  extern "C" void cellGcm_rsx_process_fifo(void);   /* cellGcmSys.c: drain get->put */
  extern "C" void cellGcm_fifo_kick_wait(unsigned ms); /* idle wait, woken by a kick */
  extern "C" unsigned cellGcm_flip_request_count(void);
@@ -18532,7 +18614,7 @@ index a55afb05..13dd876e 100644
  extern "C" unsigned cellGcmGetCurrentDisplayBufferId(void);
  extern "C" int sys_event_queue_inject(unsigned int, unsigned long long, unsigned long long, unsigned long long, unsigned long long);
  
-@@ -321,6 +388,7 @@ extern "C" int   rsx_live_draw_init(void* hwnd, uint32_t w, uint32_t h,
+@@ -321,6 +418,7 @@
                                                                  uint32_t, uint32_t),
                                      void* user);
  extern "C" void  rsx_live_draw_present(uint32_t buffer_id);
@@ -18540,7 +18622,7 @@ index a55afb05..13dd876e 100644
  extern "C" uint32_t rsx_live_draw_get_frames(void);
  extern "C" uint32_t rsx_live_draw_get_last_draws(void);
  extern "C" int   rsx_null_backend_init(uint32_t w, uint32_t h, const char* title);
-@@ -350,7 +418,16 @@ static const uint8_t* rsx_live_guest_ptr(void* user, uint32_t location,
+@@ -350,7 +448,16 @@
          ea = cellGcmResolveLocated(1, offset);          /* RSX local VRAM */
      } else {
          ea = cellGcmResolveIO(offset);                  /* main, via the IO table */
@@ -18558,7 +18640,7 @@ index a55afb05..13dd876e 100644
      }
      if (!ea || ea == 0xFFFFFFFFu ||
          (uint64_t)ea + min_bytes > 0x100000000ull) return nullptr;
-@@ -446,8 +523,68 @@ static DWORD WINAPI guest_prof_thread(LPVOID)
+@@ -446,8 +553,68 @@
  
  extern "C" const char* cellGame_get_title(void);   /* PARAM.SFO TITLE, for the caption */
  
@@ -18627,7 +18709,7 @@ index a55afb05..13dd876e 100644
      /* Window caption: $PS3_TITLE wins, else the TITLE field PARAM.SFO already
       * gave cellGame, else a neutral name. It used to fall back to a specific
       * other title, so every port announced itself as that game. */
-@@ -461,12 +598,19 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -461,12 +628,19 @@
       * backbuffer when its clip EQUALS the backend size, so a title that renders
       * into something other than 1280x720 must say so: RSX_W / RSX_H. */
      uint32_t rsx_w = 1280, rsx_h = 720;
@@ -18650,7 +18732,7 @@ index a55afb05..13dd876e 100644
                                           rsx_live_guest_ptr, nullptr) == 0) {
              s_rsx_live = 1;
              rsx_null_backend_suppress_present(1);
-@@ -485,7 +629,16 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -485,7 +659,16 @@
       * window DXGI Present throttles hard, which previously stalled these ticks and
       * paced the game's main loop to ~0.5fps. Drive the ticks off REAL elapsed time
       * and catch up in a bounded burst so present latency never slows the game. */
@@ -18668,7 +18750,7 @@ index a55afb05..13dd876e 100644
      for (;;) {
          /* Was Sleep(4). The FIFO kick event existed, was signalled on a dry
           * fence queue, and had no waiter -- so a guest starved for `get` or a
-@@ -494,8 +647,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -494,8 +677,9 @@
           * does. */
          cellGcm_fifo_kick_wait(4);
          ULONGLONG now = GetTickCount64();
@@ -18679,7 +18761,7 @@ index a55afb05..13dd876e 100644
              cellGcmTickVBlank();
              cellGcmTickFlip();
              /* Present a pending flip BEFORE draining further: the flip fires
-@@ -505,8 +659,8 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -505,8 +689,8 @@
               * writes and showed empty or mixed batches. */
              {
                  if (rsx_ok && cellGcm_take_flip_pending()) {
@@ -18690,7 +18772,7 @@ index a55afb05..13dd876e 100644
                  }
              }
              /* Drain the game's GCM FIFO every tick -- this writes the RSX sync-fence
-@@ -514,20 +668,21 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -514,20 +698,21 @@
               * Doing it here (not after present) keeps those fences advancing at 60Hz
               * even when present() throttles on a hidden/occluded window. */
              if (rsx_ok) cellGcm_rsx_process_fifo();
@@ -18716,7 +18798,7 @@ index a55afb05..13dd876e 100644
          }
          /* YDKJ_INJECT_Q3: the main thread polls q3 (load/state-complete) each frame but
           * it's never posted (producer signals a condvar, never enqueues). Inject a q3
-@@ -538,7 +693,17 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -538,7 +723,17 @@
              if(++s_q3 % 8 == 0){ int r=sys_event_queue_inject(qid, 0x1234, 0, 0, 0);
                static int _n=0; if(_n++<12) fprintf(stderr,"[INJQ3] injected q%u event rc=%d\n",qid,r); } }
          if (rsx_ok) {
@@ -18735,7 +18817,7 @@ index a55afb05..13dd876e 100644
              if (getenv("YDKJ_PACETRACE")) {
                  static ULONGLONG s_win=0; static int s_pf=0, s_pres=0; static ULONGLONG s_presms=0;
                  s_pf += fired; s_pres++;
-@@ -557,9 +722,9 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -557,9 +752,9 @@
                   * flash a partial frame (clear + a few draws). Before the
                   * first flip present freely so the window isn't stuck white
                   * during boot. */
@@ -18747,7 +18829,7 @@ index a55afb05..13dd876e 100644
                      last_flip = fc;
                  } else if (fc == 0) {
                      rsx_backend_present();
-@@ -934,45 +1099,45 @@ static DWORD WINAPI debug_console(LPVOID param)
+@@ -934,45 +1129,45 @@
              dump_threads("console", self);
          } else if (!strcmp(verb, "find32") && sscanf(cmd, "%*s %x", &a) == 1) {
              /* find32 <hex>: every aligned big-endian u32 equal to <hex> in committed
@@ -18822,7 +18904,7 @@ index a55afb05..13dd876e 100644
          } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
              dbg_prof((DWORD)a, b ? b : 5);
          } else if (!strcmp(verb, "hle")) {
-@@ -1109,6 +1274,18 @@ int main(int argc, char** argv)
+@@ -1109,6 +1304,18 @@
      timeBeginPeriod(1);   /* 1ms timer resolution: the default ~15.6ms granularity
                             * inflates every sub-15ms wait (the game's event polls,
                             * usleeps) and throttled the whole title. */
@@ -18841,7 +18923,23 @@ index a55afb05..13dd876e 100644
      SetUnhandledExceptionFilter(ydkj_crash_filter);
      AddVectoredExceptionHandler(0 /*last*/, [](EXCEPTION_POINTERS* ep)->LONG{
          if (ep->ExceptionRecord->ExceptionCode == 0xC00000FDu /*STACK_OVERFLOW*/) {
-@@ -1136,8 +1313,24 @@ int main(int argc, char** argv)
+@@ -1121,6 +1328,15 @@
+     { ULONG g=256*1024; SetThreadStackGuarantee(&g); }  /* reserve stack so the SO handler can run */
+     signal(SIGABRT, ydkj_abort_handler);
+     setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: don't lose prints on kill */
++    /* PS3_CRASH_TEST=dll|exe: crash on purpose (a null read inside the C runtime DLL's memcpy, or in
++     * gt5.exe itself) to check what the crash report says. */
++    if (const char* ct = getenv("PS3_CRASH_TEST")) {
++        void* (*volatile cp)(void*, const void*, size_t) = memcpy;
++        char buf[16] = {0};
++        if (!_stricmp(ct, "dll")) cp(buf, (const void*)0xD8, sizeof buf);
++        else if (!_stricmp(ct, "exe")) buf[0] = *(volatile char*)(uintptr_t)0xD8;
++        fprintf(stderr, "[CRASH TEST] '%s' did not crash (%d)\n", ct, buf[0]);
++    }
+ #endif
+ 
+     /* Flat VM: one host buffer, guest addr -> vm_base + addr. This maps the
+@@ -1136,8 +1352,24 @@
      /* Reserve the full 4 GB guest space; pages commit on first touch via the VEH. */
      AddVectoredExceptionHandler(1, guard_report_veh);  /* diagnose 0x80000001 silent deaths */
      AddVectoredExceptionHandler(1, vm_commit_veh);
@@ -18867,10 +18965,11 @@ index a55afb05..13dd876e 100644
  #else
      vm_base = (uint8_t*)calloc(1, 0xE0000000u);
      ppu_vm_size = 0xE0000000u;
-@@ -1147,6 +1340,25 @@ int main(int argc, char** argv)
+@@ -1146,6 +1378,25 @@
+ 
      uint32_t entry = ppu_load_elf(elf);
      if (!entry) { printf("load failed\n"); return 1; }
- 
++
 +    /* A title's own code (GT5's src/gt5_widescreen.cpp) runs here, image loaded, nothing run yet. */
 +    for (int i = 0; i < s_on_loaded_n; i++) s_on_loaded[i]();
 +
@@ -18889,10 +18988,9 @@ index a55afb05..13dd876e 100644
 +            p = (*e2 == ',') ? e2 + 1 : e2;
 +        }
 +    }
-+
+ 
      derive_vfs_root(elf);
      printf("[boot] VFS root: %s\n", ppu_vfs_root);
- 
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c

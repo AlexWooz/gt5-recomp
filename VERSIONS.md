@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.70](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.70) | 15 Nov 2026 | Update now opens an update window (progress over your Photo Mode pictures, details one click away); crash reports name the DLL a crash happened in |
 | [v0.1.69](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.69) | 15 Nov 2026 | Wheels: Thrustmaster pedal layout (normal and combined mode), a button as a pedal, reverse on a button (MT) |
 | [v0.1.68](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.68) | 15 Nov 2026 | Sound on busy and small CPUs: no more 85 ms holes, and the sound no longer runs late (the 2.11 audio lag) |
 | [v0.1.67](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.67) | 15 Nov 2026 | Launcher: lines you add to settings.bat by hand are kept (they were overwritten on the next Play) |
