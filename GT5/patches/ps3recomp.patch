@@ -8840,7 +8840,7 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
 +}
 +static void gcm_fifo_kick_wait_inner(unsigned ms);
 +/* GCM_WALK_SLEEP=0/1 forces the walker's sleep-after-spin off or on; by default it follows
-+ * ps3_host_spin_sleep() (on with 8 logical CPUs or fewer). */
++ * ps3_host_spin_sleep() (on Windows with 12 logical CPUs or fewer). */
 +extern int ps3_host_spin_sleep(void);
 +extern int ps3_host_sleep_on(void* ev, unsigned us);
 +static int gcm_walk_sleepy(void)
@@ -20239,7 +20239,7 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
      ppu_thread_note_block(ctx->thread_id);   /* PS3_PRIO_START */
  
      table_lock();
-@@ -788,6 +807,214 @@
+@@ -788,6 +807,227 @@
  static unsigned long g_cdl_hits;
  static uint32_t g_yield_ctr;
  static uint32_t g_cdl_v0, g_cdl_s0, g_cdl_s1, g_cdl_s6;
@@ -20248,15 +20248,28 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
 + * small CPU: SwitchToThread hands over only to a thread queued on the same processor, and there is
 + * usually none. On a laptop that is power the other game threads lose. So when a thread has yielded 16
 + * times in a row, less than 50 us apart, it naps 50 us on a high-resolution timer instead, while the
-+ * process may use 8 logical CPUs or fewer (the count is checked again every second, so an affinity
++ * process may use 12 logical CPUs or fewer (the count is checked again every second, so an affinity
 + * change counts). PS3_YIELD_NAP=0 never naps, =1 always may. Hookshot (Switch 2 recomp) measured +9%
-+ * frame rate and 14% less CPU per frame at 4 threads with the same change. */
++ * frame rate and 14% less CPU per frame at 4 threads with the same change.
++ * Round 9 (15 Nov 2026) widened "small" from 8 to 12 logical CPUs, the 6-core/12-thread CPUs many players
++ * have (Ryzen 5 3600/5600X, i5-10400F): on 6 P-cores with hyper-threading the policy (this nap and the
++ * pollers' sleep below) kept the same game fps (-0.3% +- 2.8%, +0.4% +- 1.7%) at 4.9% and 14.4% less CPU
++ * in two races; on 16 threads it was within noise (fps -1.1% +- 2.5%, CPU -4.0% +- 2.5%), so 16 stays big.
++ * PS3_SMALL_HOST_CPUS=<n> sets the limit; PS3_AB_WHAT=small alternates the whole policy off and on. */
++int ps3_ab_on(const char* what);
++static int ps3_ab_state(void);
 +#ifdef _WIN32
 +static int ppu_yield_nap_enabled(void)
 +{
 +    static int forced = -2;
 +    if (forced == -2) { const char* e = getenv("PS3_YIELD_NAP"); forced = e ? (atoi(e) != 0) : -1; }
 +    if (forced >= 0) return forced;
++    { /* PS3_AB_WHAT=small: whether the key is listed is worked out once, this runs on every yield */
++      static signed char listed = -1;
++      if (listed < 0) listed = (signed char)(ps3_ab_on("small") >= 0);
++      if (listed) { const int ab = ps3_ab_state(); if (ab >= 0) return ab; } }
++    static int small_max = -1;
++    if (small_max < 0) { const char* e = getenv("PS3_SMALL_HOST_CPUS"); small_max = (e && *e) ? atoi(e) : 12; }
 +    static volatile long small_host = -1;
 +    static volatile long long checked_ms = 0;
 +#ifdef _WIN32
@@ -20265,7 +20278,7 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
 +        DWORD_PTR pm = 0, sm = 0; int n = 0;
 +        if (GetProcessAffinityMask(GetCurrentProcess(), &pm, &sm))
 +            for (; pm; pm &= pm - 1) n++;
-+        small_host = (n > 0 && n <= 8) ? 1 : 0;
++        small_host = (n > 0 && n <= small_max) ? 1 : 0;
 +        checked_ms = now;
 +    }
 +#endif
@@ -20454,7 +20467,7 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
  
  int64_t sys_ppu_thread_yield(ppu_context* ctx)
  {
-@@ -1182,11 +1409,7 @@
+@@ -1182,11 +1422,7 @@
            }
        } }
      (void)ctx;

@@ -9,6 +9,24 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 15 Nov 2026
 
+🏷️ Released as **v0.1.65**
+
+⚙️ **6-core/12-thread CPUs: the game's waiting threads sleep instead of spinning, 5-14% less CPU at the same frame rate**
+- Since v0.1.28 and v0.1.41, on a PC with 8 logical CPUs or fewer the game's waiting threads nap or sleep
+  instead of spinning on a core: a PPU thread waiting for an SPU result, the command-buffer walker and the
+  DirectX 12 recording thread. The 6-core/12-thread CPUs most player reports come from (Ryzen 5 3600 and
+  5600X, Core i5-10400F) still spun.
+- They now get the same treatment. On the test PC's 6 hyper-threaded cores, switching it on and off every
+  10 s during a race: the same game frame rate (−0.3% ± 2.8% and +0.4% ± 1.7% in two races) with 5% and 14%
+  less CPU (7.7 → 7.1 and 7.4 → 6.5 cores busy). With 16 threads the difference was within the noise, so
+  CPUs with more threads keep spinning.
+- `PS3_SMALL_HOST_CPUS=<n>` in `play.bat` sets the limit (8 before); `PS3_YIELD_NAP=0` turns it all off.
+  Windows only: the Linux build keeps its own 8-CPU test until it is measured there.
+- Tried and left out: waits shorter than Windows' half-millisecond timer tick with the CPU's
+  `umwait`/`tpause` (27% fewer frames on 4 small cores, where the waiting thread has to give its core back;
+  no gain on 12 threads), and building the runtime with the game code's AVX2 instructions and with ThinLTO
+  (no measurable change in two rounds of races).
+
 🏷️ Released as **v0.1.64**
 
 🐧 **Linux and the Vulkan renderer: races start at the right brightness, and car reflections and shadows are drawn in full**

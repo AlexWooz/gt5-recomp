@@ -132,7 +132,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **15 Nov 2026:** Linux and the Vulkan renderer: races no longer start far too dark, and car reflections and
+- **15 Nov 2026:** on 6-core/12-thread CPUs the game's waiting threads sleep instead of spinning, as on
+  8-thread ones: 5-14% less CPU at the same frame rate (v0.1.65); Linux and the Vulkan renderer: races no longer start far too dark, and car reflections and
   shadows are drawn in full (v0.1.64); less CPU for every frame on small CPUs and the Steam Deck, from AlexWooz's pull request #33,
   and the sound mixer's filters a little cheaper (v0.1.63, one re-lift); in the cockpit view, dust and smoke from the cars ahead stay outside instead of covering
   the dashboard (v0.1.62); a steering wheel's steering and pedals no longer get stuck in a race when the PC is too
