@@ -34,7 +34,9 @@ STEPS = [
     ("track", "frames_p1/frame_002522.png", (0, 620, 1280, 720), CROSS, 16, 3),
     ("car", "frames_p1/frame_003104.png", (0, 620, 1280, 720), CROSS, 16, 3),
     ("color", "frames_ref/color.png", (480, 640, 900, 690), CROSS, 16, 6),
-    ("car_ok", "frames_p1/frame_003201.png", (500, 500, 780, 610), CROSS, 16, 8),
+    # The AT/MT question. Only the two buttons: the car's reflection runs behind them, so a wider crop
+    # (the old "car_ok", 500,500,780,610) matched only the usual car and stalled any other (a G27 run's Fiat).
+    ("atmt", "frames_p1/frame_003201.png", (540, 565, 745, 603), CROSS, 16, 8),
     ("prerace", "frames_live2/frame_005141.png", (440, 600, 840, 690), CROSS, 16, 12),
 ]
 REF_CACHE = {}
@@ -233,7 +235,7 @@ def drive(a):
                     say("%s matched (%.1f), press 0x%04X" % (s[0], d, s[3]))
                     if s[0] == "color" and a.gate and a.capture in ("car", "both"):
                         capture("car")
-                    if s[0] == "car_ok" and a.prof:
+                    if s[0] == "atmt" and a.prof:
                         profile("car")
                         time.sleep(14)
                     img.save(os.path.join(a.dir, "step_%02d_%s.png" % (i, s[0])))

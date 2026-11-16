@@ -9,6 +9,34 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.73**
+
+🌋 **Vulkan: frame generation, even frame pacing, and a cheaper command thread**
+([#38](https://github.com/MormonFTP-hub/gt5-recomp/issues/38))
+- **Frame generation now works on Vulkan too.** With the launcher's **Frame generation** ticked
+  (`LD_FRAMEGEN=1`) and Speed 30 fps or watch mode, Vulkan makes the in-between frames the way DirectX 12
+  does (the same motion search, run as Vulkan compute shaders) and a thread of its own presents them.
+  Measured in a race, switching it on and off every 20 s: **57 new pictures a second, 16.6 ms apart**
+  (85-89% of them 12-21 ms apart) against 26 a second, 33-36 ms apart, with frame generation off. The
+  game's own speed didn't change (54 vs 52 frames a second, within noise).
+- Even without the made frames, presenting moved off the command thread: it never waits for the screen.
+  On a screen faster than 75 Hz the presents are spaced by the game's frame time.
+- **The command thread (the one that walks the game's GPU commands) got cheaper**, on by default:
+  - Images are reused instead of made and freed. GT5 made and freed about 900 images a second in a race
+    (textures it rewrites, feedback copies, depth read as colour), and on Windows each one is a trip
+    into the kernel. Alternating it every 20 s: **43 against 37 game frames a second** (+17%), the
+    command thread busy 620 instead of 716 ms of every second. `VK_IMAGE_POOL=0` turns it off.
+  - Converted car and track geometry is kept between frames, as DirectX 12 does (`LD_VCACHE`'s idea:
+    reused while Windows says its memory is unwritten), and the 8 KB of vertex constants is copied once a
+    draw instead of three times. Together: the command thread **402 instead of 484 ms** of every second.
+    `VK_VCACHE=0` and `VK_CONST_DIRECT=0` turn them off.
+- Tried and left out: a Vulkan pipeline cache kept on disk didn't reduce the draws skipped while new
+  shaders build at a race start (450-720 skipped with it, 400-570 without), so it isn't in. Small
+  readbacks without a wait (`VK_RB_ASYNC=1`, DirectX 12 does the same) gained 12% but feed GT5's
+  auto-exposure, which needs more checking first: it's in, but off.
+- Measured on the test PC with other games running, 1080p mode, Speed 30 fps, Arcade races. Vulkan stays
+  experimental on Windows and DirectX 12 the recommended renderer.
+
 🏷️ Released as **v0.1.72**
 
 🖱️ **Steer with the mouse** ([#37](https://github.com/MormonFTP-hub/gt5-recomp/issues/37), asked for by Arpadiam)

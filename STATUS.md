@@ -135,7 +135,12 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **15 Nov 2026:** steering wheels: Thrustmaster pedals the right way round in normal and combined mode, a button can
+- **16 Nov 2026:** mouse steering (launcher Controls, off by default): in races the mouse turns the wheel, left button
+  accelerates, right brakes, with a speed setting and optional self-centring; menus and pauses leave the mouse alone (v0.1.72).
+- **15 Nov 2026:** Vulkan draws at 1080p in the 1080p mode, and its window title shows the frame rate and resolution
+  (v0.1.71); **Update now** opens an update window with a progress bar over your Photo Mode pictures, the full text one
+  click away and saved to `GT5\logs\update.log`, and a crash report names the DLL a crash happened in (v0.1.70); the
+  launcher keeps lines of your own in `settings.bat` (v0.1.67); steering wheels: Thrustmaster pedals the right way round in normal and combined mode, a button can
   be a pedal (`brake=4`), and a button can be reverse with the manual gearbox (v0.1.69); sound on busy and small CPUs: no more 85 ms holes, and the sound no longer runs up to 80 ms late
   (the 2.11 "audio lag", v0.1.68); the check that an SPU job's code is unchanged costs half as much, a little less CPU for the
   sound on small CPUs (v0.1.66); on 6-core/12-thread CPUs the game's waiting threads sleep instead of spinning, as on
