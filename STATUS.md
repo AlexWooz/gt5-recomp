@@ -135,7 +135,8 @@ performance matters more than the graphics card.
 
 The last few days; the full history since 1 November is in [CHANGELOG.md](CHANGELOG.md).
 
-- **16 Nov 2026:** Vulkan: new scenes no longer stay half-drawn for a minute on slow PCs (each shader built once,
+- **16 Nov 2026:** Vulkan: the start-up shader list keeps the most recently used shaders, and a full list no longer
+  freezes the first race start for ~11 s; Vulkan: new scenes no longer stay half-drawn for a minute on slow PCs (each shader built once,
   builders above normal priority, what's on screen first) and a minimised window comes back (v0.1.80); texture dumping and HD texture packs on DirectX 12: `PS3_TEX_DUMP=1` (or the launcher's Display page)
   writes the game's textures to `GT5\textures\dump`, and files named by the same hash in `GT5\textures\replace` are used
   instead at any size, PNG or DDS ([MODDING.md](MODDING.md#2-textures-and-hd-texture-packs)) (v0.1.78); Vulkan: no more washed-out (or too dark) races, as the exposure is measured from the right surface;

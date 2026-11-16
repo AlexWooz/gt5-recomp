@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.81](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.81) | 16 Nov 2026 | Vulkan: start-up shader list keeps the most recently used, full lists no longer stall the start |
 | [v0.1.80](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.80) | 16 Nov 2026 | Vulkan: new scenes no longer half-drawn for a minute on slow PCs (each shader built once, builders above normal priority, on-screen first, disk pipeline cache) and a minimised window comes back (#38, #20) |
 | [v0.1.79](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.79) | 16 Nov 2026 | Installer: a Visual Studio without the Windows SDK gets it added instead of a failed build (#35) |
 | [v0.1.78](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.78) | 16 Nov 2026 | Texture dumping and HD texture packs (DirectX 12): PS3_TEX_DUMP=1 writes the game's textures to GT5\textures\dump, files named by the same hash in GT5\textures\replace are used instead at any size |

@@ -9,6 +9,25 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.81**
+
+🗂️ **Vulkan: the start-up shader list keeps what you play, and a full one no longer stalls the start**
+- Since v0.1.77, Vulkan builds the shaders earlier sessions used while the game starts (`vk_pipelines.lst` in
+  the shader cache). The list stopped at 8,192 entries, so once it was full (a player's was) nothing new was
+  ever added: the start-up builder kept making what was seen first, and new cars and tracks were built from
+  scratch every time. Finding an entry in a full list also re-hashed every entry: measured here with a full
+  list, the first race shader froze the renderer for **11.3 s**, and looking shaders up cost **0.75 s** more
+  per session.
+- Now the list keeps the most recently used shaders: one used again moves to the newest end, the oldest
+  unused ones drop off at 8,192, and the start-up builder makes the newest first. Repeats of the same Vulkan
+  shader under different GCM settings count once. Same file format: an existing list is converted at the
+  next start. Measured with the same full list: read in **31 ms** instead of 11.3 s, lookups **1-4 ms** a
+  session instead of 747 ms, and **all 905** new shaders of a session added (before: 56 of 1,375); the next
+  start had 537 of them ready before the game asked.
+- `VK_PB_MRU=0` = the old list. `GCM_DRAIN_STAT=1` also names the images Vulkan takes from its pool most.
+  Windows tested; Linux/Steam Deck (where the start-up list is opt-in, `VK_PIPELINE_PREBUILD=1`) only
+  compile-checked.
+
 🏷️ Released as **v0.1.80**
 
 🧱 **Vulkan: new scenes no longer stay half-drawn for a minute on slow PCs** ([#38](https://github.com/MormonFTP-hub/gt5-recomp/issues/38), [#20](https://github.com/MormonFTP-hub/gt5-recomp/issues/20))
