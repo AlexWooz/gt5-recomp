@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.84](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.84) | 16 Nov 2026 | Keyboard: an arrow-key tap moves one place in the menus (it moved two), the keyboard works with a pad connected, finer mouse steering speed (down to 1%, launcher number box) |
 | [v0.1.83](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.83) | 16 Nov 2026 | Build fix: v0.1.82 was missing GT5/src/gt5_threadstats.cpp |
 | [v0.1.82](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.82) | 16 Nov 2026 | A [threads] CPU line in the log every 5 s (PS3_THREAD_STATS=0 off); DirectX 12: the walker hands calls to the recording thread with less cache-line traffic (-20% per call) |
 | [v0.1.81](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.81) | 16 Nov 2026 | Vulkan: start-up shader list keeps the most recently used, full lists no longer stall the start |

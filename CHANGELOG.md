@@ -9,6 +9,31 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.84**
+
+⌨️ **Keyboard: one tap of an arrow key moves one place in the menus**
+- In GT5's menus every arrow-key tap moved the cursor two places, on the top menu's icons, the tabs and the
+  lists alike (Arpadiam, confirmed by brocolison). The arrows pressed the d-pad and pushed the left stick at the
+  same time (the stick is what steers at full lock straight away in a race), and GT5's menus move one place
+  for each: measured at the top menu and the track list, the d-pad alone moves one place, the stick alone one,
+  both together two.
+- Now Left/Right push the stick only and Up/Down press the d-pad only: one place a tap in the menus, and
+  steering with the arrows in a race is as immediate and full as before. With mouse steering (or a wheel) on,
+  the game itself says when it is at its menus: there all four arrows press the d-pad, in a race the d-pad and
+  the stick, as before. `PS3_KEYS_ARROWS=split`, `dpad` or `both` picks one way for good.
+
+🎮 **The keyboard works with a pad connected**
+- With a pad on, the keyboard did nothing (Arpadiam). Now both work together: the buttons of both count, and
+  each stick and trigger takes whichever is pushed further. Steam's desktop layout turns pad buttons into keys
+  while it runs (Cross into Enter, which is Start here), so keys that go down within 60 ms of a pad button are
+  taken for that and left out until they are released. `PS3_KEYS_WITH_PAD=0` turns the keyboard off while a pad
+  is connected, as before.
+
+🖱️ **Finer mouse steering speed**
+- `PS3_MOUSE_STEER_SENS` takes decimals and goes down to 1 (it stopped at 10 before): 2.5 is forty times slower
+  than normal (asked for by Arpadiam). The launcher's Controls page has a number box for it (1 to 1000, steps of
+  0.5, the arrow keys or the mouse wheel step it) instead of the six choices. Settings you already have still work.
+
 🏷️ Released as **v0.1.83**
 
 🩹 **Build fix for v0.1.82**

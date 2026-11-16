@@ -201,7 +201,7 @@ namespace Gt5Launcher
             { "mouse", new[] { "Steer with the mouse", "用鼠标转向" } },
             { "mouse.help", new[] { "In races, move the mouse left and right to steer. Left button = throttle, right button = brake, middle button = straighten the wheel; the keyboard and pads keep working. At the menus the mouse does nothing, and Alt+Tab frees it at any time. The game sees a steering wheel, so a real wheel isn't used while this is on.", "比赛中左右移动鼠标即可转向。左键 = 油门，右键 = 刹车，中键 = 方向盘回正；键盘和手柄仍然可用。在菜单中鼠标不起作用，随时按 Alt+Tab 即可释放鼠标。游戏会把它当作方向盘，所以开启时不会使用真实方向盘。" } },
             { "msens", new[] { "Mouse steering speed", "鼠标转向灵敏度" } },
-            { "msens.help", new[] { "Normal: mouse movement about the width of a 1080p screen turns the wheel from straight ahead to full lock (at Windows' default pointer speed).", "正常：鼠标移动约一个 1080p 屏幕的宽度，方向盘从正前方转到打满（按 Windows 默认指针速度）。" } },
+            { "msens.help", new[] { "100% is normal: mouse movement about the width of a 1080p screen turns the wheel from straight ahead to full lock (at Windows' default pointer speed). Lower is slower, 50% needs twice the movement; 1 to 1000, in steps of 0.5.", "100% 为正常：鼠标移动约一个 1080p 屏幕的宽度，方向盘从正前方转到打满（按 Windows 默认指针速度）。数值越小越慢，50% 需要两倍的移动距离；范围 1 到 1000，步长 0.5。" } },
             { "msens.normal", new[] { "Normal", "正常" } },
             { "mcenter", new[] { "Wheel straightens by itself", "方向盘自动回正" } },
             { "mcenter.help", new[] { "When you stop moving the mouse. Off: the wheel stays where the mouse left it.", "停止移动鼠标时回正。关：方向盘停留在鼠标留下的位置。" } },
@@ -1238,6 +1238,22 @@ namespace Gt5Launcher
             y += 34;
             return helpKey != null ? AddHelp(p, T.Get(helpKey), y - 2, 250) : y + 6;
         }
+        // A number typed or stepped with the arrows (Up/Down, the mouse wheel); the default value saves as nothing.
+        int AddNumber(Panel p, string labelKey, string helpKey, string key, decimal min, decimal max, decimal step, decimal def, string unit, int y)
+        {
+            p.Controls.Add(new Label { Text = T.Get(labelKey), AutoSize = true, Location = new Point(0, y + 4), ForeColor = Look.Text });
+            var n = new NumericUpDown { Minimum = min, Maximum = max, Increment = step, DecimalPlaces = 1, BackColor = Look.Panel, ForeColor = Look.Text,
+                                        BorderStyle = BorderStyle.FixedSingle, Location = new Point(250, y), Width = 90, TextAlign = HorizontalAlignment.Right };
+            decimal cur;
+            string s = S.Get(key).Trim().Replace(',', '.');
+            if (s == "" || !decimal.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out cur)) cur = def;
+            n.Value = Math.Max(min, Math.Min(max, cur));
+            n.ValueChanged += delegate { S.Set(key, n.Value == def ? "" : n.Value.ToString("0.#", CultureInfo.InvariantCulture)); SaveQuiet(); };
+            p.Controls.Add(n);
+            p.Controls.Add(new Label { Text = unit, AutoSize = true, Location = new Point(346, y + 4), ForeColor = Look.Dim });
+            y += 34;
+            return helpKey != null ? AddHelp(p, T.Get(helpKey), y - 2, 250) : y + 6;
+        }
         int AddCheck(Panel p, string labelKey, string helpKey, string key, string onValue, int y)
         {
             var c = new CheckBox { Text = T.Get(labelKey), AutoSize = true, Location = new Point(0, y), ForeColor = Look.Text, Checked = S.Get(key) == onValue };
@@ -1360,7 +1376,7 @@ namespace Gt5Launcher
             y = AddCombo(p, "ffb", null, "PS3_WHEEL_FFB", ffb.ToArray(), y);
             y = AddCheck(p, "ffbinv", null, "PS3_WHEEL_FFB_INVERT", "1", y);
             y = AddCheck(p, "mouse", "mouse.help", "PS3_MOUSE_STEER", "1", y + 10);
-            y = AddCombo(p, "msens", "msens.help", "PS3_MOUSE_STEER_SENS", new[] { new Choice("50", "50%"), new Choice("75", "75%"), new Choice("", T.Get("msens.normal") + " (100%)"), new Choice("150", "150%"), new Choice("200", "200%"), new Choice("300", "300%") }, y);
+            y = AddNumber(p, "msens", "msens.help", "PS3_MOUSE_STEER_SENS", 1m, 1000m, 0.5m, 100m, "%", y);
             y = AddCombo(p, "mcenter", "mcenter.help", "PS3_MOUSE_STEER_CENTER", new[] { new Choice("", T.Get("off")), new Choice("50", T.Get("mcenter.slow")), new Choice("100", T.Get("mcenter.mid")), new Choice("200", T.Get("mcenter.fast")) }, y);
             y = AddKeyRows(p, y + 14);
             return p;

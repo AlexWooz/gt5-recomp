@@ -209,8 +209,10 @@ To play the previous build right away instead, copy `GT5\build\gt5.previous.exe`
 
 ## 🎮 Controls
 
-A DualSense, DualShock 4 or XInput pad works. Without one, the keyboard:
+A DualSense, DualShock 4 or XInput pad works, and so does the keyboard, with a pad connected or without one:
 Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
+An arrow-key tap moves one place in the menus, and in a race Left/Right steer at full lock straight away
+(they push the left stick; `PS3_KEYS_ARROWS` under [Switches](#switches) has the details).
 Esc quits the game, after asking (`set "PS3_ESC_CONFIRM=0"` in `play.bat` quits at once).
 
 <a id="keyboard-keys"></a>
@@ -285,7 +287,7 @@ mouse steering is on.
 
 | Setting (launcher, or `play.bat`) | Default | What it does |
 |---|---|---|
-| Mouse steering speed, `PS3_MOUSE_STEER_SENS` | 100 | Percent. At 100, mouse movement about the width of a 1080p screen (at Windows' default pointer speed) turns the wheel from straight ahead to full lock; 200 is twice as quick. GT5 turns sharply on little wheel, so small movements go a long way. Windows' pointer speed and acceleration don't change it. |
+| Mouse steering speed, `PS3_MOUSE_STEER_SENS` | 100 | Percent, 1 to 1000, decimals allowed (2.5); the launcher steps it by 0.5. At 100, mouse movement about the width of a 1080p screen (at Windows' default pointer speed) turns the wheel from straight ahead to full lock; 200 is twice as quick. GT5 turns sharply on little wheel, so small movements go a long way. Windows' pointer speed and acceleration don't change it. |
 | Wheel straightens by itself, `PS3_MOUSE_STEER_CENTER` | off | Once you stop moving the mouse, the wheel goes back to straight ahead, at this percent of full lock a second (the launcher's Slowly / Medium / Quickly are 50 / 100 / 200). Off: it stays where you left it. |
 
 <a id="current-state"></a>
@@ -1003,6 +1005,8 @@ so the launcher's settings win. Some useful ones:
 | `PS3_MOUSE_STEER=1` | Steer with the mouse in races (left button throttle, right brake). Its other settings are under [Mouse steering](#mouse-steering). |
 | `PS3_COCKPIT_FOV=20` | The cockpit view 20° wider (negative: narrower); `PS3_COCKPIT_SEAT` and `PS3_COCKPIT_HEIGHT` move the eye (cm forward, cm up). See [Cockpit view](#cockpit-view). |
 | `PS3_KEYS=cross:W,square:Space,...` | Your own keyboard keys, `button:key` pairs (the launcher's Controls page writes it). Button and key names are under [Your own keys](#keyboard-keys). |
+| `PS3_KEYS_ARROWS=split` | Where the arrow keys go. `split` (the default without mouse steering or a wheel): Left/Right push the left stick, Up/Down press the d-pad, so a tap moves one place in the menus and Left/Right steer at full lock at once. With mouse steering or a wheel the default follows the game: d-pad only at the menus, d-pad and stick in a race. `dpad`: always the d-pad only (GT5 then eases into the steering); `both`: always both (a menu tap moves two places). |
+| `PS3_KEYS_WITH_PAD=0` | The keyboard is off while a pad is connected (by default both work together). |
 | `LD_WATCH=1` (or **F9** in the game) | Watch mode for B-Spec races and replays: draws every other frame while the race keeps full speed, draws nothing while minimized, and lowers the game's priority. Off unless you turn it on; with `LD_WATCH=1` it comes on after 10 s without input and goes off when you touch the controls. |
 | `PAD_CURSOR_CLIP=1` | Keep the mouse inside the window while the controller is in use (the old behaviour). By default the mouse is free, and only the mouse movement and clicks Steam makes from the controller are ignored. |
 | `GCM_DRAIN_STAT=1` | Timing lines every 5 s in `logs\play.err`. |
