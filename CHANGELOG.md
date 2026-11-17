@@ -9,6 +9,25 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.100**
+
+🎛️ **In-game menu: cockpit view, mouse steering and force feedback apply while playing**
+- Changed in the menu (F1), these now count at once instead of from the next start: the cockpit view's
+  field of view, seat position and seat height; mouse steering's speed and self-centring; force feedback
+  strength and direction. Tried in a race from the driver's seat: field of view +30 set in the menu, the
+  view widened from 52.4 to 82.4 degrees there and then.
+- The cockpit view's wrapper is still only put in the camera's way once one of its three settings is
+  set, so a game with none of them set is untouched, as before.
+- A wheel that was opened without force feedback (strength 0) is opened again with it when the strength
+  comes up.
+- While the menu is open the steering wheel reads centred with the pedals released, as the controller
+  reads at rest.
+- The menu's wheel map ("press a button on the wheel") now sees the PC wheel's own buttons and axes.
+- Still from the next start, and marked so: the game's 720p / 1080p mode and screen shape, the
+  renderer, the game's language, which wheel is used and its rotation, and whether the mouse steers
+  (the game looks for its wheel once, at boot).
+- No re-lift.
+
 🏷️ Released as **v0.1.99**
 
 🖥️ **Render resolution up to 5K, and a settings menu inside the game (F1) (DirectX 12)**
