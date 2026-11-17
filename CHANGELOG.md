@@ -9,6 +9,30 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.97**
+
+🧹 **Fix: after many cars, new ones were no longer drawn (DirectX 12). And a picture check before every release**
+- **The bug.** The DirectX 12 renderer kept every pipeline it ever built (one for each combination of a
+  car's shaders and render states) in a table of 8192 that only grew. A long session through the
+  dealerships fills it, and from then on every new pipeline's draws were dropped: new cars and scenes
+  came up with parts missing until the game was restarted. A player's log showed it: 8192 pipelines,
+  461,803 draws dropped ("shaders stopped compiling after visiting a few dealerships"). It is older than
+  the body-panel fault of v0.1.92-v0.1.95 and has nothing to do with it.
+- **The fix.** When the table fills, the pipelines no draw has asked for lately are released (idle for 30
+  seconds, less if that frees too little; never one used in the last two frames, never one still being
+  built), and one that is needed again is built again from the shader caches. Tested with the table made
+  small (`LD_PSO_CAP`): 600 entries, one fill in a race, 257 released, no draw dropped; 150 entries, less
+  than a race needs at once, 128 fills without a crash. Vulkan has the same limit in its own table; that
+  one is still to do.
+- **A picture check before every release.** v0.1.92-v0.1.95 went out with cars missing their body while
+  every test that compares code with code passed; the test runs' own frames showed the broken car and
+  were not looked at. From now on the frames of a driven run of the build (car select with the car at an
+  angle, the race) are compared by a program with a known-good run, a side-by-side sheet is looked at, and
+  the release script refuses to publish a change to the game's code without a passing record for exactly
+  those sources. Run on tonight's builds it fails every one from v0.1.92 to v0.1.95 and passes v0.1.91 and
+  v0.1.96. It looks at one car and one track, so it catches a fault like that one, not every fault.
+- No re-lift: the update rebuilds the runtime.
+
 🏷️ Released as **v0.1.96**
 
 🚨 **Fix: cars missing body panels since v0.1.92. And the waiting threads sleep: a fifth less CPU on big processors**

@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.97](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.97) | 17 Nov 2026 | Fix: new cars no longer drawn after a long session (DirectX 12 pipeline table full); picture check before every release |
 | [v0.1.96](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.96) | 17 Nov 2026 | Fix cars missing body panels (since v0.1.92); waiting threads sleep on every processor; faster exact float path |
 | [v0.1.95](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.95) | 17 Nov 2026 | SPU workers are woken one at a time (SPURS_SLOT_WAKE on by default): 6% less CPU for the whole game |
 | [v0.1.94](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.94) | 17 Nov 2026 | Native grid pass and pack pass really run in the game (they stood aside while SPU interrupts were enabled) |
