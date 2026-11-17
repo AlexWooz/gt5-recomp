@@ -35808,6 +35808,93 @@ diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
  /* Depth-aware SPU link return (`bi $r0`): host `return` while a matched
   * brsl/bisl frame is live (host_depth>0); at 0 the frame was destroyed (task
   * resume / restack unwind) so dispatch to the link register instead -- faithful
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -337,6 +337,7 @@
+ void spu_irq_regs_forget(spu_context* ctx)
+ {
+     ctx->irq_saved = 0;
++    ctx->irq_stall_seen = 0;
+ }
+ 
+ int spu_irq_regs_maybe_restore(spu_context* ctx)
+@@ -347,6 +348,7 @@
+                 ctx->int_enable) {
+                 memcpy(ctx->gpr, ctx->irq_gpr, sizeof ctx->irq_gpr);
+                 ctx->irq_saved = 0;
++                ctx->irq_stall_seen = 0;       /* the handler is done: no interrupt is being handled */
+                 /* The iret completed below the frame that took the interrupt:
+                  * abandon the handler's host frames and resume there. */
+                 spu_irq_frame* f = (spu_irq_frame*)ctx->irq_frame;
+@@ -444,6 +446,8 @@
+     }
+     ctx->srr0 = ctx->pc;             /* resume point for iret */
+     ctx->int_enable = 0;
++    /* The stalls this interrupt is taken for (SPU_WrEventAck, SPU_SN_ONCE). */
++    ctx->irq_stall_seen = (ctx->event_status & ctx->event_mask & 0x2u) ? ctx->list_stall_stat : 0u;
+     spu_irq_regs_save(ctx);          /* hardware contract: handler preserves regs */
+     { static int s_it = -1; if (s_it < 0) s_it = getenv("SPU_IRQTRACE") ? 1 : 0;
+       if (s_it) { static int _n = 0; if (PS3_LOG_FIRST(_n, 200))
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -335,6 +335,7 @@
+         if (ctx->irq_saved && next == (ctx->irq_resume_pc & SPU_LS_MASK)) {
+             memcpy(ctx->gpr, ctx->irq_gpr, sizeof ctx->irq_gpr);
+             ctx->irq_saved = 0;
++            ctx->irq_stall_seen = 0;
+         }
+         break;
+     case SPU_biz:  if (PREF(DST) == 0) { next = PREF(A) & 0x3FFFC; SPU_IED_BITS(); } break;
+@@ -372,6 +373,11 @@
+ static struct { uint32_t from, to; } s_trace[SPU_TRACE_N];
+ static unsigned s_trace_i = 0;
+ void spu_trace_call(uint32_t from, uint32_t to) {
++    /* Only when SPU_CALLTRACE will print it: every interpreted call from every SPU thread bumped
++     * this one shared counter, a cache line the SPU threads passed back and forth. */
++    static int s_on = -1;
++    if (s_on < 0) s_on = getenv("SPU_CALLTRACE") ? 1 : 0;
++    if (!s_on) return;
+     s_trace[s_trace_i % SPU_TRACE_N].from = from;
+     s_trace[s_trace_i % SPU_TRACE_N].to   = to;
+     s_trace_i++;
+@@ -447,6 +453,15 @@
+     fprintf(stderr, "[spu-interp] %.1fM steps/s over %lds\n", s_is_tot / 1e6 / (double)s_is, s_is);
+     interp_stats_top("pages (steps)", s_is_img, s_is_page, s_is_cnt, 6);
+     interp_stats_top("entries (calls)", s_ie_img, s_ie_pc, s_ie_cnt, 8);
++    { /* SPU_INTERP_SNAP=<dir>: keep this context's local store, to see the code it is interpreting. */
++        const char* d = getenv("SPU_INTERP_SNAP"); static int s_snap;
++        if (d && s_snap < 40) {
++            char path[512];
++            snprintf(path, sizeof path, "%s/ls_%02d_img%d_pc%05X.bin", d, s_snap++, ctx->image_id, ctx->pc & 0x3FFFF);
++            FILE* f = fopen(path, "wb");
++            if (f) { fwrite(ctx->ls, 1, 0x40000, f); fclose(f); }
++        }
++    }
+     s_is_tot = 0; s_is_t0 = now;
+ }
+ 
+@@ -476,6 +491,7 @@
+     static int _g1=-1; if(_g1<0){const char*e=getenv("YDKJ_CRI_GATE1TRACE");_g1=e?atoi(e):0;}
+     static int _g1in=0;
+     uint32_t ring[64]; int rc=0, rn=0;
++    uint32_t seq_next = 0xFFFFFFFFu;
+     for (;;) {
+         /* Match the lifted path: only synthetic HLE tasks may bypass the
+          * resident policy. Real tasksets also store 0xA70 in their API table.
+@@ -497,7 +513,10 @@
+          * un-lifted image (e.g. a title's raw SPU jobs) must never rejoin
+          * another image's functions that happen to share an LS address. */
+         /* ponytail: pc-only match; a recursive call through the same site would stop early -- compare r1 too if one shows up. */
+-        if (ctx->image_id >= 0 && ((stop_lsa && ctx->pc == stop_lsa) || spu_lifted_lookup(ctx, ctx->pc))) { g_spu_interp_steps = steps; g_spu_interp_last_pc = ctx->pc; return ctx->pc; }  /* rejoin fast path */
++        /* Only a branch can land on a lifted entry worth rejoining at: falling through onto one just runs it here,
++         * and the lookup on every step was a quarter of an interpreted job's time. */
++        if (ctx->image_id >= 0 && ((stop_lsa && ctx->pc == stop_lsa) || (ctx->pc != seq_next && spu_lifted_lookup(ctx, ctx->pc)))) { g_spu_interp_steps = steps; g_spu_interp_last_pc = ctx->pc; return ctx->pc; }  /* rejoin fast path */
++        seq_next = (ctx->pc + 4) & 0x3FFFC;
+         g_spu_interp_last_pc = ctx->pc;
+         if (_g1>0) {
+             int inr = (ctx->pc >= 0x26E80u && ctx->pc < 0x26F14u);
 diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
 --- a/libs/spurs/cellSpurs.c
 +++ b/libs/spurs/cellSpurs.c
@@ -36116,7 +36203,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  }
  
  s32 cellSpursWorkloadAttributeSetName(u64 attr_ea, u64 nameClass_ea, u64 nameInstance_ea)
-@@ -1714,6 +1884,145 @@
+@@ -1714,6 +1884,149 @@
   * occupies only its own slot; a later runnable producer can use another slot.
   * Admission and lifecycle state are serialized per instance. Guest execution
   * never runs under that lock, and only a genuine return releases contention. */
@@ -36130,7 +36217,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
 +}
 +
 +/* SPURS_SLOT_WAKE=1: a dispatch wakes only the worker it filled, and a finished run only the coordinator
-+ * (off by default: it measured no faster on 4 E-cores once the pollers stopped spinning, 13 Nov). With one
++ * (on by default since 17 Nov, SPURS_SLOT_WAKE=0 for the shared variable; see spurs_slot_wake_on). With one
 + * shared condition variable every dispatch and
 + * every finished run woke all the workers and the coordinator, and so did every game store to the
 + * request line: thousands of times a second, most runs a few microseconds of an idle job manager. On
@@ -36147,7 +36234,11 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
 +    if (v < 0) { const char* e = getenv("SPURS_SLOT_WAKE"); v = e ? (atoi(e) != 0) : 2; }
 +    if (v != 2) return v;
 +    const int ab = ps3_ab_on("slot");
-+    return ab >= 0 ? ab : 0;   /* off by default: no measurable gain on 4 E-cores (13 Nov, +0.6% +-4.3%) */
++    /* On by default since 17 Nov: judged by frame rate on 4 E-cores it showed nothing (13 Nov, +0.6% +-4.3%),
++     * judged by CPU it is 6-8% of the whole game (alternated in a race: cores busy -5.7% +-1.6% on 8 E-cores,
++     * -8.3% +-1.7% on all cores, frame rate unchanged). One shared condition variable meant every dispatch
++     * and every finished run woke all the idle workers to look at slots that were not theirs. */
++    return ab >= 0 ? ab : 1;
 +}
 +static unsigned spurs_probe_pace_us(void)
 +{
@@ -36262,7 +36353,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  static DWORD WINAPI spurs_pm_worker(LPVOID p)
  {
      struct SpursPmSlot* slot = (struct SpursPmSlot*)p;
-@@ -1726,23 +2035,51 @@
+@@ -1726,23 +2039,51 @@
      AcquireSRWLockExclusive(&si->lock);
      for (;;) {
          while (!slot->busy && !si->stopping)
@@ -36316,7 +36407,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      }
      ReleaseSRWLockExclusive(&si->lock);
      ps3_tprof_thread_exit();
-@@ -1773,12 +2110,62 @@
+@@ -1773,12 +2114,62 @@
          }
          if (!kick_pass) kick_run = 0;
          if (si->stopping) break;
@@ -36380,7 +36471,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
              struct SpursPmSlot* slot = &si->slots[sn];
              if (slot->busy) continue;
              for (u32 checked = 0; checked < 16; checked++) {
-@@ -1788,24 +2175,52 @@
+@@ -1788,24 +2179,52 @@
                      vm_read8(ea + SPURS_WKL_STATE1 + wid) != 2 ||
                      !s_workloads[wid].in_use || s_workloads[wid].spurs_ea != ea)
                      continue;
@@ -36435,7 +36526,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
                  ef_line_end(ea);
                  slot->fn = pm->fn; slot->image_id = pm->image_id;
                  slot->pm = vm_base + (u32)(uintptr_t)s_workloads[wid].pm;
-@@ -1817,7 +2232,9 @@
+@@ -1817,7 +2236,9 @@
                  vm_base[ea + SPURS_WKL_CURCONT + wid] = si->active[wid];
                  ef_line_end(ea);
                  slot->busy = 1;
@@ -36446,7 +36537,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
                  break;
              }
          }
-@@ -1833,12 +2250,18 @@
+@@ -1833,12 +2254,18 @@
      __atomic_store_n(&si->kick, 0, __ATOMIC_RELAXED);
      { extern void (*g_spu_line_commit_hook)(uint32_t);
        g_spu_line_commit_hook = spurs_commit_hook; }
@@ -36467,7 +36558,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
          slot->thread = CreateThread(NULL, 1u << 20, spurs_pm_worker, slot, 0, NULL);
          if (!slot->thread) goto failed;
      }
-@@ -1848,8 +2271,9 @@
+@@ -1848,8 +2275,9 @@
  failed:
      AcquireSRWLockExclusive(&si->lock);
      si->stopping = 1; WakeAllConditionVariable(&si->wake);
@@ -36478,7 +36569,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
          HANDLE h = si->slots[sn].thread;
          if (h) { WaitForSingleObject(h, INFINITE); CloseHandle(h); si->slots[sn].thread = NULL; }
      }
-@@ -1867,9 +2291,10 @@
+@@ -1867,9 +2295,10 @@
      for (u32 wid = 0; wid < 16; wid++)
          if (si->active[wid]) { ReleaseSRWLockExclusive(&si->lock); return CELL_SPURS_CORE_ERROR_BUSY; }
      si->stopping = 1; WakeAllConditionVariable(&si->wake);
@@ -36490,7 +36581,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
          HANDLE h = si->slots[sn].thread;
          if (h) { WaitForSingleObject(h, INFINITE); CloseHandle(h); si->slots[sn].thread = NULL; }
      }
-@@ -1919,6 +2344,40 @@
+@@ -1919,6 +2348,40 @@
      }
      spurs_api_unlock(si);
      return CELL_OK;
@@ -36531,7 +36622,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  }
  
  static s32 spurs_ready_exchange(CellSpurs* spurs, CellSpursWorkloadId wid,
-@@ -2299,6 +2758,7 @@
+@@ -2299,6 +2762,7 @@
      u16 max_grab;
      int run_count;
      volatile long running;   /* 1 while a host thread walks this chain */
@@ -36539,7 +36630,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  } s_jobchains[MAX_JOBCHAINS];
  
  static void jc_dump_commands(const char* tag, u32 ea, int max_words)
-@@ -2526,9 +2986,12 @@
+@@ -2526,9 +2990,12 @@
      u32 ea;          /* guest CellSpursJobGuard address (128-byte aligned) */
      u32 count;       /* notifications still outstanding                    */
      u32 reset;       /* value to restore when autoReset is set             */
@@ -36553,7 +36644,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  } s_jobguards[MAX_JOBGUARDS];
  
  static int jg_find(u32 ea)
-@@ -2562,6 +3025,9 @@
+@@ -2562,6 +3029,9 @@
      s_jobguards[i].pending    = 0;
      s_jobguards[i].auto_reset = auto_reset;
      s_jobguards[i].active     = 1;
@@ -36563,7 +36654,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  
      /* Mirror the count into guest memory. The SPU side reads the guard on
       * hardware; keeping the two consistent costs nothing and makes a guest-side
-@@ -2587,11 +3053,18 @@
+@@ -2587,11 +3057,18 @@
       * OBSERVED zero, which threw away any notify that arrived while the job
       * was still running -- the title notified 6 times and the chain completed
       * 2 laps, so the thread waiting on the other 4 completions never woke. */
@@ -36585,7 +36676,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      { static int _n = 0;
        if (PS3_LOG_FIRST(_n, 8))
            printf("[cellSpurs] JobGuardNotify(0x%08X) -> %u remaining\n",
-@@ -2610,32 +3083,56 @@
+@@ -2610,32 +3087,56 @@
      return CELL_OK;
  }
  
@@ -36653,7 +36744,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  }
  
  /* Tell the application a lap of chain work is done.
-@@ -2671,6 +3168,14 @@
+@@ -2671,6 +3172,14 @@
  
  static void jc_signal_done(u32 jc_ea, int job_index)
  {
@@ -36668,7 +36759,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      /* Carry the job's mailbox answer in the completion event. On hardware the
       * SPU's outbound/interrupt mailbox is what the SPURS event delivers; a
       * synthetic payload means the caller reads back zero for whatever it
-@@ -2724,7 +3229,7 @@
+@@ -2724,7 +3233,7 @@
      }
  }
  
@@ -36677,7 +36768,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  {
      u32 pc = entry_ea, ret_pc = 0;
      int jobs = 0;
-@@ -2738,6 +3243,7 @@
+@@ -2738,6 +3247,7 @@
      int idle = 0;
      for (;; idle++) {
          if (idle > 4096) break;
@@ -36685,7 +36776,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
          u64 cmd = vm_read64(pc);
          u32 op  = (u32)(cmd & 7);
          u32 ext = (u32)(cmd & 127);
-@@ -2745,7 +3251,13 @@
+@@ -2745,7 +3255,13 @@
          if (cmd != 0 && op == 0) {                    /* JOB */
              { extern u32 g_spurs_job_ls_handle; g_spurs_job_ls_handle = jc_ea; }
              int idx = jobs++;
@@ -36700,7 +36791,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
              idle = 0;                    /* real work: the chain is healthy */
              /* Signal per JOB, not per lap. The application waits once for each
               * unit of work it queued -- this title notified the guard 7 times
-@@ -2775,7 +3287,10 @@
+@@ -2775,7 +3291,10 @@
          }
          if (op == 7 && ext == (7 | (1 << 3))) {           /* GUARD */
              u32 g_ea = (u32)(cmd & ~127ull);
@@ -36712,7 +36803,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
              pc += 8; continue;
          }
          /* NOP(0) / SYNC+LWSYNC(2, one virtual SPU: nothing to wait for) /
-@@ -2791,6 +3306,8 @@
+@@ -2791,6 +3310,8 @@
  {
      int slot = (int)(intptr_t)p;
      ps3_thread_name("spurs jc %d", slot);
@@ -36721,7 +36812,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      /* TIMING PROBE (SPURS_JC_DELAY=ms): the real jm2 chain walker is async and
       * picks up jobs as the PPU appends them + fills their descriptors. Our walk
       * is one-shot; if it reads descriptors before the PPU populates the I/O
-@@ -2799,11 +3316,14 @@
+@@ -2799,11 +3320,14 @@
      { const char* d = getenv("SPURS_JC_DELAY");
        if (d && *d) Sleep((unsigned)atoi(d)); }
      jc_execute(s_jobchains[slot].entry_ea, s_jobchains[slot].jc_ea,
@@ -36740,7 +36831,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      return 0;
  }
  
-@@ -2834,8 +3354,12 @@
+@@ -2834,8 +3358,12 @@
              jc_dump_commands(who, s_jobchains[i].entry_ea, 16);
          }
          if (s_off || !s_jobchains[i].entry_ea) return CELL_OK;
@@ -36753,7 +36844,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
              HANDLE th = CreateThread(NULL, 1u << 20, jc_thread, (LPVOID)(intptr_t)i, 0, NULL);
              if (th) CloseHandle(th);
              else s_jobchains[i].running = 0;
-@@ -2859,8 +3383,12 @@
+@@ -2859,8 +3387,12 @@
   * r3, so the caller reads a garbage result for "did the shutdown take?" and a
   * title that checks it can decide the subsystem failed and tear itself down.
   *
@@ -36768,7 +36859,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
   * Found in Tokyo Jungle, whose sound engine shuts its chain down during init
   * and then reports "failed to recv data from SPU" when the handshake does not
   * complete. */
-@@ -2870,7 +3398,7 @@
+@@ -2870,7 +3402,7 @@
      if (PS3_LOG_FIRST(_n, 8)) printf("[cellSpurs] ShutdownJobChain(jc=0x%08X)\n", (u32)jc_ea);
      for (int i = 0; i < MAX_JOBCHAINS; i++) {
          if (s_jobchains[i].jc_ea == (u32)jc_ea) {
@@ -36777,90 +36868,3 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
              return CELL_OK;
          }
      }
-diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
---- a/runtime/spu/spu_drain.c
-+++ b/runtime/spu/spu_drain.c
-@@ -337,6 +337,7 @@
- void spu_irq_regs_forget(spu_context* ctx)
- {
-     ctx->irq_saved = 0;
-+    ctx->irq_stall_seen = 0;
- }
- 
- int spu_irq_regs_maybe_restore(spu_context* ctx)
-@@ -347,6 +348,7 @@
-                 ctx->int_enable) {
-                 memcpy(ctx->gpr, ctx->irq_gpr, sizeof ctx->irq_gpr);
-                 ctx->irq_saved = 0;
-+                ctx->irq_stall_seen = 0;       /* the handler is done: no interrupt is being handled */
-                 /* The iret completed below the frame that took the interrupt:
-                  * abandon the handler's host frames and resume there. */
-                 spu_irq_frame* f = (spu_irq_frame*)ctx->irq_frame;
-@@ -444,6 +446,8 @@
-     }
-     ctx->srr0 = ctx->pc;             /* resume point for iret */
-     ctx->int_enable = 0;
-+    /* The stalls this interrupt is taken for (SPU_WrEventAck, SPU_SN_ONCE). */
-+    ctx->irq_stall_seen = (ctx->event_status & ctx->event_mask & 0x2u) ? ctx->list_stall_stat : 0u;
-     spu_irq_regs_save(ctx);          /* hardware contract: handler preserves regs */
-     { static int s_it = -1; if (s_it < 0) s_it = getenv("SPU_IRQTRACE") ? 1 : 0;
-       if (s_it) { static int _n = 0; if (PS3_LOG_FIRST(_n, 200))
-diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
---- a/runtime/spu/spu_interp.c
-+++ b/runtime/spu/spu_interp.c
-@@ -335,6 +335,7 @@
-         if (ctx->irq_saved && next == (ctx->irq_resume_pc & SPU_LS_MASK)) {
-             memcpy(ctx->gpr, ctx->irq_gpr, sizeof ctx->irq_gpr);
-             ctx->irq_saved = 0;
-+            ctx->irq_stall_seen = 0;
-         }
-         break;
-     case SPU_biz:  if (PREF(DST) == 0) { next = PREF(A) & 0x3FFFC; SPU_IED_BITS(); } break;
-@@ -372,6 +373,11 @@
- static struct { uint32_t from, to; } s_trace[SPU_TRACE_N];
- static unsigned s_trace_i = 0;
- void spu_trace_call(uint32_t from, uint32_t to) {
-+    /* Only when SPU_CALLTRACE will print it: every interpreted call from every SPU thread bumped
-+     * this one shared counter, a cache line the SPU threads passed back and forth. */
-+    static int s_on = -1;
-+    if (s_on < 0) s_on = getenv("SPU_CALLTRACE") ? 1 : 0;
-+    if (!s_on) return;
-     s_trace[s_trace_i % SPU_TRACE_N].from = from;
-     s_trace[s_trace_i % SPU_TRACE_N].to   = to;
-     s_trace_i++;
-@@ -447,6 +453,15 @@
-     fprintf(stderr, "[spu-interp] %.1fM steps/s over %lds\n", s_is_tot / 1e6 / (double)s_is, s_is);
-     interp_stats_top("pages (steps)", s_is_img, s_is_page, s_is_cnt, 6);
-     interp_stats_top("entries (calls)", s_ie_img, s_ie_pc, s_ie_cnt, 8);
-+    { /* SPU_INTERP_SNAP=<dir>: keep this context's local store, to see the code it is interpreting. */
-+        const char* d = getenv("SPU_INTERP_SNAP"); static int s_snap;
-+        if (d && s_snap < 40) {
-+            char path[512];
-+            snprintf(path, sizeof path, "%s/ls_%02d_img%d_pc%05X.bin", d, s_snap++, ctx->image_id, ctx->pc & 0x3FFFF);
-+            FILE* f = fopen(path, "wb");
-+            if (f) { fwrite(ctx->ls, 1, 0x40000, f); fclose(f); }
-+        }
-+    }
-     s_is_tot = 0; s_is_t0 = now;
- }
- 
-@@ -476,6 +491,7 @@
-     static int _g1=-1; if(_g1<0){const char*e=getenv("YDKJ_CRI_GATE1TRACE");_g1=e?atoi(e):0;}
-     static int _g1in=0;
-     uint32_t ring[64]; int rc=0, rn=0;
-+    uint32_t seq_next = 0xFFFFFFFFu;
-     for (;;) {
-         /* Match the lifted path: only synthetic HLE tasks may bypass the
-          * resident policy. Real tasksets also store 0xA70 in their API table.
-@@ -497,7 +513,10 @@
-          * un-lifted image (e.g. a title's raw SPU jobs) must never rejoin
-          * another image's functions that happen to share an LS address. */
-         /* ponytail: pc-only match; a recursive call through the same site would stop early -- compare r1 too if one shows up. */
--        if (ctx->image_id >= 0 && ((stop_lsa && ctx->pc == stop_lsa) || spu_lifted_lookup(ctx, ctx->pc))) { g_spu_interp_steps = steps; g_spu_interp_last_pc = ctx->pc; return ctx->pc; }  /* rejoin fast path */
-+        /* Only a branch can land on a lifted entry worth rejoining at: falling through onto one just runs it here,
-+         * and the lookup on every step was a quarter of an interpreted job's time. */
-+        if (ctx->image_id >= 0 && ((stop_lsa && ctx->pc == stop_lsa) || (ctx->pc != seq_next && spu_lifted_lookup(ctx, ctx->pc)))) { g_spu_interp_steps = steps; g_spu_interp_last_pc = ctx->pc; return ctx->pc; }  /* rejoin fast path */
-+        seq_next = (ctx->pc + 4) & 0x3FFFC;
-         g_spu_interp_last_pc = ctx->pc;
-         if (_g1>0) {
-             int inr = (ctx->pc >= 0x26E80u && ctx->pc < 0x26F14u);

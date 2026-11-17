@@ -9,6 +9,23 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.95**
+
+💤 **The SPU workers are woken one at a time: 6% less CPU for the whole game**
+- The job scheduler kept one wake-up signal for all seven SPU worker threads and the coordinator. Every
+  job dispatch and every finished job woke all of them, thousands of times a second, and each idle worker
+  took the scheduler's lock, saw that the slot was not its own and went back to sleep. A profile of
+  v0.1.93 had a quarter of the workers' running time in that.
+- Each worker now has its own signal, and a dispatch wakes only the worker it filled. The code had been
+  there since 13 Nov, switched off: it was judged by frame rate on 4 slow cores then and showed nothing.
+  Judged by CPU it is the biggest single saving of this round.
+- Measured by switching it off and on every 10 seconds inside one race (so both halves see the same load):
+  8 slow cores, cores busy -5.7% +-1.6%, frame rate +0.9% +-0.7%; all cores, -8.3% +-1.7%, frame rate the
+  same; 4 slow cores, where the CPU is the limit, frame rate +3.9% +-2.5%. As whole races against v0.1.94
+  on 8 slow cores, two pairs: the whole game 516 to 485 (hundredths of a core), the SPU workers 343 to 314.
+- `SPURS_SLOT_WAKE=0` brings the shared signal back.
+- No re-lift: the update rebuilds the runtime.
+
 🏷️ Released as **v0.1.94**
 
 🔧 **The native grid pass and pack pass now really run in the game (a correction to v0.1.93)**
