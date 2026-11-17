@@ -157,6 +157,9 @@ namespace Gt5Launcher
             { "watch.help", new[] { "Comes on after 10 s without input (B-Spec, replays): draws fewer frames (see the next setting) and lowers the game's priority. F9 toggles it any time.", "10 秒无操作后自动开启（B-Spec、回放）：减少绘制的帧数（见下一项）并降低游戏优先级。随时可按 F9 切换。" } },
             { "framegen", new[] { "Frame generation (beta)", "帧生成（测试版）" } },
             { "framegen.help", new[] { "Fills the frames that 30 fps and watch mode leave out with frames made on the graphics card, so the picture stays at 60. The game and its CPU work are unchanged; the newest frame reaches the screen one refresh later. Off: only drawn frames are shown.", "用显卡生成的帧补上 30 fps 和观看模式省略的帧，让画面保持 60 帧。游戏本身和 CPU 负载不变；最新的一帧会晚一次刷新显示。关闭时只显示实际绘制的帧。" } },
+            { "fgmult", new[] { "Frame rate multiplier", "帧率倍增" } },
+            { "fgmult.off", new[] { "Off", "关闭" } },
+            { "fgmult.help", new[] { "Shows 2, 3 or 4 frames for every frame the game draws, the extra ones made on the graphics card, for screens faster than 60 Hz. It is limited to what the screen can show: 2x needs 120 Hz, 3x needs 180 Hz, 4x needs 240 Hz (a 144 or 165 Hz screen gets 2x). The game itself still runs at 60; the newest frame reaches the screen about half a frame later. Turns frame generation on.", "游戏每绘制一帧，显示 2、3 或 4 帧，多出的帧由显卡生成，适用于刷新率高于 60 Hz 的显示器。倍数受显示器限制：2 倍需要 120 Hz，3 倍需要 180 Hz，4 倍需要 240 Hz（144 或 165 Hz 的显示器为 2 倍）。游戏本身仍以 60 帧运行；最新的一帧会晚约半帧显示。会同时开启帧生成。" } },
             { "texdump", new[] { "Dump textures (for texture packs)", "导出纹理（用于制作纹理包）" } },
             { "texdump.help", new[] { "Writes every texture the game shows to GT5\\textures\\dump (DDS and PNG), to make HD texture packs from (see MODDING.md). Costs a little speed: turn it off when you are done. DirectX 12 only.", "把游戏显示的每个纹理写入 GT5\\textures\\dump（DDS 和 PNG），用来制作高清纹理包（见 MODDING.md）。会稍微降低速度，用完请关闭。仅限 DirectX 12。" } },
             { "renderer", new[] { "Renderer", "渲染器" } },
@@ -347,7 +350,7 @@ namespace Gt5Launcher
             new[] { "GT5_LAUNCH_WINDOW", "windowed" }, new[] { "GT5_LAUNCHER_LANG", "" },
             new[] { "GT5_LAUNCHER_HIDE", "1" }, new[] { "GT5_LAUNCHER_AUTOCHECK", "1" },
             new[] { "GT5_SPEED", "" }, new[] { "PS3_SKIP_INTRO", "1" }, new[] { "LD_WATCH_DRAW", "" },
-            new[] { "LD_FRAMEGEN", "" }, new[] { "GT5_RENDERER", "" }, new[] { "PS3_TEX_DUMP", "" },
+            new[] { "LD_FRAMEGEN", "" }, new[] { "LD_FRAMEGEN_MULT", "" }, new[] { "GT5_RENDERER", "" }, new[] { "PS3_TEX_DUMP", "" },
             new[] { "PS3_MOUSE_STEER", "" }, new[] { "PS3_MOUSE_STEER_SENS", "" }, new[] { "PS3_MOUSE_STEER_CENTER", "" },
             new[] { "PS3_KEYS", "" },
             new[] { "PS3_COCKPIT_FOV", "" }, new[] { "PS3_COCKPIT_SEAT", "" }, new[] { "PS3_COCKPIT_HEIGHT", "" },
@@ -1384,6 +1387,7 @@ namespace Gt5Launcher
             y = AddCheck(p, "watch", "watch.help", "LD_WATCH", "1", y);
             y = AddCombo(p, "wdraw", "wdraw.help", "LD_WATCH_DRAW", new[] { new Choice("", T.Get("wdraw.2")), new Choice("3", T.Get("wdraw.3")), new Choice("4", T.Get("wdraw.4")) }, y);
             y = AddCheck(p, "framegen", "framegen.help", "LD_FRAMEGEN", "1", y);
+            y = AddCombo(p, "fgmult", "fgmult.help", "LD_FRAMEGEN_MULT", new[] { new Choice("", T.Get("fgmult.off")), new Choice("2", "2x"), new Choice("3", "3x"), new Choice("4", "4x") }, y);
             y = AddCheck(p, "texdump", "texdump.help", "PS3_TEX_DUMP", "1", y);
             y = AddCombo(p, "spus", "spus.help", "SPURS_EXTRA_SPUS", new[] { new Choice("0", "0"), new Choice("1", "1"), new Choice("2", "2"), new Choice("3", "3"), new Choice("4", "4") }, y);
             // Cockpit view (GT5\src\gt5_cockpit.cpp): "" = the game's own camera.

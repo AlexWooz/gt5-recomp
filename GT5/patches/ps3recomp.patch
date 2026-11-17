@@ -20527,963 +20527,6 @@ index 1fb1b120..eb8dedb4 100644
  
      if (cbResult.result < 0) {
          printf("[cellSaveData] stat callback returned error %d\n", cbResult.result);
-diff --git a/libs/video/rsx_framegen.c b/libs/video/rsx_framegen.c
-new file mode 100644
-index 00000000..47e5bbe4
---- /dev/null
-+++ b/libs/video/rsx_framegen.c
-@@ -0,0 +1,887 @@
-+/*
-+ * ps3recomp - frame generation for the D3D12 live renderer (Windows); see rsx_framegen.h.
-+ *
-+ * RSX thread, per drawn frame (rsx_fg_begin), on the renderer's list:
-+ *   copy the presented frame into history slot n (of FG_SLOTS; slot p holds the drawn frame before),
-+ *   pass 0  luma at 1/4 size (box of 4x4),           pass 1  luma at 1/16 size,
-+ * and when frames went undrawn since the one before:
-+ *   pass 2  motion of 4x4 blocks at 1/16 size, full search +-FG_RS (+-128 screen pixels),
-+ *   pass 3  motion of 4x4 blocks at 1/4 size (16x16 screen pixels), searched +-FG_RQ around the
-+ *           coarse vector, +-1 around zero (the HUD and whatever holds still) and +-1 around the four
-+ *           neighbouring coarse vectors (a repeating pattern can fool one coarse block),
-+ *   pass 4  3x3 median of the vectors into mvf[m] (two of them, alternating).
-+ * Presenter thread, per frame handed over: on lists of its own, each made frame is a full-screen pass
-+ * into the back buffer: a vector v says the current frame's pixel at x was at x + v in the frame
-+ * before, so what shows at x at time t (0 = before, 1 = now) is the current frame's pixel at
-+ * x - (1-t)v and the earlier frame's at x + t v, mixed by t, leaning on the newer frame where they
-+ * disagree; what is the same in both frames holds still, and a block that matched badly shows the newer
-+ * frame. Then the drawn frame is copied from its slot. Each is presented, waiting for the refresh there
-+ * and not on the RSX thread.
-+ *
-+ * The RSX thread writes slot d % 3 and mvf[d % 2] for drawn frame d only once the presenter has taken
-+ * frame d - 2 (shown or dropped), the last one that reads them. A frame handed over while the presenter
-+ * is still busy replaces the one waiting, so a slow screen drops frames instead of falling behind.
-+ * Every list call made on the RSX thread is one the renderer's recording thread carries (ld_rec_install).
-+ * Luma and vectors are R32 textures in UNORDERED_ACCESS all along (typed UAV loads of R32 are always
-+ * there); a vector is x and y as int12 in screen pixels plus the match quality in the top byte.
-+ */
-+#ifdef _WIN32
-+#include "rsx_framegen.h"
-+
-+#include <windows.h>
-+#include <d3d12.h>
-+#include <dxgi1_4.h>
-+#include <d3dcompiler.h>
-+#include <stdio.h>
-+#include <stdlib.h>
-+#include <string.h>
-+
-+#define FG_RS 8           /* coarse search radius, 1/16-size pixels */
-+#define FG_RQ 3           /* refine radius around the coarse vector, 1/4-size pixels */
-+#define FG_SLOTS 3
-+#define FG_COMBOS 6       /* drawn frame number % 6 gives both slot (% 3) and vector set (% 2) */
-+#define FG_TAB 5          /* compute table: t0, u0..u3 */
-+#define FG_PER_COMBO 28   /* 5 compute tables + the 3-entry draw table */
-+#define FG_HEAP (FG_COMBOS * FG_PER_COMBO)
-+#define FG_MAX_BB 4
-+
-+static const char k_src[] =
-+"#define LUMA(c) dot((c).rgb, float3(0.299, 0.587, 0.114))\n"
-+"/* A vector: x and y as int12 in screen pixels, and in the top byte how well its block matched\n"
-+" * (mean luma difference per pixel x 2000, 255 at most). */\n"
-+"uint packmv(int2 v, uint q) { return (uint(v.x) & 0xFFFu) | ((uint(v.y) & 0xFFFu) << 12) | (min(q, 255u) << 24); }\n"
-+"int2 unpackmv(uint v) { return int2(int(v << 20) >> 20, int(v << 8) >> 20); }\n"
-+"uint mvq(uint v) { return v >> 24; }\n"
-+"#if PASS == 0\n"
-+"Texture2D<float4> Frame : register(t0);\n"
-+"RWTexture2D<float> OutL : register(u0);\n"
-+"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
-+"    if (id.x >= QW || id.y >= QH) return;\n"
-+"    float s = 0;\n"
-+"    [unroll] for (int y = 0; y < 4; y++) [unroll] for (int x = 0; x < 4; x++)\n"
-+"        s += LUMA(Frame.Load(int3(id.x * 4 + x, id.y * 4 + y, 0)));\n"
-+"    OutL[id.xy] = s * (1.0 / 16.0);\n"
-+"}\n"
-+"#elif PASS == 1\n"
-+"RWTexture2D<float> InL : register(u0);\n"
-+"RWTexture2D<float> OutL : register(u1);\n"
-+"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
-+"    if (id.x >= SW || id.y >= SH) return;\n"
-+"    float s = 0;\n"
-+"    [unroll] for (int y = 0; y < 4; y++) [unroll] for (int x = 0; x < 4; x++)\n"
-+"        s += InL[uint2(id.x * 4 + x, id.y * 4 + y)];\n"
-+"    OutL[id.xy] = s * (1.0 / 16.0);\n"
-+"}\n"
-+"#elif PASS == 2\n"
-+"RWTexture2D<float> Cur : register(u0);\n"
-+"RWTexture2D<float> Prev : register(u1);\n"
-+"RWTexture2D<uint> Mv : register(u2);\n"
-+"float P(int2 p) { return Prev[uint2(clamp(p, int2(0, 0), int2(SW - 1, SH - 1)))]; }\n"
-+"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
-+"    if (id.x >= GSW || id.y >= GSH) return;\n"
-+"    int2 o = int2(id.xy) * 4;\n"
-+"    float c[16];\n"
-+"    [unroll] for (int i = 0; i < 16; i++)\n"
-+"        c[i] = Cur[uint2(clamp(o + int2(i & 3, i >> 2), int2(0, 0), int2(SW - 1, SH - 1)))];\n"
-+"    float best = 0;\n"
-+"    [unroll] for (int j = 0; j < 16; j++) best += abs(c[j] - P(o + int2(j & 3, j >> 2)));\n"
-+"    best = best * 0.9 - 0.002;\n"
-+"    int2 bd = int2(0, 0);\n"
-+"    [loop] for (int dy = -RS; dy <= RS; dy++)\n"
-+"        [loop] for (int dx = -RS; dx <= RS; dx++) {\n"
-+"            float s = 0.004 * (abs(dx) + abs(dy));\n"
-+"            [unroll] for (int k = 0; k < 16; k++) s += abs(c[k] - P(o + int2(k & 3, k >> 2) + int2(dx, dy)));\n"
-+"            if (s < best) { best = s; bd = int2(dx, dy); }\n"
-+"        }\n"
-+"    Mv[id.xy] = packmv(bd * 16, 0u);\n"
-+"}\n"
-+"#elif PASS == 3\n"
-+"RWTexture2D<float> Cur : register(u0);\n"
-+"RWTexture2D<float> Prev : register(u1);\n"
-+"RWTexture2D<uint> MvS : register(u2);\n"
-+"RWTexture2D<uint> MvQ : register(u3);\n"
-+"float P(int2 p) { return Prev[uint2(clamp(p, int2(0, 0), int2(QW - 1, QH - 1)))]; }\n"
-+"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
-+"    if (id.x >= GQW || id.y >= GQH) return;\n"
-+"    int2 o = int2(id.xy) * 4 - 1;\n"
-+"    float c[36];\n"
-+"    [unroll] for (int i = 0; i < 36; i++)\n"
-+"        c[i] = Cur[uint2(clamp(o + int2(i % 6, i / 6), int2(0, 0), int2(QW - 1, QH - 1)))];\n"
-+"    int2 pb = min(int2(id.xy) / 4, int2(GSW - 1, GSH - 1));\n"
-+"    int2 cens[6];\n"
-+"    cens[0] = int2(0, 0);\n"
-+"    cens[1] = unpackmv(MvS[uint2(pb)]) / 4;\n"
-+"    cens[2] = unpackmv(MvS[uint2(clamp(pb + int2(-1, 0), int2(0, 0), int2(GSW - 1, GSH - 1)))]) / 4;\n"
-+"    cens[3] = unpackmv(MvS[uint2(clamp(pb + int2(1, 0), int2(0, 0), int2(GSW - 1, GSH - 1)))]) / 4;\n"
-+"    cens[4] = unpackmv(MvS[uint2(clamp(pb + int2(0, -1), int2(0, 0), int2(GSW - 1, GSH - 1)))]) / 4;\n"
-+"    cens[5] = unpackmv(MvS[uint2(clamp(pb + int2(0, 1), int2(0, 0), int2(GSW - 1, GSH - 1)))]) / 4;\n"
-+"    float best = 1e9, bsad = 0;\n"
-+"    int2 bd = int2(0, 0);\n"
-+"    [loop] for (int round = 0; round < 6; round++) {\n"
-+"        int2 cen = cens[round];\n"
-+"        int r = round == 1 ? RQ : 1;\n"
-+"        [loop] for (int dy = -r; dy <= r; dy++)\n"
-+"            [loop] for (int dx = -r; dx <= r; dx++) {\n"
-+"                int2 d = cen + int2(dx, dy);\n"
-+"                float sad = 0;\n"
-+"                [unroll] for (int k = 0; k < 36; k++) sad += abs(c[k] - P(o + int2(k % 6, k / 6) + d));\n"
-+"                float s = sad + 0.003 * (abs(d.x) + abs(d.y));\n"
-+"                if (d.x == 0 && d.y == 0) s = s * 0.9 - 0.002;\n"
-+"                if (s < best) { best = s; bd = d; bsad = sad; }\n"
-+"            }\n"
-+"    }\n"
-+"    MvQ[id.xy] = packmv(bd * 4, uint(bsad * (2000.0 / 36.0)));\n"
-+"}\n"
-+"#elif PASS == 4\n"
-+"RWTexture2D<uint> In : register(u0);\n"
-+"RWTexture2D<uint> Out : register(u1);\n"
-+"int med9(int a[9]) {\n"
-+"    [unroll] for (int i = 0; i < 5; i++)\n"
-+"        [unroll] for (int j = i + 1; j < 9; j++)\n"
-+"            if (a[j] < a[i]) { int t = a[i]; a[i] = a[j]; a[j] = t; }\n"
-+"    return a[4];\n"
-+"}\n"
-+"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
-+"    if (id.x >= GQW || id.y >= GQH) return;\n"
-+"    int xs[9], ys[9];\n"
-+"    [unroll] for (int i = 0; i < 9; i++) {\n"
-+"        int2 v = unpackmv(In[uint2(clamp(int2(id.xy) + int2(i % 3 - 1, i / 3 - 1), int2(0, 0), int2(GQW - 1, GQH - 1)))]);\n"
-+"        xs[i] = v.x; ys[i] = v.y;\n"
-+"    }\n"
-+"    Out[id.xy] = packmv(int2(med9(xs), med9(ys)), mvq(In[id.xy]));\n"
-+"}\n"
-+"#elif PASS == 9\n"
-+"cbuffer K : register(b0) { float T; float K1; float K2; float K3; };\n"
-+"Texture2D<float4> PrevF : register(t0);\n"
-+"Texture2D<float4> CurF : register(t1);\n"
-+"RWTexture2D<uint> Mv : register(u1);\n"
-+"SamplerState S : register(s0);\n"
-+"float4 vs(uint id : SV_VertexID) : SV_Position {\n"
-+"    float2 uv = float2((id << 1) & 2, id & 2);\n"
-+"    return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);\n"
-+"}\n"
-+"uint mvat(int2 i) { return Mv[uint2(clamp(i, int2(0, 0), int2(GQW - 1, GQH - 1)))]; }\n"
-+"float4 ps(float4 pos : SV_Position) : SV_Target {\n"
-+"    float2 px = pos.xy;\n"
-+"    float2 g = px / 16.0 - 0.5;\n"
-+"    int2 i0 = int2(floor(g));\n"
-+"    float2 f = g - float2(i0);\n"
-+"    uint v00 = mvat(i0), v10 = mvat(i0 + int2(1, 0)), v01 = mvat(i0 + int2(0, 1)), v11 = mvat(i0 + int2(1, 1));\n"
-+"    float2 mv = lerp(lerp(float2(unpackmv(v00)), float2(unpackmv(v10)), f.x),\n"
-+"                     lerp(float2(unpackmv(v01)), float2(unpackmv(v11)), f.x), f.y);\n"
-+"    float2 inv = float2(1.0 / W, 1.0 / H);\n"
-+"    float4 a = PrevF.SampleLevel(S, (px + T * mv) * inv, 0);\n"
-+"    float4 b = CurF.SampleLevel(S, (px - (1.0 - T) * mv) * inv, 0);\n"
-+"    float d = abs(LUMA(a) - LUMA(b));\n"
-+"    float w = lerp(T, 1.0, saturate((d - 0.08) * 6.0));\n"
-+"    float3 moved = lerp(a.rgb, b.rgb, w);\n"
-+"    float3 p0 = PrevF.SampleLevel(S, px * inv, 0).rgb;\n"
-+"    float3 c0 = CurF.SampleLevel(S, px * inv, 0).rgb;\n"
-+"    float s0 = abs(LUMA(p0) - LUMA(c0));\n"
-+"    [unroll] for (int i = 0; i < 4; i++) {\n"
-+"        float2 o = float2(i == 0 ? 2 : i == 1 ? -2 : 0, i == 2 ? 2 : i == 3 ? -2 : 0);\n"
-+"        s0 = max(s0, abs(LUMA(PrevF.SampleLevel(S, (px + o) * inv, 0)) - LUMA(CurF.SampleLevel(S, (px + o) * inv, 0))));\n"
-+"    }\n"
-+"    float still = saturate(1.0 - (s0 - 0.01) * 40.0);\n"
-+"    float3 o3 = lerp(moved, lerp(p0, c0, T), still);\n"
-+"    uint q = max(max(mvq(v00), mvq(v10)), max(mvq(v01), mvq(v11)));\n"
-+"    float fb = saturate((float(q) / 2000.0 - 0.035) / 0.035);\n"
-+"    return float4(lerp(o3, c0, fb), 1.0);\n"
-+"}\n"
-+"#endif\n";
-+
-+typedef struct { LONG64 seq; int n, p, m, made; } fg_item;
-+
-+static struct {
-+    /* GPU objects, made on the RSX thread at the first frame */
-+    int inited, failed, warned_fmt;
-+    ID3D12Device* dev;
-+    unsigned W, H, QW, QH, SW, SH, GSW, GSH, GQW, GQH;
-+    ID3D12Resource* frame[FG_SLOTS];
-+    D3D12_RESOURCE_STATES fstate[FG_SLOTS];
-+    ID3D12Resource* lq[FG_SLOTS];
-+    ID3D12Resource* ls[FG_SLOTS];
-+    ID3D12Resource *mvs, *mvq, *mvf[2];
-+    ID3D12DescriptorHeap* heap;
-+    UINT step;
-+    ID3D12RootSignature *crs, *grs;
-+    ID3D12PipelineState* cpso[5];
-+    ID3D12PipelineState* gpso;
-+    D3D12_GPU_DESCRIPTOR_HANDLE ctab[FG_COMBOS][5], gtab[FG_COMBOS];
-+    /* RSX thread */
-+    LONG64 seq;          /* number of the last drawn frame taken */
-+    int have;            /* that frame is in its slot, so the next one can be made against it */
-+    fg_item cur;         /* what rsx_fg_begin prepared, for rsx_fg_hand_off */
-+    unsigned long long waited_us;
-+    /* presenter */
-+    int pt_on;
-+    HANDLE pt_thread, mb_event, done_event;
-+    CRITICAL_SECTION mb_lock;
-+    fg_item mb;
-+    int mb_full;
-+    volatile LONG64 done_seq;
-+    volatile LONG err;
-+    ID3D12CommandQueue* q;
-+    IDXGISwapChain3* swap;
-+    ID3D12Resource* bb[FG_MAX_BB];
-+    D3D12_CPU_DESCRIPTOR_HANDLE rtv[FG_MAX_BB];
-+    unsigned nbb;
-+    UINT sync;
-+    CRITICAL_SECTION* swap_lock;
-+    void (*pump)(void);
-+    ID3D12CommandAllocator* calloc[3];
-+    ID3D12GraphicsCommandList* cl;
-+    ID3D12Fence* pf;
-+    UINT64 pfv, afence[3];
-+    HANDLE pev;
-+    unsigned ring, ring_k;
-+    /* counters (presenter writes, RSX thread reports) */
-+    volatile LONG64 made, shown, dropped;
-+    LONG64 rep_made, rep_shown, rep_dropped, rep_drawn, drawn;
-+    ULONGLONG rep_at;
-+    /* LD_FRAMEGEN_DUMP (presenter) */
-+    const char* dump_dir;
-+    unsigned dump_every, dump_n, dump_files, dump_pending;
-+    ID3D12Resource* rb;
-+    UINT rb_pitch;
-+    ID3D12Fence* fence;
-+    UINT64 fence_v;
-+    HANDLE fence_ev;
-+} fg;
-+
-+static int s_on = -1;
-+int rsx_fg_enabled(void)
-+{
-+    if (s_on < 0) {
-+        const char* e = getenv("LD_FRAMEGEN");
-+        s_on = e && atoi(e) != 0;
-+        if (s_on)
-+            fprintf(stderr, "[framegen] on: frames that watch mode or 30 fps leave undrawn are made from the "
-+                            "drawn ones, and a thread of its own presents (LD_FRAMEGEN)\n");
-+    }
-+    return s_on;
-+}
-+
-+long rsx_fg_present_error(void) { return fg.err; }
-+
-+static void fg_fail(const char* what, HRESULT hr)
-+{
-+    fprintf(stderr, "[framegen] off: %s failed (hr=0x%08lX)\n", what, (unsigned long)hr);
-+    fg.failed = 1;
-+}
-+
-+static ID3D12Resource* fg_tex(unsigned w, unsigned h, DXGI_FORMAT f, int uav, D3D12_RESOURCE_STATES st)
-+{
-+    D3D12_HEAP_PROPERTIES hp = {0};
-+    hp.Type = D3D12_HEAP_TYPE_DEFAULT;
-+    D3D12_RESOURCE_DESC d = {0};
-+    d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-+    d.Width = w; d.Height = h; d.DepthOrArraySize = 1; d.MipLevels = 1;
-+    d.Format = f; d.SampleDesc.Count = 1; d.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-+    d.Flags = uav ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
-+    ID3D12Resource* r = NULL;
-+    HRESULT hr = fg.dev->lpVtbl->CreateCommittedResource(fg.dev, &hp, D3D12_HEAP_FLAG_NONE, &d, st, NULL,
-+                                                         &IID_ID3D12Resource, (void**)&r);
-+    if (FAILED(hr)) { fg_fail("texture", hr); return NULL; }
-+    return r;
-+}
-+
-+static D3D12_CPU_DESCRIPTOR_HANDLE fg_cpu(unsigned slot)
-+{
-+    D3D12_CPU_DESCRIPTOR_HANDLE h;
-+    fg.heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(fg.heap, &h);
-+    h.ptr += (SIZE_T)slot * fg.step;
-+    return h;
-+}
-+
-+static D3D12_GPU_DESCRIPTOR_HANDLE fg_gpu(unsigned slot)
-+{
-+    D3D12_GPU_DESCRIPTOR_HANDLE h;
-+    fg.heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(fg.heap, &h);
-+    h.ptr += (UINT64)slot * fg.step;
-+    return h;
-+}
-+
-+/* A NULL resource makes a null descriptor, for the slots a pass does not use. */
-+static void fg_srv(unsigned slot, ID3D12Resource* r, DXGI_FORMAT f)
-+{
-+    D3D12_SHADER_RESOURCE_VIEW_DESC d = {0};
-+    d.Format = f;
-+    d.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-+    d.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-+    d.Texture2D.MipLevels = 1;
-+    fg.dev->lpVtbl->CreateShaderResourceView(fg.dev, r, &d, fg_cpu(slot));
-+}
-+
-+static void fg_uav(unsigned slot, ID3D12Resource* r, DXGI_FORMAT f)
-+{
-+    D3D12_UNORDERED_ACCESS_VIEW_DESC d = {0};
-+    d.Format = f;
-+    d.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-+    fg.dev->lpVtbl->CreateUnorderedAccessView(fg.dev, r, NULL, &d, fg_cpu(slot));
-+}
-+
-+static ID3DBlob* fg_compile(int pass, const char* entry, const char* target)
-+{
-+    static const char* names[13] = { "PASS", "W", "H", "QW", "QH", "SW", "SH", "GSW", "GSH", "GQW", "GQH", "RS", "RQ" };
-+    char vals[13][16];
-+    const unsigned v[13] = { (unsigned)pass, fg.W, fg.H, fg.QW, fg.QH, fg.SW, fg.SH,
-+                             fg.GSW, fg.GSH, fg.GQW, fg.GQH, FG_RS, FG_RQ };
-+    D3D_SHADER_MACRO m[14];
-+    for (int i = 0; i < 13; i++) {
-+        snprintf(vals[i], sizeof vals[i], "%u", v[i]);
-+        m[i].Name = names[i];
-+        m[i].Definition = vals[i];
-+    }
-+    m[13].Name = NULL; m[13].Definition = NULL;
-+    ID3DBlob* b = NULL;
-+    ID3DBlob* err = NULL;
-+    HRESULT hr = D3DCompile(k_src, sizeof k_src - 1u, "framegen", m, NULL, entry, target,
-+                            D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &b, &err);
-+    if (FAILED(hr)) {
-+        fprintf(stderr, "[framegen] shader %d (%s) failed to compile: %s\n", pass, entry,
-+                err ? (const char*)err->lpVtbl->GetBufferPointer(err) : "?");
-+        if (err) err->lpVtbl->Release(err);
-+        fg.failed = 1;
-+        return NULL;
-+    }
-+    if (err) err->lpVtbl->Release(err);
-+    return b;
-+}
-+
-+static ID3D12RootSignature* fg_rootsig(const D3D12_ROOT_SIGNATURE_DESC* rsd)
-+{
-+    ID3DBlob* sig = NULL;
-+    ID3DBlob* err = NULL;
-+    HRESULT hr = D3D12SerializeRootSignature(rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
-+    if (err) err->lpVtbl->Release(err);
-+    if (FAILED(hr)) { fg_fail("root signature", hr); return NULL; }
-+    ID3D12RootSignature* rs = NULL;
-+    hr = fg.dev->lpVtbl->CreateRootSignature(fg.dev, 0, sig->lpVtbl->GetBufferPointer(sig),
-+                                             sig->lpVtbl->GetBufferSize(sig), &IID_ID3D12RootSignature, (void**)&rs);
-+    sig->lpVtbl->Release(sig);
-+    if (FAILED(hr)) { fg_fail("root signature", hr); return NULL; }
-+    return rs;
-+}
-+
-+/* Descriptor tables for each drawn frame number % FG_COMBOS: its slot n, the slot p before, vectors m. */
-+static void fg_tables(void)
-+{
-+    const DXGI_FORMAT F = DXGI_FORMAT_R32_FLOAT, U = DXGI_FORMAT_R32_UINT;
-+    for (int c = 0; c < FG_COMBOS; c++) {
-+        const int n = c % FG_SLOTS, p = (c + FG_SLOTS - 1) % FG_SLOTS, m = c % 2;
-+        const unsigned base = (unsigned)c * FG_PER_COMBO;
-+        ID3D12Resource* const t0[5] = { fg.frame[n], NULL, NULL, NULL, NULL };
-+        ID3D12Resource* const u[5][4] = {
-+            { fg.lq[n], NULL, NULL, NULL },
-+            { fg.lq[n], fg.ls[n], NULL, NULL },
-+            { fg.ls[n], fg.ls[p], fg.mvs, NULL },
-+            { fg.lq[n], fg.lq[p], fg.mvs, fg.mvq },
-+            { fg.mvq, fg.mvf[m], NULL, NULL },
-+        };
-+        const DXGI_FORMAT uf[5][4] = { { F, F, F, F }, { F, F, F, F }, { F, F, U, F }, { F, F, U, U }, { U, U, U, U } };
-+        for (int i = 0; i < 5; i++) {
-+            const unsigned s = base + (unsigned)i * FG_TAB;
-+            fg_srv(s, t0[i], DXGI_FORMAT_R8G8B8A8_UNORM);
-+            for (int j = 0; j < 4; j++) fg_uav(s + 1u + (unsigned)j, u[i][j], uf[i][j]);
-+            fg.ctab[c][i] = fg_gpu(s);
-+        }
-+        const unsigned g = base + 5u * FG_TAB;
-+        fg_srv(g, fg.frame[p], DXGI_FORMAT_R8G8B8A8_UNORM);
-+        fg_srv(g + 1u, fg.frame[n], DXGI_FORMAT_R8G8B8A8_UNORM);
-+        fg_uav(g + 2u, fg.mvf[m], U);
-+        fg.gtab[c] = fg_gpu(g);
-+    }
-+}
-+
-+static int fg_setup(ID3D12Device* dev, unsigned w, unsigned h)
-+{
-+    if (fg.failed) return 0;
-+    if (fg.inited) {
-+        if (fg.dev == dev && fg.W == w && fg.H == h) return 1;
-+        /* The presenter may still be using these: rather than rebuild under it, stop. */
-+        fprintf(stderr, "[framegen] off: the window's size changed\n");
-+        fg.failed = 1;
-+        return 0;
-+    }
-+    fg.dev = dev; fg.W = w; fg.H = h;
-+    fg.QW = w / 4u; fg.QH = h / 4u; fg.SW = fg.QW / 4u; fg.SH = fg.QH / 4u;
-+    fg.GSW = (fg.SW + 3u) / 4u; fg.GSH = (fg.SH + 3u) / 4u;
-+    fg.GQW = (fg.QW + 3u) / 4u; fg.GQH = (fg.QH + 3u) / 4u;
-+    if (fg.SW < 8u || fg.SH < 8u) { fprintf(stderr, "[framegen] off: window too small\n"); fg.failed = 1; return 0; }
-+
-+    for (int i = 0; i < FG_SLOTS; i++) {
-+        fg.frame[i] = fg_tex(w, h, DXGI_FORMAT_R8G8B8A8_TYPELESS, 0, D3D12_RESOURCE_STATE_COPY_DEST);
-+        fg.fstate[i] = D3D12_RESOURCE_STATE_COPY_DEST;
-+        fg.lq[i] = fg_tex(fg.QW, fg.QH, DXGI_FORMAT_R32_FLOAT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-+        fg.ls[i] = fg_tex(fg.SW, fg.SH, DXGI_FORMAT_R32_FLOAT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-+    }
-+    fg.mvs = fg_tex(fg.GSW, fg.GSH, DXGI_FORMAT_R32_UINT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-+    fg.mvq = fg_tex(fg.GQW, fg.GQH, DXGI_FORMAT_R32_UINT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-+    fg.mvf[0] = fg_tex(fg.GQW, fg.GQH, DXGI_FORMAT_R32_UINT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-+    fg.mvf[1] = fg_tex(fg.GQW, fg.GQH, DXGI_FORMAT_R32_UINT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-+    if (fg.failed) return 0;
-+
-+    D3D12_DESCRIPTOR_HEAP_DESC hd = {0};
-+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-+    hd.NumDescriptors = FG_HEAP;
-+    hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-+    HRESULT hr = dev->lpVtbl->CreateDescriptorHeap(dev, &hd, &IID_ID3D12DescriptorHeap, (void**)&fg.heap);
-+    if (FAILED(hr)) { fg_fail("descriptor heap", hr); return 0; }
-+    fg.step = dev->lpVtbl->GetDescriptorHandleIncrementSize(dev, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-+    fg_tables();
-+
-+    /* Compute: one table, t0 then u0..u3. */
-+    D3D12_DESCRIPTOR_RANGE cr[2] = {0};
-+    cr[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; cr[0].NumDescriptors = 1;
-+    cr[0].OffsetInDescriptorsFromTableStart = 0;
-+    cr[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; cr[1].NumDescriptors = 4;
-+    cr[1].OffsetInDescriptorsFromTableStart = 1;
-+    D3D12_ROOT_PARAMETER cp = {0};
-+    cp.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-+    cp.DescriptorTable.NumDescriptorRanges = 2;
-+    cp.DescriptorTable.pDescriptorRanges = cr;
-+    cp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-+    D3D12_ROOT_SIGNATURE_DESC crsd = {0};
-+    crsd.NumParameters = 1; crsd.pParameters = &cp;
-+    fg.crs = fg_rootsig(&crsd);
-+
-+    /* Draw: 4 constants (b0), a table of the two frames (t0, t1) and the vectors (u1), one sampler. */
-+    D3D12_DESCRIPTOR_RANGE gr[2] = {0};
-+    gr[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; gr[0].NumDescriptors = 2;
-+    gr[0].OffsetInDescriptorsFromTableStart = 0;
-+    gr[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; gr[1].NumDescriptors = 1;
-+    gr[1].BaseShaderRegister = 1;   /* u0 is the render target's in a pixel shader */
-+    gr[1].OffsetInDescriptorsFromTableStart = 2;
-+    D3D12_ROOT_PARAMETER gp[2] = {0};
-+    gp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-+    gp[0].Constants.Num32BitValues = 4;
-+    gp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-+    gp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-+    gp[1].DescriptorTable.NumDescriptorRanges = 2;
-+    gp[1].DescriptorTable.pDescriptorRanges = gr;
-+    gp[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-+    D3D12_STATIC_SAMPLER_DESC smp = {0};
-+    smp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-+    smp.AddressU = smp.AddressV = smp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-+    smp.MaxLOD = D3D12_FLOAT32_MAX;
-+    smp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-+    D3D12_ROOT_SIGNATURE_DESC grsd = {0};
-+    grsd.NumParameters = 2; grsd.pParameters = gp;
-+    grsd.NumStaticSamplers = 1; grsd.pStaticSamplers = &smp;
-+    fg.grs = fg_rootsig(&grsd);
-+    if (fg.failed) return 0;
-+
-+    for (int p = 0; p < 5; p++) {
-+        ID3DBlob* cs = fg_compile(p, "main", "cs_5_0");
-+        if (!cs) return 0;
-+        D3D12_COMPUTE_PIPELINE_STATE_DESC cd = {0};
-+        cd.pRootSignature = fg.crs;
-+        cd.CS.pShaderBytecode = cs->lpVtbl->GetBufferPointer(cs);
-+        cd.CS.BytecodeLength = cs->lpVtbl->GetBufferSize(cs);
-+        hr = dev->lpVtbl->CreateComputePipelineState(dev, &cd, &IID_ID3D12PipelineState, (void**)&fg.cpso[p]);
-+        cs->lpVtbl->Release(cs);
-+        if (FAILED(hr)) { fg_fail("compute pipeline", hr); return 0; }
-+    }
-+    ID3DBlob* vs = fg_compile(9, "vs", "vs_5_0");
-+    ID3DBlob* ps = vs ? fg_compile(9, "ps", "ps_5_0") : NULL;
-+    if (!vs || !ps) { if (vs) vs->lpVtbl->Release(vs); return 0; }
-+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {0};
-+    pd.pRootSignature = fg.grs;
-+    pd.VS.pShaderBytecode = vs->lpVtbl->GetBufferPointer(vs); pd.VS.BytecodeLength = vs->lpVtbl->GetBufferSize(vs);
-+    pd.PS.pShaderBytecode = ps->lpVtbl->GetBufferPointer(ps); pd.PS.BytecodeLength = ps->lpVtbl->GetBufferSize(ps);
-+    pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-+    pd.SampleMask = 0xFFFFFFFFu;
-+    pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-+    pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-+    pd.RasterizerState.DepthClipEnable = TRUE;
-+    pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-+    pd.NumRenderTargets = 1;
-+    pd.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;   /* the swap chain's */
-+    pd.SampleDesc.Count = 1;
-+    hr = dev->lpVtbl->CreateGraphicsPipelineState(dev, &pd, &IID_ID3D12PipelineState, (void**)&fg.gpso);
-+    vs->lpVtbl->Release(vs); ps->lpVtbl->Release(ps);
-+    if (FAILED(hr)) { fg_fail("draw pipeline", hr); return 0; }
-+
-+    /* LD_FRAMEGEN_DUMP=<dir> [LD_FRAMEGEN_DUMP_EVERY=n, default 120]: before / made / after as .ppm. */
-+    fg.dump_dir = getenv("LD_FRAMEGEN_DUMP");
-+    if (fg.dump_dir && fg.dump_dir[0]) {
-+        const char* e = getenv("LD_FRAMEGEN_DUMP_EVERY");
-+        fg.dump_every = e && atoi(e) > 0 ? (unsigned)atoi(e) : 120u;
-+        fg.rb_pitch = (w * 4u + 255u) & ~255u;
-+        D3D12_HEAP_PROPERTIES hp = {0};
-+        hp.Type = D3D12_HEAP_TYPE_READBACK;
-+        D3D12_RESOURCE_DESC bd = {0};
-+        bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-+        bd.Width = (UINT64)fg.rb_pitch * h * 3u;
-+        bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
-+        bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
-+        bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-+        if (FAILED(dev->lpVtbl->CreateCommittedResource(dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
-+                       D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&fg.rb)) ||
-+            FAILED(dev->lpVtbl->CreateFence(dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void**)&fg.fence)))
-+            fg.dump_dir = NULL;
-+        else
-+            fg.fence_ev = CreateEventA(NULL, FALSE, FALSE, NULL);
-+    } else {
-+        fg.dump_dir = NULL;
-+    }
-+
-+    fg.inited = 1;
-+    fprintf(stderr, "[framegen] ready for %ux%u: motion at %ux%u and %ux%u, vectors %ux%u\n",
-+            w, h, fg.SW, fg.SH, fg.QW, fg.QH, fg.GQW, fg.GQH);
-+    return 1;
-+}
-+
-+static void fg_trans(D3D12_RESOURCE_BARRIER* b, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to)
-+{
-+    memset(b, 0, sizeof *b);
-+    b->Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-+    b->Transition.pResource = r;
-+    b->Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-+    b->Transition.StateBefore = from;
-+    b->Transition.StateAfter = to;
-+}
-+
-+static void fg_uav_barrier(ID3D12GraphicsCommandList* l)
-+{
-+    D3D12_RESOURCE_BARRIER b;
-+    memset(&b, 0, sizeof b);
-+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-+    b.UAV.pResource = NULL;
-+    l->lpVtbl->ResourceBarrier(l, 1, &b);
-+}
-+
-+static void fg_dispatch(ID3D12GraphicsCommandList* l, int pass, int combo, unsigned nx, unsigned ny)
-+{
-+    l->lpVtbl->SetPipelineState(l, fg.cpso[pass]);
-+    l->lpVtbl->SetComputeRootDescriptorTable(l, 0, fg.ctab[combo][pass]);
-+    l->lpVtbl->Dispatch(l, (nx + 7u) / 8u, (ny + 7u) / 8u, 1);
-+}
-+
-+#define FG_SR (D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
-+
-+/* ---------------------------------------------------------------------------------------------------
-+ * presenter
-+ * -------------------------------------------------------------------------------------------------*/
-+
-+static ID3D12GraphicsCommandList* fg_list_open(void)
-+{
-+    const unsigned k = fg.ring++ % 3u;
-+    if (fg.pf->lpVtbl->GetCompletedValue(fg.pf) < fg.afence[k]) {   /* three lists back: rarely waits */
-+        fg.pf->lpVtbl->SetEventOnCompletion(fg.pf, fg.afence[k], fg.pev);
-+        WaitForSingleObject(fg.pev, INFINITE);
-+    }
-+    ID3D12CommandAllocator* a = fg.calloc[k];
-+    if (FAILED(a->lpVtbl->Reset(a)) || FAILED(fg.cl->lpVtbl->Reset(fg.cl, a, NULL))) return NULL;
-+    fg.ring_k = k;
-+    return fg.cl;
-+}
-+
-+static int fg_list_submit(void)
-+{
-+    if (FAILED(fg.cl->lpVtbl->Close(fg.cl))) return 0;
-+    ID3D12CommandList* ls[1] = { (ID3D12CommandList*)fg.cl };
-+    fg.q->lpVtbl->ExecuteCommandLists(fg.q, 1, ls);
-+    fg.q->lpVtbl->Signal(fg.q, fg.pf, ++fg.pfv);
-+    fg.afence[fg.ring_k] = fg.pfv;
-+    return 1;
-+}
-+
-+static void fg_copy_out(ID3D12GraphicsCommandList* l, ID3D12Resource* r, DXGI_FORMAT f, unsigned slot)
-+{
-+    D3D12_TEXTURE_COPY_LOCATION dst = {0}, s = {0};
-+    dst.pResource = fg.rb; dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-+    dst.PlacedFootprint.Offset = (UINT64)fg.rb_pitch * fg.H * slot;
-+    dst.PlacedFootprint.Footprint.Format = f;
-+    dst.PlacedFootprint.Footprint.Width = fg.W;
-+    dst.PlacedFootprint.Footprint.Height = fg.H;
-+    dst.PlacedFootprint.Footprint.Depth = 1;
-+    dst.PlacedFootprint.Footprint.RowPitch = fg.rb_pitch;
-+    s.pResource = r; s.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-+    l->lpVtbl->CopyTextureRegion(l, &dst, 0, 0, 0, &s, NULL);
-+}
-+
-+/* Made frame k of it->made into back buffer bb. */
-+static void fg_draw(ID3D12GraphicsCommandList* l, const fg_item* it, int k, ID3D12Resource* bb,
-+                    D3D12_CPU_DESCRIPTOR_HANDLE rtv)
-+{
-+    const int c = (int)(it->seq % FG_COMBOS);
-+    const float cst[4] = { (float)k / (float)(it->made + 1), 0.0f, 0.0f, 0.0f };
-+    D3D12_RESOURCE_BARRIER b[3];
-+    fg_trans(&b[0], bb, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-+    l->lpVtbl->ResourceBarrier(l, 1, b);
-+    l->lpVtbl->SetDescriptorHeaps(l, 1, &fg.heap);
-+    l->lpVtbl->SetGraphicsRootSignature(l, fg.grs);
-+    l->lpVtbl->SetPipelineState(l, fg.gpso);
-+    l->lpVtbl->SetGraphicsRoot32BitConstants(l, 0, 4, cst, 0);
-+    l->lpVtbl->SetGraphicsRootDescriptorTable(l, 1, fg.gtab[c]);
-+    l->lpVtbl->OMSetRenderTargets(l, 1, &rtv, FALSE, NULL);
-+    D3D12_VIEWPORT vp = { 0.0f, 0.0f, (float)fg.W, (float)fg.H, 0.0f, 1.0f };
-+    D3D12_RECT sc = { 0, 0, (LONG)fg.W, (LONG)fg.H };
-+    l->lpVtbl->RSSetViewports(l, 1, &vp);
-+    l->lpVtbl->RSSetScissorRects(l, 1, &sc);
-+    l->lpVtbl->IASetPrimitiveTopology(l, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-+    l->lpVtbl->DrawInstanced(l, 3, 1, 0, 0);
-+
-+    const int dump = fg.dump_dir && fg.dump_files < 12u && k == 1 && (fg.dump_n++ % fg.dump_every) == 0u;
-+    if (dump) {
-+        fg_trans(&b[0], bb, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
-+        fg_trans(&b[1], fg.frame[it->p], FG_SR, D3D12_RESOURCE_STATE_COPY_SOURCE);
-+        fg_trans(&b[2], fg.frame[it->n], FG_SR, D3D12_RESOURCE_STATE_COPY_SOURCE);
-+        l->lpVtbl->ResourceBarrier(l, 3, b);
-+        fg_copy_out(l, fg.frame[it->p], DXGI_FORMAT_R8G8B8A8_TYPELESS, 0);
-+        fg_copy_out(l, bb, DXGI_FORMAT_R8G8B8A8_UNORM, 1);
-+        fg_copy_out(l, fg.frame[it->n], DXGI_FORMAT_R8G8B8A8_TYPELESS, 2);
-+        fg_trans(&b[0], bb, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
-+        fg_trans(&b[1], fg.frame[it->p], D3D12_RESOURCE_STATE_COPY_SOURCE, FG_SR);
-+        fg_trans(&b[2], fg.frame[it->n], D3D12_RESOURCE_STATE_COPY_SOURCE, FG_SR);
-+        l->lpVtbl->ResourceBarrier(l, 3, b);
-+        fg.dump_pending = 1;
-+    } else {
-+        fg_trans(&b[0], bb, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-+        l->lpVtbl->ResourceBarrier(l, 1, b);
-+    }
-+}
-+
-+/* The drawn frame, from its slot, into back buffer bb. */
-+static void fg_copy_drawn(ID3D12GraphicsCommandList* l, const fg_item* it, ID3D12Resource* bb)
-+{
-+    D3D12_RESOURCE_BARRIER b[2];
-+    fg_trans(&b[0], fg.frame[it->n], FG_SR, D3D12_RESOURCE_STATE_COPY_SOURCE);
-+    fg_trans(&b[1], bb, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
-+    l->lpVtbl->ResourceBarrier(l, 2, b);
-+    l->lpVtbl->CopyResource(l, bb, fg.frame[it->n]);
-+    fg_trans(&b[0], fg.frame[it->n], D3D12_RESOURCE_STATE_COPY_SOURCE, FG_SR);
-+    fg_trans(&b[1], bb, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
-+    l->lpVtbl->ResourceBarrier(l, 2, b);
-+}
-+
-+static void fg_dump_write(void)
-+{
-+    if (!fg.dump_pending || !fg.rb || !fg.fence || !fg.fence_ev) return;
-+    fg.dump_pending = 0;
-+    const UINT64 v = ++fg.fence_v;
-+    if (FAILED(fg.q->lpVtbl->Signal(fg.q, fg.fence, v))) return;
-+    if (fg.fence->lpVtbl->GetCompletedValue(fg.fence) < v) {
-+        fg.fence->lpVtbl->SetEventOnCompletion(fg.fence, v, fg.fence_ev);
-+        WaitForSingleObject(fg.fence_ev, 5000);
-+    }
-+    unsigned char* p = NULL;
-+    D3D12_RANGE rr = { 0, (SIZE_T)fg.rb_pitch * fg.H * 3u };
-+    if (FAILED(fg.rb->lpVtbl->Map(fg.rb, 0, &rr, (void**)&p)) || !p) return;
-+    static const char* tag[3] = { "a_before", "b_made", "c_after" };
-+    unsigned char* row = (unsigned char*)malloc((size_t)fg.W * 3u);
-+    for (unsigned i = 0; i < 3 && row; i++) {
-+        char path[MAX_PATH * 2];
-+        snprintf(path, sizeof path, "%s\\fg_%03u_%s.ppm", fg.dump_dir, fg.dump_files, tag[i]);
-+        FILE* f = fopen(path, "wb");
-+        if (!f) continue;
-+        fprintf(f, "P6\n%u %u\n255\n", fg.W, fg.H);
-+        for (unsigned y = 0; y < fg.H; y++) {
-+            const unsigned char* src = p + (size_t)fg.rb_pitch * fg.H * i + (size_t)fg.rb_pitch * y;
-+            for (unsigned x = 0; x < fg.W; x++) {
-+                row[x * 3u + 0u] = src[x * 4u + 0u];
-+                row[x * 3u + 1u] = src[x * 4u + 1u];
-+                row[x * 3u + 2u] = src[x * 4u + 2u];
-+            }
-+            fwrite(row, 3, fg.W, f);
-+        }
-+        fclose(f);
-+    }
-+    free(row);
-+    D3D12_RANGE none = { 0, 0 };
-+    fg.rb->lpVtbl->Unmap(fg.rb, 0, &none);
-+    fprintf(stderr, "[framegen] dump %u written to %s\n", fg.dump_files, fg.dump_dir);
-+    fg.dump_files++;
-+}
-+
-+/* One list into the current back buffer, submitted and presented, all under the swap chain's lock. */
-+static HRESULT fg_present_one(const fg_item* it, int k)
-+{
-+    EnterCriticalSection(fg.swap_lock);
-+    const UINT fb = fg.swap->lpVtbl->GetCurrentBackBufferIndex(fg.swap);
-+    HRESULT hr = E_FAIL;
-+    ID3D12GraphicsCommandList* l = fb < fg.nbb ? fg_list_open() : NULL;
-+    if (l) {
-+        if (k > 0) fg_draw(l, it, k, fg.bb[fb], fg.rtv[fb]);
-+        else fg_copy_drawn(l, it, fg.bb[fb]);
-+        if (fg_list_submit()) hr = fg.swap->lpVtbl->Present(fg.swap, fg.sync, 0);
-+    }
-+    LeaveCriticalSection(fg.swap_lock);
-+    if (k > 0) fg_dump_write();
-+    return hr;
-+}
-+
-+static DWORD WINAPI fg_presenter(LPVOID arg)
-+{
-+    (void)arg;
-+    for (;;) {
-+        WaitForSingleObject(fg.mb_event, INFINITE);
-+        for (;;) {
-+            fg_item it;
-+            EnterCriticalSection(&fg.mb_lock);
-+            const int has = fg.mb_full;
-+            it = fg.mb;
-+            fg.mb_full = 0;
-+            LeaveCriticalSection(&fg.mb_lock);
-+            if (!has) break;
-+            for (int k = 1; k <= it.made && !fg.err; k++) {
-+                const HRESULT hr = fg_present_one(&it, k);
-+                if (FAILED(hr)) InterlockedExchange(&fg.err, (LONG)hr);
-+                else InterlockedIncrement64(&fg.made);
-+            }
-+            if (!fg.err) {
-+                const HRESULT hr = fg_present_one(&it, 0);
-+                if (FAILED(hr)) InterlockedExchange(&fg.err, (LONG)hr);
-+                else InterlockedIncrement64(&fg.shown);
-+            }
-+            InterlockedExchange64(&fg.done_seq, it.seq);
-+            SetEvent(fg.done_event);
-+        }
-+    }
-+}
-+
-+int rsx_fg_presenter_start(ID3D12CommandQueue* q, IDXGISwapChain3* swap, ID3D12Resource* const* backbuf,
-+                           const D3D12_CPU_DESCRIPTOR_HANDLE* rtv, unsigned n, UINT sync, CRITICAL_SECTION* swap_lock,
-+                           void (*pump)(void))
-+{
-+    if (fg.pt_on) return 1;
-+    if (!rsx_fg_enabled() || !q || !swap || !swap_lock || !n || n > FG_MAX_BB) return 0;
-+    ID3D12Device* dev = NULL;
-+    if (FAILED(q->lpVtbl->GetDevice(q, &IID_ID3D12Device, (void**)&dev)) || !dev) return 0;
-+    for (int i = 0; i < 3; i++)
-+        if (FAILED(dev->lpVtbl->CreateCommandAllocator(dev, D3D12_COMMAND_LIST_TYPE_DIRECT,
-+                       &IID_ID3D12CommandAllocator, (void**)&fg.calloc[i]))) { dev->lpVtbl->Release(dev); return 0; }
-+    if (FAILED(dev->lpVtbl->CreateCommandList(dev, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, fg.calloc[0], NULL,
-+                   &IID_ID3D12GraphicsCommandList, (void**)&fg.cl)) ||
-+        FAILED(dev->lpVtbl->CreateFence(dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void**)&fg.pf))) {
-+        dev->lpVtbl->Release(dev);
-+        return 0;
-+    }
-+    dev->lpVtbl->Release(dev);
-+    fg.cl->lpVtbl->Close(fg.cl);
-+    fg.pev = CreateEventA(NULL, FALSE, FALSE, NULL);
-+    fg.mb_event = CreateEventA(NULL, FALSE, FALSE, NULL);
-+    fg.done_event = CreateEventA(NULL, FALSE, FALSE, NULL);
-+    if (!fg.pev || !fg.mb_event || !fg.done_event) return 0;
-+    InitializeCriticalSection(&fg.mb_lock);
-+    fg.q = q; fg.swap = swap; fg.swap_lock = swap_lock; fg.sync = sync; fg.nbb = n; fg.pump = pump;
-+    for (unsigned i = 0; i < n; i++) { fg.bb[i] = backbuf[i]; fg.rtv[i] = rtv[i]; }
-+    fg.pt_thread = CreateThread(NULL, 0, fg_presenter, NULL, 0, NULL);
-+    if (!fg.pt_thread) return 0;
-+    SetThreadPriority(fg.pt_thread, THREAD_PRIORITY_ABOVE_NORMAL);
-+    fg.pt_on = 1;
-+    fprintf(stderr, "[framegen] presenter thread started\n");
-+    return 1;
-+}
-+
-+/* ---------------------------------------------------------------------------------------------------
-+ * RSX thread
-+ * -------------------------------------------------------------------------------------------------*/
-+
-+/* Until the presenter has taken frame target (shown or dropped). 0 if it stays stuck. */
-+static int fg_wait_done(LONG64 target)
-+{
-+    if (InterlockedCompareExchange64(&fg.done_seq, 0, 0) >= target) return 1;
-+    const ULONGLONG t0 = GetTickCount64();
-+    LARGE_INTEGER a, b, f;
-+    QueryPerformanceCounter(&a);
-+    while (InterlockedCompareExchange64(&fg.done_seq, 0, 0) < target) {
-+        if (fg.err) return 0;
-+        if (GetTickCount64() - t0 > 500) {
-+            fprintf(stderr, "[framegen] off: the presenter stopped taking frames\n");
-+            fg.failed = 1;
-+            return 0;
-+        }
-+        if (fg.pump) fg.pump();   /* its Present may be waiting for this thread's window */
-+        WaitForSingleObject(fg.done_event, 2);
-+    }
-+    QueryPerformanceCounter(&b); QueryPerformanceFrequency(&f);
-+    fg.waited_us += (unsigned long long)((b.QuadPart - a.QuadPart) * 1000000 / f.QuadPart);
-+    return 1;
-+}
-+
-+int rsx_fg_begin(ID3D12Device* dev, ID3D12GraphicsCommandList* l, ID3D12Resource* src,
-+                 DXGI_FORMAT src_fmt, unsigned src_w, unsigned src_h, unsigned w, unsigned h, int gen)
-+{
-+    if (!rsx_fg_enabled() || !src || !fg.pt_on || fg.failed || fg.err) return -1;
-+    if (src_fmt != DXGI_FORMAT_R8G8B8A8_UNORM && src_fmt != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB &&
-+        src_fmt != DXGI_FORMAT_R8G8B8A8_TYPELESS) {
-+        if (!fg.warned_fmt) { fg.warned_fmt = 1; fprintf(stderr, "[framegen] presented surface format %d is not RGBA8: none made\n", (int)src_fmt); }
-+        fg.have = 0;
-+        return -1;
-+    }
-+    if (src_w < w || src_h < h) { fg.have = 0; return -1; }   /* the window shows padding: present as before */
-+    if (!fg_setup(dev, w, h)) return -1;
-+
-+    const LONG64 d = fg.seq + 1;
-+    if (!fg_wait_done(d - 2)) return -1;   /* slot d % 3 and vectors d % 2 were last read for d - 2 / d - 3 */
-+    const int n = (int)(d % FG_SLOTS), p = (int)((d + FG_SLOTS - 1) % FG_SLOTS), m = (int)(d % 2);
-+    const int c = (int)(d % FG_COMBOS);
-+
-+    D3D12_RESOURCE_BARRIER b[2];
-+    UINT nb = 0;
-+    fg_trans(&b[nb++], src, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
-+    if (fg.fstate[n] != D3D12_RESOURCE_STATE_COPY_DEST)
-+        fg_trans(&b[nb++], fg.frame[n], fg.fstate[n], D3D12_RESOURCE_STATE_COPY_DEST);
-+    l->lpVtbl->ResourceBarrier(l, nb, b);
-+    D3D12_TEXTURE_COPY_LOCATION dst = {0}, s = {0};
-+    dst.pResource = fg.frame[n]; dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-+    s.pResource = src; s.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-+    D3D12_BOX box = {0};
-+    box.right = w; box.bottom = h; box.back = 1;
-+    l->lpVtbl->CopyTextureRegion(l, &dst, 0, 0, 0, &s, &box);
-+    fg_trans(&b[0], src, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
-+    fg_trans(&b[1], fg.frame[n], D3D12_RESOURCE_STATE_COPY_DEST, FG_SR);
-+    l->lpVtbl->ResourceBarrier(l, 2, b);
-+    fg.fstate[n] = FG_SR;
-+
-+    l->lpVtbl->SetDescriptorHeaps(l, 1, &fg.heap);
-+    l->lpVtbl->SetComputeRootSignature(l, fg.crs);
-+    fg_dispatch(l, 0, c, fg.QW, fg.QH);
-+    fg_uav_barrier(l);
-+    fg_dispatch(l, 1, c, fg.SW, fg.SH);
-+    fg_uav_barrier(l);
-+
-+    int ready = 0;
-+    if (gen > 0 && fg.have) {
-+        fg_dispatch(l, 2, c, fg.GSW, fg.GSH);
-+        fg_uav_barrier(l);
-+        fg_dispatch(l, 3, c, fg.GQW, fg.GQH);
-+        fg_uav_barrier(l);
-+        fg_dispatch(l, 4, c, fg.GQW, fg.GQH);
-+        fg_uav_barrier(l);
-+        ready = gen > 3 ? 3 : gen;
-+    }
-+    fg.cur.seq = d; fg.cur.n = n; fg.cur.p = p; fg.cur.m = m; fg.cur.made = ready;
-+    fg.seq = d;
-+    fg.have = 1;
-+    fg.drawn++;
-+
-+    const ULONGLONG now = GetTickCount64();
-+    if (!fg.rep_at) fg.rep_at = now;
-+    if (now - fg.rep_at >= 5000) {
-+        const LONG64 made = InterlockedCompareExchange64(&fg.made, 0, 0);
-+        const LONG64 shown = InterlockedCompareExchange64(&fg.shown, 0, 0);
-+        const LONG64 dropped = InterlockedCompareExchange64(&fg.dropped, 0, 0);
-+        fprintf(stderr, "[framegen] %.1f s: %lld drawn, %lld shown, %lld made, %lld dropped; RSX thread waited %.1f ms for the presenter\n",
-+                (now - fg.rep_at) / 1000.0, fg.drawn - fg.rep_drawn, shown - fg.rep_shown, made - fg.rep_made,
-+                dropped - fg.rep_dropped, fg.waited_us / 1000.0);
-+        fg.rep_drawn = fg.drawn; fg.rep_shown = shown; fg.rep_made = made; fg.rep_dropped = dropped;
-+        fg.waited_us = 0; fg.rep_at = now;
-+    }
-+    return ready;
-+}
-+
-+void rsx_fg_hand_off(void)
-+{
-+    if (!fg.pt_on) return;
-+    EnterCriticalSection(&fg.mb_lock);
-+    if (fg.mb_full) InterlockedIncrement64(&fg.dropped);   /* the presenter never got to it */
-+    fg.mb = fg.cur;
-+    fg.mb_full = 1;
-+    LeaveCriticalSection(&fg.mb_lock);
-+    SetEvent(fg.mb_event);
-+}
-+#endif /* _WIN32 */
-diff --git a/libs/video/rsx_framegen.h b/libs/video/rsx_framegen.h
-new file mode 100644
-index 00000000..5768a014
---- /dev/null
-+++ b/libs/video/rsx_framegen.h
-@@ -0,0 +1,58 @@
-+/*
-+ * ps3recomp - frame generation for the D3D12 live renderer (Windows)
-+ *
-+ * Watch mode (B-Spec, replays, F9) and the launcher's 30 fps Speed setting leave game frames undrawn
-+ * to spare the CPU; the screen then holds each drawn frame for two refreshes. With LD_FRAMEGEN=1 the
-+ * renderer fills those refreshes with frames made on the GPU from the drawn frame before and the one
-+ * after: a block motion search at 1/16 and 1/4 size, then each pixel taken from both frames halfway
-+ * along its motion.
-+ *
-+ * Presenting moves to a thread of its own. The RSX thread only records the frame into a history slot
-+ * (and the motion, when frames went undrawn), submits, hands the frame over and goes on with the game;
-+ * the presenter draws the made frames and the drawn one into the window and waits for each refresh.
-+ * The first version presented on the RSX thread, twice per drawn frame, and the game itself dropped
-+ * from 60 frames a second to about 24 with a busy graphics card.
-+ */
-+#ifndef RSX_FRAMEGEN_H
-+#define RSX_FRAMEGEN_H
-+#ifdef _WIN32
-+#include <windows.h>
-+#include <d3d12.h>
-+#include <dxgi1_4.h>
-+
-+#ifdef __cplusplus
-+extern "C" {
-+#endif
-+
-+/* LD_FRAMEGEN=1 turns it on (off by default). */
-+int  rsx_fg_enabled(void);
-+
-+/* Starts the presenter once: it presents into swap's back buffers (with their render target views),
-+ * on queue, with sync_interval, holding swap_lock around each back buffer's use and Present. Anyone
-+ * else who presents on swap must hold swap_lock too. A Present can wait for the window's thread, so
-+ * the caller (that thread) must answer window messages whenever it waits for the presenter: rsx_fg_begin
-+ * calls pump while it waits. Returns 1 when it runs. */
-+int  rsx_fg_presenter_start(ID3D12CommandQueue* queue, IDXGISwapChain3* swap, ID3D12Resource* const* backbuf,
-+                            const D3D12_CPU_DESCRIPTOR_HANDLE* rtv, unsigned n_backbuf, UINT sync_interval,
-+                            CRITICAL_SECTION* swap_lock, void (*pump)(void));
-+
-+/* RSX thread, at a present, before anything else is recorded for it: keeps this frame (src, a
-+ * RENDER_TARGET surface of src_w x src_h, of which the top-left w x h is what the window shows) in a
-+ * history slot and, when gen > 0 game frames went undrawn since the frame before, finds the motion
-+ * between the two, all on list. Returns how many frames will be made (0..3) when the presenter will
-+ * show this frame: then submit list and call rsx_fg_hand_off, and present nothing yourself. Returns -1
-+ * when the caller presents this frame itself (frame generation off, failed or not fit for it). */
-+int  rsx_fg_begin(ID3D12Device* dev, ID3D12GraphicsCommandList* list, ID3D12Resource* src,
-+                  DXGI_FORMAT src_fmt, unsigned src_w, unsigned src_h, unsigned w, unsigned h, int gen);
-+
-+/* RSX thread, after list was submitted: the presenter takes the frame rsx_fg_begin prepared. */
-+void rsx_fg_hand_off(void);
-+
-+/* The HRESULT of a failed Present on the presenter, 0 while all is well. */
-+long rsx_fg_present_error(void);
-+
-+#ifdef __cplusplus
-+}
-+#endif
-+#endif /* _WIN32 */
-+#endif /* RSX_FRAMEGEN_H */
 diff --git a/runtime/spu/spu_coh_bitmap.h b/runtime/spu/spu_coh_bitmap.h
 --- a/runtime/spu/spu_coh_bitmap.h
 +++ b/runtime/spu/spu_coh_bitmap.h
@@ -29609,6 +28652,1017 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
      return CELL_OK;
  }
  
+diff --git a/libs/video/rsx_framegen.c b/libs/video/rsx_framegen.c
+new file mode 100644
+--- /dev/null
++++ b/libs/video/rsx_framegen.c
+@@ -0,0 +1,935 @@
++/*
++ * ps3recomp - frame generation for the D3D12 live renderer (Windows); see rsx_framegen.h.
++ *
++ * RSX thread, per drawn frame (rsx_fg_begin), on the renderer's list:
++ *   copy the presented frame into history slot n (of FG_SLOTS; slot p holds the drawn frame before),
++ *   pass 0  luma at 1/4 size (box of 4x4),           pass 1  luma at 1/16 size,
++ * and when frames went undrawn since the one before:
++ *   pass 2  motion of 4x4 blocks at 1/16 size, full search +-FG_RS (+-128 screen pixels),
++ *   pass 3  motion of 4x4 blocks at 1/4 size (16x16 screen pixels), searched +-FG_RQ around the
++ *           coarse vector, +-1 around zero (the HUD and whatever holds still) and +-1 around the four
++ *           neighbouring coarse vectors (a repeating pattern can fool one coarse block),
++ *   pass 4  3x3 median of the vectors into mvf[m] (two of them, alternating).
++ * Presenter thread, per frame handed over: on lists of its own, each made frame is a full-screen pass
++ * into the back buffer: a vector v says the current frame's pixel at x was at x + v in the frame
++ * before, so what shows at x at time t (0 = before, 1 = now) is the current frame's pixel at
++ * x - (1-t)v and the earlier frame's at x + t v, mixed by t, leaning on the newer frame where they
++ * disagree; what is the same in both frames holds still, and a block that matched badly shows the newer
++ * frame. Then the drawn frame is copied from its slot. Each is presented, waiting for the refresh there
++ * and not on the RSX thread.
++ *
++ * The RSX thread writes slot d % 3 and mvf[d % 2] for drawn frame d only once the presenter has taken
++ * frame d - 2 (shown or dropped), the last one that reads them. A frame handed over while the presenter
++ * is still busy replaces the one waiting, so a slow screen drops frames instead of falling behind.
++ * Every list call made on the RSX thread is one the renderer's recording thread carries (ld_rec_install).
++ * Luma and vectors are R32 textures in UNORDERED_ACCESS all along (typed UAV loads of R32 are always
++ * there); a vector is x and y as int12 in screen pixels plus the match quality in the top byte.
++ */
++#ifdef _WIN32
++#include "rsx_framegen.h"
++
++#include <windows.h>
++#include <d3d12.h>
++#include <dxgi1_4.h>
++#include <d3dcompiler.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define FG_RS 8           /* coarse search radius, 1/16-size pixels */
++#define FG_RQ 3           /* refine radius around the coarse vector, 1/4-size pixels */
++#define FG_SLOTS 3
++#define FG_COMBOS 6       /* drawn frame number % 6 gives both slot (% 3) and vector set (% 2) */
++#define FG_TAB 5          /* compute table: t0, u0..u3 */
++#define FG_PER_COMBO 28   /* 5 compute tables + the 3-entry draw table */
++#define FG_HEAP (FG_COMBOS * FG_PER_COMBO)
++#define FG_MAX_BB 4
++
++static const char k_src[] =
++"#define LUMA(c) dot((c).rgb, float3(0.299, 0.587, 0.114))\n"
++"/* A vector: x and y as int12 in screen pixels, and in the top byte how well its block matched\n"
++" * (mean luma difference per pixel x 2000, 255 at most). */\n"
++"uint packmv(int2 v, uint q) { return (uint(v.x) & 0xFFFu) | ((uint(v.y) & 0xFFFu) << 12) | (min(q, 255u) << 24); }\n"
++"int2 unpackmv(uint v) { return int2(int(v << 20) >> 20, int(v << 8) >> 20); }\n"
++"uint mvq(uint v) { return v >> 24; }\n"
++"#if PASS == 0\n"
++"Texture2D<float4> Frame : register(t0);\n"
++"RWTexture2D<float> OutL : register(u0);\n"
++"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
++"    if (id.x >= QW || id.y >= QH) return;\n"
++"    float s = 0;\n"
++"    [unroll] for (int y = 0; y < 4; y++) [unroll] for (int x = 0; x < 4; x++)\n"
++"        s += LUMA(Frame.Load(int3(id.x * 4 + x, id.y * 4 + y, 0)));\n"
++"    OutL[id.xy] = s * (1.0 / 16.0);\n"
++"}\n"
++"#elif PASS == 1\n"
++"RWTexture2D<float> InL : register(u0);\n"
++"RWTexture2D<float> OutL : register(u1);\n"
++"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
++"    if (id.x >= SW || id.y >= SH) return;\n"
++"    float s = 0;\n"
++"    [unroll] for (int y = 0; y < 4; y++) [unroll] for (int x = 0; x < 4; x++)\n"
++"        s += InL[uint2(id.x * 4 + x, id.y * 4 + y)];\n"
++"    OutL[id.xy] = s * (1.0 / 16.0);\n"
++"}\n"
++"#elif PASS == 2\n"
++"RWTexture2D<float> Cur : register(u0);\n"
++"RWTexture2D<float> Prev : register(u1);\n"
++"RWTexture2D<uint> Mv : register(u2);\n"
++"float P(int2 p) { return Prev[uint2(clamp(p, int2(0, 0), int2(SW - 1, SH - 1)))]; }\n"
++"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
++"    if (id.x >= GSW || id.y >= GSH) return;\n"
++"    int2 o = int2(id.xy) * 4;\n"
++"    float c[16];\n"
++"    [unroll] for (int i = 0; i < 16; i++)\n"
++"        c[i] = Cur[uint2(clamp(o + int2(i & 3, i >> 2), int2(0, 0), int2(SW - 1, SH - 1)))];\n"
++"    float best = 0;\n"
++"    [unroll] for (int j = 0; j < 16; j++) best += abs(c[j] - P(o + int2(j & 3, j >> 2)));\n"
++"    best = best * 0.9 - 0.002;\n"
++"    int2 bd = int2(0, 0);\n"
++"    [loop] for (int dy = -RS; dy <= RS; dy++)\n"
++"        [loop] for (int dx = -RS; dx <= RS; dx++) {\n"
++"            float s = 0.004 * (abs(dx) + abs(dy));\n"
++"            [unroll] for (int k = 0; k < 16; k++) s += abs(c[k] - P(o + int2(k & 3, k >> 2) + int2(dx, dy)));\n"
++"            if (s < best) { best = s; bd = int2(dx, dy); }\n"
++"        }\n"
++"    Mv[id.xy] = packmv(bd * 16, 0u);\n"
++"}\n"
++"#elif PASS == 3\n"
++"RWTexture2D<float> Cur : register(u0);\n"
++"RWTexture2D<float> Prev : register(u1);\n"
++"RWTexture2D<uint> MvS : register(u2);\n"
++"RWTexture2D<uint> MvQ : register(u3);\n"
++"float P(int2 p) { return Prev[uint2(clamp(p, int2(0, 0), int2(QW - 1, QH - 1)))]; }\n"
++"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
++"    if (id.x >= GQW || id.y >= GQH) return;\n"
++"    int2 o = int2(id.xy) * 4 - 1;\n"
++"    float c[36];\n"
++"    [unroll] for (int i = 0; i < 36; i++)\n"
++"        c[i] = Cur[uint2(clamp(o + int2(i % 6, i / 6), int2(0, 0), int2(QW - 1, QH - 1)))];\n"
++"    int2 pb = min(int2(id.xy) / 4, int2(GSW - 1, GSH - 1));\n"
++"    int2 cens[6];\n"
++"    cens[0] = int2(0, 0);\n"
++"    cens[1] = unpackmv(MvS[uint2(pb)]) / 4;\n"
++"    cens[2] = unpackmv(MvS[uint2(clamp(pb + int2(-1, 0), int2(0, 0), int2(GSW - 1, GSH - 1)))]) / 4;\n"
++"    cens[3] = unpackmv(MvS[uint2(clamp(pb + int2(1, 0), int2(0, 0), int2(GSW - 1, GSH - 1)))]) / 4;\n"
++"    cens[4] = unpackmv(MvS[uint2(clamp(pb + int2(0, -1), int2(0, 0), int2(GSW - 1, GSH - 1)))]) / 4;\n"
++"    cens[5] = unpackmv(MvS[uint2(clamp(pb + int2(0, 1), int2(0, 0), int2(GSW - 1, GSH - 1)))]) / 4;\n"
++"    float best = 1e9, bsad = 0;\n"
++"    int2 bd = int2(0, 0);\n"
++"    [loop] for (int round = 0; round < 6; round++) {\n"
++"        int2 cen = cens[round];\n"
++"        int r = round == 1 ? RQ : 1;\n"
++"        [loop] for (int dy = -r; dy <= r; dy++)\n"
++"            [loop] for (int dx = -r; dx <= r; dx++) {\n"
++"                int2 d = cen + int2(dx, dy);\n"
++"                float sad = 0;\n"
++"                [unroll] for (int k = 0; k < 36; k++) sad += abs(c[k] - P(o + int2(k % 6, k / 6) + d));\n"
++"                float s = sad + 0.003 * (abs(d.x) + abs(d.y));\n"
++"                if (d.x == 0 && d.y == 0) s = s * 0.9 - 0.002;\n"
++"                if (s < best) { best = s; bd = d; bsad = sad; }\n"
++"            }\n"
++"    }\n"
++"    MvQ[id.xy] = packmv(bd * 4, uint(bsad * (2000.0 / 36.0)));\n"
++"}\n"
++"#elif PASS == 4\n"
++"RWTexture2D<uint> In : register(u0);\n"
++"RWTexture2D<uint> Out : register(u1);\n"
++"int med9(int a[9]) {\n"
++"    [unroll] for (int i = 0; i < 5; i++)\n"
++"        [unroll] for (int j = i + 1; j < 9; j++)\n"
++"            if (a[j] < a[i]) { int t = a[i]; a[i] = a[j]; a[j] = t; }\n"
++"    return a[4];\n"
++"}\n"
++"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {\n"
++"    if (id.x >= GQW || id.y >= GQH) return;\n"
++"    int xs[9], ys[9];\n"
++"    [unroll] for (int i = 0; i < 9; i++) {\n"
++"        int2 v = unpackmv(In[uint2(clamp(int2(id.xy) + int2(i % 3 - 1, i / 3 - 1), int2(0, 0), int2(GQW - 1, GQH - 1)))]);\n"
++"        xs[i] = v.x; ys[i] = v.y;\n"
++"    }\n"
++"    Out[id.xy] = packmv(int2(med9(xs), med9(ys)), mvq(In[id.xy]));\n"
++"}\n"
++"#elif PASS == 9\n"
++"cbuffer K : register(b0) { float T; float K1; float K2; float K3; };\n"
++"Texture2D<float4> PrevF : register(t0);\n"
++"Texture2D<float4> CurF : register(t1);\n"
++"RWTexture2D<uint> Mv : register(u1);\n"
++"SamplerState S : register(s0);\n"
++"float4 vs(uint id : SV_VertexID) : SV_Position {\n"
++"    float2 uv = float2((id << 1) & 2, id & 2);\n"
++"    return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);\n"
++"}\n"
++"uint mvat(int2 i) { return Mv[uint2(clamp(i, int2(0, 0), int2(GQW - 1, GQH - 1)))]; }\n"
++"float4 ps(float4 pos : SV_Position) : SV_Target {\n"
++"    float2 px = pos.xy;\n"
++"    float2 g = px / 16.0 - 0.5;\n"
++"    int2 i0 = int2(floor(g));\n"
++"    float2 f = g - float2(i0);\n"
++"    uint v00 = mvat(i0), v10 = mvat(i0 + int2(1, 0)), v01 = mvat(i0 + int2(0, 1)), v11 = mvat(i0 + int2(1, 1));\n"
++"    float2 mv = lerp(lerp(float2(unpackmv(v00)), float2(unpackmv(v10)), f.x),\n"
++"                     lerp(float2(unpackmv(v01)), float2(unpackmv(v11)), f.x), f.y);\n"
++"    float2 inv = float2(1.0 / W, 1.0 / H);\n"
++"    float4 a = PrevF.SampleLevel(S, (px + T * mv) * inv, 0);\n"
++"    float4 b = CurF.SampleLevel(S, (px - (1.0 - T) * mv) * inv, 0);\n"
++"    float d = abs(LUMA(a) - LUMA(b));\n"
++"    float w = lerp(T, 1.0, saturate((d - 0.08) * 6.0));\n"
++"    float3 moved = lerp(a.rgb, b.rgb, w);\n"
++"    float3 p0 = PrevF.SampleLevel(S, px * inv, 0).rgb;\n"
++"    float3 c0 = CurF.SampleLevel(S, px * inv, 0).rgb;\n"
++"    float s0 = abs(LUMA(p0) - LUMA(c0));\n"
++"    [unroll] for (int i = 0; i < 4; i++) {\n"
++"        float2 o = float2(i == 0 ? 2 : i == 1 ? -2 : 0, i == 2 ? 2 : i == 3 ? -2 : 0);\n"
++"        s0 = max(s0, abs(LUMA(PrevF.SampleLevel(S, (px + o) * inv, 0)) - LUMA(CurF.SampleLevel(S, (px + o) * inv, 0))));\n"
++"    }\n"
++"    float still = saturate(1.0 - (s0 - 0.01) * 40.0);\n"
++"    float3 o3 = lerp(moved, lerp(p0, c0, T), still);\n"
++"    uint q = max(max(mvq(v00), mvq(v10)), max(mvq(v01), mvq(v11)));\n"
++"    float fb = saturate((float(q) / 2000.0 - 0.035) / 0.035);\n"
++"    return float4(lerp(o3, c0, fb), 1.0);\n"
++"}\n"
++"#endif\n";
++
++typedef struct { LONG64 seq; int n, p, m, made; unsigned pace_us; } fg_item;
++
++static struct {
++    /* GPU objects, made on the RSX thread at the first frame */
++    int inited, failed, warned_fmt;
++    ID3D12Device* dev;
++    unsigned W, H, QW, QH, SW, SH, GSW, GSH, GQW, GQH;
++    ID3D12Resource* frame[FG_SLOTS];
++    D3D12_RESOURCE_STATES fstate[FG_SLOTS];
++    ID3D12Resource* lq[FG_SLOTS];
++    ID3D12Resource* ls[FG_SLOTS];
++    ID3D12Resource *mvs, *mvq, *mvf[2];
++    ID3D12DescriptorHeap* heap;
++    UINT step;
++    ID3D12RootSignature *crs, *grs;
++    ID3D12PipelineState* cpso[5];
++    ID3D12PipelineState* gpso;
++    D3D12_GPU_DESCRIPTOR_HANDLE ctab[FG_COMBOS][5], gtab[FG_COMBOS];
++    /* RSX thread */
++    LONG64 seq;          /* number of the last drawn frame taken */
++    int have;            /* that frame is in its slot, so the next one can be made against it */
++    fg_item cur;         /* what rsx_fg_begin prepared, for rsx_fg_hand_off */
++    unsigned long long waited_us;
++    /* presenter */
++    int pt_on;
++    HANDLE pt_thread, mb_event, done_event;
++    CRITICAL_SECTION mb_lock;
++    fg_item mb;
++    int mb_full;
++    volatile LONG64 done_seq;
++    volatile LONG err;
++    ID3D12CommandQueue* q;
++    IDXGISwapChain3* swap;
++    ID3D12Resource* bb[FG_MAX_BB];
++    D3D12_CPU_DESCRIPTOR_HANDLE rtv[FG_MAX_BB];
++    unsigned nbb;
++    UINT sync;
++    CRITICAL_SECTION* swap_lock;
++    void (*pump)(void);
++    ID3D12CommandAllocator* calloc[3];
++    ID3D12GraphicsCommandList* cl;
++    ID3D12Fence* pf;
++    UINT64 pfv, afence[3];
++    HANDLE pev;
++    unsigned ring, ring_k;
++    /* counters (presenter writes, RSX thread reports) */
++    volatile LONG64 made, shown, dropped;
++    LONG64 rep_made, rep_shown, rep_dropped, rep_drawn, drawn;
++    ULONGLONG rep_at;
++    /* LD_FRAMEGEN_DUMP (presenter) */
++    const char* dump_dir;
++    unsigned dump_every, dump_n, dump_files, dump_pending;
++    ID3D12Resource* rb;
++    UINT rb_pitch;
++    ID3D12Fence* fence;
++    UINT64 fence_v;
++    HANDLE fence_ev;
++} fg;
++
++static int s_on = -1;
++int rsx_fg_enabled(void)
++{
++    if (s_on < 0) {
++        const char* e = getenv("LD_FRAMEGEN");
++        const char* m = getenv("LD_FRAMEGEN_MULT");   /* a multiplier of 2 or more asks for it too */
++        s_on = (e && atoi(e) != 0) || (m && atoi(m) >= 2);
++        if (s_on)
++            fprintf(stderr, "[framegen] on: frames that watch mode or 30 fps leave undrawn are made from the "
++                            "drawn ones, and a thread of its own presents (LD_FRAMEGEN)\n");
++    }
++    return s_on;
++}
++
++long rsx_fg_present_error(void) { return fg.err; }
++
++static void fg_fail(const char* what, HRESULT hr)
++{
++    fprintf(stderr, "[framegen] off: %s failed (hr=0x%08lX)\n", what, (unsigned long)hr);
++    fg.failed = 1;
++}
++
++static ID3D12Resource* fg_tex(unsigned w, unsigned h, DXGI_FORMAT f, int uav, D3D12_RESOURCE_STATES st)
++{
++    D3D12_HEAP_PROPERTIES hp = {0};
++    hp.Type = D3D12_HEAP_TYPE_DEFAULT;
++    D3D12_RESOURCE_DESC d = {0};
++    d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
++    d.Width = w; d.Height = h; d.DepthOrArraySize = 1; d.MipLevels = 1;
++    d.Format = f; d.SampleDesc.Count = 1; d.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
++    d.Flags = uav ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
++    ID3D12Resource* r = NULL;
++    HRESULT hr = fg.dev->lpVtbl->CreateCommittedResource(fg.dev, &hp, D3D12_HEAP_FLAG_NONE, &d, st, NULL,
++                                                         &IID_ID3D12Resource, (void**)&r);
++    if (FAILED(hr)) { fg_fail("texture", hr); return NULL; }
++    return r;
++}
++
++static D3D12_CPU_DESCRIPTOR_HANDLE fg_cpu(unsigned slot)
++{
++    D3D12_CPU_DESCRIPTOR_HANDLE h;
++    fg.heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(fg.heap, &h);
++    h.ptr += (SIZE_T)slot * fg.step;
++    return h;
++}
++
++static D3D12_GPU_DESCRIPTOR_HANDLE fg_gpu(unsigned slot)
++{
++    D3D12_GPU_DESCRIPTOR_HANDLE h;
++    fg.heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(fg.heap, &h);
++    h.ptr += (UINT64)slot * fg.step;
++    return h;
++}
++
++/* A NULL resource makes a null descriptor, for the slots a pass does not use. */
++static void fg_srv(unsigned slot, ID3D12Resource* r, DXGI_FORMAT f)
++{
++    D3D12_SHADER_RESOURCE_VIEW_DESC d = {0};
++    d.Format = f;
++    d.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
++    d.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
++    d.Texture2D.MipLevels = 1;
++    fg.dev->lpVtbl->CreateShaderResourceView(fg.dev, r, &d, fg_cpu(slot));
++}
++
++static void fg_uav(unsigned slot, ID3D12Resource* r, DXGI_FORMAT f)
++{
++    D3D12_UNORDERED_ACCESS_VIEW_DESC d = {0};
++    d.Format = f;
++    d.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
++    fg.dev->lpVtbl->CreateUnorderedAccessView(fg.dev, r, NULL, &d, fg_cpu(slot));
++}
++
++static ID3DBlob* fg_compile(int pass, const char* entry, const char* target)
++{
++    static const char* names[13] = { "PASS", "W", "H", "QW", "QH", "SW", "SH", "GSW", "GSH", "GQW", "GQH", "RS", "RQ" };
++    char vals[13][16];
++    const unsigned v[13] = { (unsigned)pass, fg.W, fg.H, fg.QW, fg.QH, fg.SW, fg.SH,
++                             fg.GSW, fg.GSH, fg.GQW, fg.GQH, FG_RS, FG_RQ };
++    D3D_SHADER_MACRO m[14];
++    for (int i = 0; i < 13; i++) {
++        snprintf(vals[i], sizeof vals[i], "%u", v[i]);
++        m[i].Name = names[i];
++        m[i].Definition = vals[i];
++    }
++    m[13].Name = NULL; m[13].Definition = NULL;
++    ID3DBlob* b = NULL;
++    ID3DBlob* err = NULL;
++    HRESULT hr = D3DCompile(k_src, sizeof k_src - 1u, "framegen", m, NULL, entry, target,
++                            D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &b, &err);
++    if (FAILED(hr)) {
++        fprintf(stderr, "[framegen] shader %d (%s) failed to compile: %s\n", pass, entry,
++                err ? (const char*)err->lpVtbl->GetBufferPointer(err) : "?");
++        if (err) err->lpVtbl->Release(err);
++        fg.failed = 1;
++        return NULL;
++    }
++    if (err) err->lpVtbl->Release(err);
++    return b;
++}
++
++static ID3D12RootSignature* fg_rootsig(const D3D12_ROOT_SIGNATURE_DESC* rsd)
++{
++    ID3DBlob* sig = NULL;
++    ID3DBlob* err = NULL;
++    HRESULT hr = D3D12SerializeRootSignature(rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
++    if (err) err->lpVtbl->Release(err);
++    if (FAILED(hr)) { fg_fail("root signature", hr); return NULL; }
++    ID3D12RootSignature* rs = NULL;
++    hr = fg.dev->lpVtbl->CreateRootSignature(fg.dev, 0, sig->lpVtbl->GetBufferPointer(sig),
++                                             sig->lpVtbl->GetBufferSize(sig), &IID_ID3D12RootSignature, (void**)&rs);
++    sig->lpVtbl->Release(sig);
++    if (FAILED(hr)) { fg_fail("root signature", hr); return NULL; }
++    return rs;
++}
++
++/* Descriptor tables for each drawn frame number % FG_COMBOS: its slot n, the slot p before, vectors m. */
++static void fg_tables(void)
++{
++    const DXGI_FORMAT F = DXGI_FORMAT_R32_FLOAT, U = DXGI_FORMAT_R32_UINT;
++    for (int c = 0; c < FG_COMBOS; c++) {
++        const int n = c % FG_SLOTS, p = (c + FG_SLOTS - 1) % FG_SLOTS, m = c % 2;
++        const unsigned base = (unsigned)c * FG_PER_COMBO;
++        ID3D12Resource* const t0[5] = { fg.frame[n], NULL, NULL, NULL, NULL };
++        ID3D12Resource* const u[5][4] = {
++            { fg.lq[n], NULL, NULL, NULL },
++            { fg.lq[n], fg.ls[n], NULL, NULL },
++            { fg.ls[n], fg.ls[p], fg.mvs, NULL },
++            { fg.lq[n], fg.lq[p], fg.mvs, fg.mvq },
++            { fg.mvq, fg.mvf[m], NULL, NULL },
++        };
++        const DXGI_FORMAT uf[5][4] = { { F, F, F, F }, { F, F, F, F }, { F, F, U, F }, { F, F, U, U }, { U, U, U, U } };
++        for (int i = 0; i < 5; i++) {
++            const unsigned s = base + (unsigned)i * FG_TAB;
++            fg_srv(s, t0[i], DXGI_FORMAT_R8G8B8A8_UNORM);
++            for (int j = 0; j < 4; j++) fg_uav(s + 1u + (unsigned)j, u[i][j], uf[i][j]);
++            fg.ctab[c][i] = fg_gpu(s);
++        }
++        const unsigned g = base + 5u * FG_TAB;
++        fg_srv(g, fg.frame[p], DXGI_FORMAT_R8G8B8A8_UNORM);
++        fg_srv(g + 1u, fg.frame[n], DXGI_FORMAT_R8G8B8A8_UNORM);
++        fg_uav(g + 2u, fg.mvf[m], U);
++        fg.gtab[c] = fg_gpu(g);
++    }
++}
++
++static int fg_setup(ID3D12Device* dev, unsigned w, unsigned h)
++{
++    if (fg.failed) return 0;
++    if (fg.inited) {
++        if (fg.dev == dev && fg.W == w && fg.H == h) return 1;
++        /* The presenter may still be using these: rather than rebuild under it, stop. */
++        fprintf(stderr, "[framegen] off: the window's size changed\n");
++        fg.failed = 1;
++        return 0;
++    }
++    fg.dev = dev; fg.W = w; fg.H = h;
++    fg.QW = w / 4u; fg.QH = h / 4u; fg.SW = fg.QW / 4u; fg.SH = fg.QH / 4u;
++    fg.GSW = (fg.SW + 3u) / 4u; fg.GSH = (fg.SH + 3u) / 4u;
++    fg.GQW = (fg.QW + 3u) / 4u; fg.GQH = (fg.QH + 3u) / 4u;
++    if (fg.SW < 8u || fg.SH < 8u) { fprintf(stderr, "[framegen] off: window too small\n"); fg.failed = 1; return 0; }
++
++    for (int i = 0; i < FG_SLOTS; i++) {
++        fg.frame[i] = fg_tex(w, h, DXGI_FORMAT_R8G8B8A8_TYPELESS, 0, D3D12_RESOURCE_STATE_COPY_DEST);
++        fg.fstate[i] = D3D12_RESOURCE_STATE_COPY_DEST;
++        fg.lq[i] = fg_tex(fg.QW, fg.QH, DXGI_FORMAT_R32_FLOAT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++        fg.ls[i] = fg_tex(fg.SW, fg.SH, DXGI_FORMAT_R32_FLOAT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++    }
++    fg.mvs = fg_tex(fg.GSW, fg.GSH, DXGI_FORMAT_R32_UINT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++    fg.mvq = fg_tex(fg.GQW, fg.GQH, DXGI_FORMAT_R32_UINT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++    fg.mvf[0] = fg_tex(fg.GQW, fg.GQH, DXGI_FORMAT_R32_UINT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++    fg.mvf[1] = fg_tex(fg.GQW, fg.GQH, DXGI_FORMAT_R32_UINT, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++    if (fg.failed) return 0;
++
++    D3D12_DESCRIPTOR_HEAP_DESC hd = {0};
++    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
++    hd.NumDescriptors = FG_HEAP;
++    hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
++    HRESULT hr = dev->lpVtbl->CreateDescriptorHeap(dev, &hd, &IID_ID3D12DescriptorHeap, (void**)&fg.heap);
++    if (FAILED(hr)) { fg_fail("descriptor heap", hr); return 0; }
++    fg.step = dev->lpVtbl->GetDescriptorHandleIncrementSize(dev, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
++    fg_tables();
++
++    /* Compute: one table, t0 then u0..u3. */
++    D3D12_DESCRIPTOR_RANGE cr[2] = {0};
++    cr[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; cr[0].NumDescriptors = 1;
++    cr[0].OffsetInDescriptorsFromTableStart = 0;
++    cr[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; cr[1].NumDescriptors = 4;
++    cr[1].OffsetInDescriptorsFromTableStart = 1;
++    D3D12_ROOT_PARAMETER cp = {0};
++    cp.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
++    cp.DescriptorTable.NumDescriptorRanges = 2;
++    cp.DescriptorTable.pDescriptorRanges = cr;
++    cp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
++    D3D12_ROOT_SIGNATURE_DESC crsd = {0};
++    crsd.NumParameters = 1; crsd.pParameters = &cp;
++    fg.crs = fg_rootsig(&crsd);
++
++    /* Draw: 4 constants (b0), a table of the two frames (t0, t1) and the vectors (u1), one sampler. */
++    D3D12_DESCRIPTOR_RANGE gr[2] = {0};
++    gr[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; gr[0].NumDescriptors = 2;
++    gr[0].OffsetInDescriptorsFromTableStart = 0;
++    gr[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; gr[1].NumDescriptors = 1;
++    gr[1].BaseShaderRegister = 1;   /* u0 is the render target's in a pixel shader */
++    gr[1].OffsetInDescriptorsFromTableStart = 2;
++    D3D12_ROOT_PARAMETER gp[2] = {0};
++    gp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
++    gp[0].Constants.Num32BitValues = 4;
++    gp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
++    gp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
++    gp[1].DescriptorTable.NumDescriptorRanges = 2;
++    gp[1].DescriptorTable.pDescriptorRanges = gr;
++    gp[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
++    D3D12_STATIC_SAMPLER_DESC smp = {0};
++    smp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
++    smp.AddressU = smp.AddressV = smp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
++    smp.MaxLOD = D3D12_FLOAT32_MAX;
++    smp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
++    D3D12_ROOT_SIGNATURE_DESC grsd = {0};
++    grsd.NumParameters = 2; grsd.pParameters = gp;
++    grsd.NumStaticSamplers = 1; grsd.pStaticSamplers = &smp;
++    fg.grs = fg_rootsig(&grsd);
++    if (fg.failed) return 0;
++
++    for (int p = 0; p < 5; p++) {
++        ID3DBlob* cs = fg_compile(p, "main", "cs_5_0");
++        if (!cs) return 0;
++        D3D12_COMPUTE_PIPELINE_STATE_DESC cd = {0};
++        cd.pRootSignature = fg.crs;
++        cd.CS.pShaderBytecode = cs->lpVtbl->GetBufferPointer(cs);
++        cd.CS.BytecodeLength = cs->lpVtbl->GetBufferSize(cs);
++        hr = dev->lpVtbl->CreateComputePipelineState(dev, &cd, &IID_ID3D12PipelineState, (void**)&fg.cpso[p]);
++        cs->lpVtbl->Release(cs);
++        if (FAILED(hr)) { fg_fail("compute pipeline", hr); return 0; }
++    }
++    ID3DBlob* vs = fg_compile(9, "vs", "vs_5_0");
++    ID3DBlob* ps = vs ? fg_compile(9, "ps", "ps_5_0") : NULL;
++    if (!vs || !ps) { if (vs) vs->lpVtbl->Release(vs); return 0; }
++    D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {0};
++    pd.pRootSignature = fg.grs;
++    pd.VS.pShaderBytecode = vs->lpVtbl->GetBufferPointer(vs); pd.VS.BytecodeLength = vs->lpVtbl->GetBufferSize(vs);
++    pd.PS.pShaderBytecode = ps->lpVtbl->GetBufferPointer(ps); pd.PS.BytecodeLength = ps->lpVtbl->GetBufferSize(ps);
++    pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
++    pd.SampleMask = 0xFFFFFFFFu;
++    pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
++    pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
++    pd.RasterizerState.DepthClipEnable = TRUE;
++    pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
++    pd.NumRenderTargets = 1;
++    pd.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;   /* the swap chain's */
++    pd.SampleDesc.Count = 1;
++    hr = dev->lpVtbl->CreateGraphicsPipelineState(dev, &pd, &IID_ID3D12PipelineState, (void**)&fg.gpso);
++    vs->lpVtbl->Release(vs); ps->lpVtbl->Release(ps);
++    if (FAILED(hr)) { fg_fail("draw pipeline", hr); return 0; }
++
++    /* LD_FRAMEGEN_DUMP=<dir> [LD_FRAMEGEN_DUMP_EVERY=n, default 120]: before / made / after as .ppm. */
++    fg.dump_dir = getenv("LD_FRAMEGEN_DUMP");
++    if (fg.dump_dir && fg.dump_dir[0]) {
++        const char* e = getenv("LD_FRAMEGEN_DUMP_EVERY");
++        fg.dump_every = e && atoi(e) > 0 ? (unsigned)atoi(e) : 120u;
++        fg.rb_pitch = (w * 4u + 255u) & ~255u;
++        D3D12_HEAP_PROPERTIES hp = {0};
++        hp.Type = D3D12_HEAP_TYPE_READBACK;
++        D3D12_RESOURCE_DESC bd = {0};
++        bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
++        bd.Width = (UINT64)fg.rb_pitch * h * 3u;
++        bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
++        bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
++        bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
++        if (FAILED(dev->lpVtbl->CreateCommittedResource(dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
++                       D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&fg.rb)) ||
++            FAILED(dev->lpVtbl->CreateFence(dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void**)&fg.fence)))
++            fg.dump_dir = NULL;
++        else
++            fg.fence_ev = CreateEventA(NULL, FALSE, FALSE, NULL);
++    } else {
++        fg.dump_dir = NULL;
++    }
++
++    fg.inited = 1;
++    fprintf(stderr, "[framegen] ready for %ux%u: motion at %ux%u and %ux%u, vectors %ux%u\n",
++            w, h, fg.SW, fg.SH, fg.QW, fg.QH, fg.GQW, fg.GQH);
++    return 1;
++}
++
++static void fg_trans(D3D12_RESOURCE_BARRIER* b, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to)
++{
++    memset(b, 0, sizeof *b);
++    b->Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++    b->Transition.pResource = r;
++    b->Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++    b->Transition.StateBefore = from;
++    b->Transition.StateAfter = to;
++}
++
++static void fg_uav_barrier(ID3D12GraphicsCommandList* l)
++{
++    D3D12_RESOURCE_BARRIER b;
++    memset(&b, 0, sizeof b);
++    b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
++    b.UAV.pResource = NULL;
++    l->lpVtbl->ResourceBarrier(l, 1, &b);
++}
++
++static void fg_dispatch(ID3D12GraphicsCommandList* l, int pass, int combo, unsigned nx, unsigned ny)
++{
++    l->lpVtbl->SetPipelineState(l, fg.cpso[pass]);
++    l->lpVtbl->SetComputeRootDescriptorTable(l, 0, fg.ctab[combo][pass]);
++    l->lpVtbl->Dispatch(l, (nx + 7u) / 8u, (ny + 7u) / 8u, 1);
++}
++
++#define FG_SR (D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
++
++/* ---------------------------------------------------------------------------------------------------
++ * presenter
++ * -------------------------------------------------------------------------------------------------*/
++
++static ID3D12GraphicsCommandList* fg_list_open(void)
++{
++    const unsigned k = fg.ring++ % 3u;
++    if (fg.pf->lpVtbl->GetCompletedValue(fg.pf) < fg.afence[k]) {   /* three lists back: rarely waits */
++        fg.pf->lpVtbl->SetEventOnCompletion(fg.pf, fg.afence[k], fg.pev);
++        WaitForSingleObject(fg.pev, INFINITE);
++    }
++    ID3D12CommandAllocator* a = fg.calloc[k];
++    if (FAILED(a->lpVtbl->Reset(a)) || FAILED(fg.cl->lpVtbl->Reset(fg.cl, a, NULL))) return NULL;
++    fg.ring_k = k;
++    return fg.cl;
++}
++
++static int fg_list_submit(void)
++{
++    if (FAILED(fg.cl->lpVtbl->Close(fg.cl))) return 0;
++    ID3D12CommandList* ls[1] = { (ID3D12CommandList*)fg.cl };
++    fg.q->lpVtbl->ExecuteCommandLists(fg.q, 1, ls);
++    fg.q->lpVtbl->Signal(fg.q, fg.pf, ++fg.pfv);
++    fg.afence[fg.ring_k] = fg.pfv;
++    return 1;
++}
++
++static void fg_copy_out(ID3D12GraphicsCommandList* l, ID3D12Resource* r, DXGI_FORMAT f, unsigned slot)
++{
++    D3D12_TEXTURE_COPY_LOCATION dst = {0}, s = {0};
++    dst.pResource = fg.rb; dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
++    dst.PlacedFootprint.Offset = (UINT64)fg.rb_pitch * fg.H * slot;
++    dst.PlacedFootprint.Footprint.Format = f;
++    dst.PlacedFootprint.Footprint.Width = fg.W;
++    dst.PlacedFootprint.Footprint.Height = fg.H;
++    dst.PlacedFootprint.Footprint.Depth = 1;
++    dst.PlacedFootprint.Footprint.RowPitch = fg.rb_pitch;
++    s.pResource = r; s.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++    l->lpVtbl->CopyTextureRegion(l, &dst, 0, 0, 0, &s, NULL);
++}
++
++/* Made frame k of it->made into back buffer bb. */
++static void fg_draw(ID3D12GraphicsCommandList* l, const fg_item* it, int k, ID3D12Resource* bb,
++                    D3D12_CPU_DESCRIPTOR_HANDLE rtv)
++{
++    const int c = (int)(it->seq % FG_COMBOS);
++    const float cst[4] = { (float)k / (float)(it->made + 1), 0.0f, 0.0f, 0.0f };
++    D3D12_RESOURCE_BARRIER b[3];
++    fg_trans(&b[0], bb, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
++    l->lpVtbl->ResourceBarrier(l, 1, b);
++    l->lpVtbl->SetDescriptorHeaps(l, 1, &fg.heap);
++    l->lpVtbl->SetGraphicsRootSignature(l, fg.grs);
++    l->lpVtbl->SetPipelineState(l, fg.gpso);
++    l->lpVtbl->SetGraphicsRoot32BitConstants(l, 0, 4, cst, 0);
++    l->lpVtbl->SetGraphicsRootDescriptorTable(l, 1, fg.gtab[c]);
++    l->lpVtbl->OMSetRenderTargets(l, 1, &rtv, FALSE, NULL);
++    D3D12_VIEWPORT vp = { 0.0f, 0.0f, (float)fg.W, (float)fg.H, 0.0f, 1.0f };
++    D3D12_RECT sc = { 0, 0, (LONG)fg.W, (LONG)fg.H };
++    l->lpVtbl->RSSetViewports(l, 1, &vp);
++    l->lpVtbl->RSSetScissorRects(l, 1, &sc);
++    l->lpVtbl->IASetPrimitiveTopology(l, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
++    l->lpVtbl->DrawInstanced(l, 3, 1, 0, 0);
++
++    const int dump = fg.dump_dir && fg.dump_files < 12u && k == 1 && (fg.dump_n++ % fg.dump_every) == 0u;
++    if (dump) {
++        fg_trans(&b[0], bb, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
++        fg_trans(&b[1], fg.frame[it->p], FG_SR, D3D12_RESOURCE_STATE_COPY_SOURCE);
++        fg_trans(&b[2], fg.frame[it->n], FG_SR, D3D12_RESOURCE_STATE_COPY_SOURCE);
++        l->lpVtbl->ResourceBarrier(l, 3, b);
++        fg_copy_out(l, fg.frame[it->p], DXGI_FORMAT_R8G8B8A8_TYPELESS, 0);
++        fg_copy_out(l, bb, DXGI_FORMAT_R8G8B8A8_UNORM, 1);
++        fg_copy_out(l, fg.frame[it->n], DXGI_FORMAT_R8G8B8A8_TYPELESS, 2);
++        fg_trans(&b[0], bb, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
++        fg_trans(&b[1], fg.frame[it->p], D3D12_RESOURCE_STATE_COPY_SOURCE, FG_SR);
++        fg_trans(&b[2], fg.frame[it->n], D3D12_RESOURCE_STATE_COPY_SOURCE, FG_SR);
++        l->lpVtbl->ResourceBarrier(l, 3, b);
++        fg.dump_pending = 1;
++    } else {
++        fg_trans(&b[0], bb, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
++        l->lpVtbl->ResourceBarrier(l, 1, b);
++    }
++}
++
++/* The drawn frame, from its slot, into back buffer bb. */
++static void fg_copy_drawn(ID3D12GraphicsCommandList* l, const fg_item* it, ID3D12Resource* bb)
++{
++    D3D12_RESOURCE_BARRIER b[2];
++    fg_trans(&b[0], fg.frame[it->n], FG_SR, D3D12_RESOURCE_STATE_COPY_SOURCE);
++    fg_trans(&b[1], bb, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
++    l->lpVtbl->ResourceBarrier(l, 2, b);
++    l->lpVtbl->CopyResource(l, bb, fg.frame[it->n]);
++    fg_trans(&b[0], fg.frame[it->n], D3D12_RESOURCE_STATE_COPY_SOURCE, FG_SR);
++    fg_trans(&b[1], bb, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
++    l->lpVtbl->ResourceBarrier(l, 2, b);
++}
++
++static void fg_dump_write(void)
++{
++    if (!fg.dump_pending || !fg.rb || !fg.fence || !fg.fence_ev) return;
++    fg.dump_pending = 0;
++    const UINT64 v = ++fg.fence_v;
++    if (FAILED(fg.q->lpVtbl->Signal(fg.q, fg.fence, v))) return;
++    if (fg.fence->lpVtbl->GetCompletedValue(fg.fence) < v) {
++        fg.fence->lpVtbl->SetEventOnCompletion(fg.fence, v, fg.fence_ev);
++        WaitForSingleObject(fg.fence_ev, 5000);
++    }
++    unsigned char* p = NULL;
++    D3D12_RANGE rr = { 0, (SIZE_T)fg.rb_pitch * fg.H * 3u };
++    if (FAILED(fg.rb->lpVtbl->Map(fg.rb, 0, &rr, (void**)&p)) || !p) return;
++    static const char* tag[3] = { "a_before", "b_made", "c_after" };
++    unsigned char* row = (unsigned char*)malloc((size_t)fg.W * 3u);
++    for (unsigned i = 0; i < 3 && row; i++) {
++        char path[MAX_PATH * 2];
++        snprintf(path, sizeof path, "%s\\fg_%03u_%s.ppm", fg.dump_dir, fg.dump_files, tag[i]);
++        FILE* f = fopen(path, "wb");
++        if (!f) continue;
++        fprintf(f, "P6\n%u %u\n255\n", fg.W, fg.H);
++        for (unsigned y = 0; y < fg.H; y++) {
++            const unsigned char* src = p + (size_t)fg.rb_pitch * fg.H * i + (size_t)fg.rb_pitch * y;
++            for (unsigned x = 0; x < fg.W; x++) {
++                row[x * 3u + 0u] = src[x * 4u + 0u];
++                row[x * 3u + 1u] = src[x * 4u + 1u];
++                row[x * 3u + 2u] = src[x * 4u + 2u];
++            }
++            fwrite(row, 3, fg.W, f);
++        }
++        fclose(f);
++    }
++    free(row);
++    D3D12_RANGE none = { 0, 0 };
++    fg.rb->lpVtbl->Unmap(fg.rb, 0, &none);
++    fprintf(stderr, "[framegen] dump %u written to %s\n", fg.dump_files, fg.dump_dir);
++    fg.dump_files++;
++}
++
++/* One list into the current back buffer, submitted and presented, all under the swap chain's lock.
++ * A paced group (it->pace_us, the frame rate multiplier) is presented with sync interval 0: its frames
++ * are timed by the presenter's own clock, and waiting for the refresh inside Present as well kept this
++ * thread in the driver for most of every frame (two presents a game frame on a 165 Hz screen): the RSX
++ * thread's own device calls queued behind it and the game fell from 54 to 22 frames a second. Without
++ * the tearing flag a windowed flip-model swap chain still shows whole frames, the newest at each
++ * refresh. */
++static HRESULT fg_present_one(const fg_item* it, int k)
++{
++    EnterCriticalSection(fg.swap_lock);
++    const UINT fb = fg.swap->lpVtbl->GetCurrentBackBufferIndex(fg.swap);
++    HRESULT hr = E_FAIL;
++    ID3D12GraphicsCommandList* l = fb < fg.nbb ? fg_list_open() : NULL;
++    if (l) {
++        if (k > 0) fg_draw(l, it, k, fg.bb[fb], fg.rtv[fb]);
++        else fg_copy_drawn(l, it, fg.bb[fb]);
++        if (fg_list_submit()) hr = fg.swap->lpVtbl->Present(fg.swap, it->pace_us ? 0u : fg.sync, 0);
++    }
++    LeaveCriticalSection(fg.swap_lock);
++    if (k > 0) fg_dump_write();
++    return hr;
++}
++
++/* Until t (QueryPerformanceCounter ticks), or until the RSX thread hands over a newer frame, whichever
++ * comes first: returns 1 when it was the time, 0 when a newer frame is waiting. The presenter must never
++ * sit on a frame while the next one is ready: the RSX thread waits for it two frames on (fg_wait_done),
++ * so a presenter that paces a group over a whole frame time slows the game itself down (the first
++ * version: 17 game frames a second with x2 on, 1.5 s in 5 waited for the presenter). */
++static int fg_newer_waiting(void)
++{
++    EnterCriticalSection(&fg.mb_lock);
++    const int w = fg.mb_full;
++    LeaveCriticalSection(&fg.mb_lock);
++    return w;
++}
++static int fg_wait_until(LONGLONG t, LONGLONG freq)
++{
++    static HANDLE timer;   /* the presenter thread's alone */
++    for (;;) {
++        if (fg_newer_waiting()) return 0;
++        LARGE_INTEGER now;
++        QueryPerformanceCounter(&now);
++        const LONGLONG left_us = (t - now.QuadPart) * 1000000 / freq;
++        if (left_us <= 0 || left_us > 100000) return 1;   /* reached (or a nonsense target) */
++        if (left_us <= 400) { YieldProcessor(); continue; }
++        if (!timer) timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
++        LARGE_INTEGER due; due.QuadPart = -(left_us - 300) * 10;
++        if (timer && SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
++            HANDLE h[2] = { fg.mb_event, timer };   /* a hand-over ends the wait at once */
++            WaitForMultipleObjects(2, h, FALSE, 200);
++        } else {
++            WaitForSingleObject(fg.mb_event, (DWORD)(left_us / 1000));
++        }
++    }
++}
++
++static DWORD WINAPI fg_presenter(LPVOID arg)
++{
++    (void)arg;
++    for (;;) {
++        WaitForSingleObject(fg.mb_event, INFINITE);
++        for (;;) {
++            fg_item it;
++            EnterCriticalSection(&fg.mb_lock);
++            const int has = fg.mb_full;
++            it = fg.mb;
++            fg.mb_full = 0;
++            LeaveCriticalSection(&fg.mb_lock);
++            if (!has) break;
++            LARGE_INTEGER pf, pt0;
++            QueryPerformanceFrequency(&pf); QueryPerformanceCounter(&pt0);
++            const LONGLONG step = it.pace_us ? (LONGLONG)it.pace_us * pf.QuadPart / 1000000 : 0;
++            int hurry = 0;   /* a newer frame is waiting: no more made frames of this one, the drawn one at once */
++            for (int k = 1; k <= it.made && !fg.err && !hurry; k++) {
++                if (step && k > 1 && !fg_wait_until(pt0.QuadPart + step * (k - 1), pf.QuadPart)) { hurry = 1; break; }
++                const HRESULT hr = fg_present_one(&it, k);
++                if (FAILED(hr)) InterlockedExchange(&fg.err, (LONG)hr);
++                else InterlockedIncrement64(&fg.made);
++            }
++            if (!fg.err) {
++                if (step && it.made > 0 && !hurry) (void)fg_wait_until(pt0.QuadPart + step * it.made, pf.QuadPart);
++                const HRESULT hr = fg_present_one(&it, 0);
++                if (FAILED(hr)) InterlockedExchange(&fg.err, (LONG)hr);
++                else InterlockedIncrement64(&fg.shown);
++            }
++            InterlockedExchange64(&fg.done_seq, it.seq);
++            SetEvent(fg.done_event);
++        }
++    }
++}
++
++int rsx_fg_presenter_start(ID3D12CommandQueue* q, IDXGISwapChain3* swap, ID3D12Resource* const* backbuf,
++                           const D3D12_CPU_DESCRIPTOR_HANDLE* rtv, unsigned n, UINT sync, CRITICAL_SECTION* swap_lock,
++                           void (*pump)(void))
++{
++    if (fg.pt_on) return 1;
++    if (!rsx_fg_enabled() || !q || !swap || !swap_lock || !n || n > FG_MAX_BB) return 0;
++    ID3D12Device* dev = NULL;
++    if (FAILED(q->lpVtbl->GetDevice(q, &IID_ID3D12Device, (void**)&dev)) || !dev) return 0;
++    for (int i = 0; i < 3; i++)
++        if (FAILED(dev->lpVtbl->CreateCommandAllocator(dev, D3D12_COMMAND_LIST_TYPE_DIRECT,
++                       &IID_ID3D12CommandAllocator, (void**)&fg.calloc[i]))) { dev->lpVtbl->Release(dev); return 0; }
++    if (FAILED(dev->lpVtbl->CreateCommandList(dev, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, fg.calloc[0], NULL,
++                   &IID_ID3D12GraphicsCommandList, (void**)&fg.cl)) ||
++        FAILED(dev->lpVtbl->CreateFence(dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void**)&fg.pf))) {
++        dev->lpVtbl->Release(dev);
++        return 0;
++    }
++    dev->lpVtbl->Release(dev);
++    fg.cl->lpVtbl->Close(fg.cl);
++    fg.pev = CreateEventA(NULL, FALSE, FALSE, NULL);
++    fg.mb_event = CreateEventA(NULL, FALSE, FALSE, NULL);
++    fg.done_event = CreateEventA(NULL, FALSE, FALSE, NULL);
++    if (!fg.pev || !fg.mb_event || !fg.done_event) return 0;
++    InitializeCriticalSection(&fg.mb_lock);
++    fg.q = q; fg.swap = swap; fg.swap_lock = swap_lock; fg.sync = sync; fg.nbb = n; fg.pump = pump;
++    for (unsigned i = 0; i < n; i++) { fg.bb[i] = backbuf[i]; fg.rtv[i] = rtv[i]; }
++    fg.pt_thread = CreateThread(NULL, 0, fg_presenter, NULL, 0, NULL);
++    if (!fg.pt_thread) return 0;
++    SetThreadPriority(fg.pt_thread, THREAD_PRIORITY_ABOVE_NORMAL);
++    fg.pt_on = 1;
++    fprintf(stderr, "[framegen] presenter thread started\n");
++    return 1;
++}
++
++/* ---------------------------------------------------------------------------------------------------
++ * RSX thread
++ * -------------------------------------------------------------------------------------------------*/
++
++/* Until the presenter has taken frame target (shown or dropped). 0 if it stays stuck. */
++static int fg_wait_done(LONG64 target)
++{
++    if (InterlockedCompareExchange64(&fg.done_seq, 0, 0) >= target) return 1;
++    const ULONGLONG t0 = GetTickCount64();
++    LARGE_INTEGER a, b, f;
++    QueryPerformanceCounter(&a);
++    while (InterlockedCompareExchange64(&fg.done_seq, 0, 0) < target) {
++        if (fg.err) return 0;
++        if (GetTickCount64() - t0 > 500) {
++            fprintf(stderr, "[framegen] off: the presenter stopped taking frames\n");
++            fg.failed = 1;
++            return 0;
++        }
++        if (fg.pump) fg.pump();   /* its Present may be waiting for this thread's window */
++        WaitForSingleObject(fg.done_event, 2);
++    }
++    QueryPerformanceCounter(&b); QueryPerformanceFrequency(&f);
++    fg.waited_us += (unsigned long long)((b.QuadPart - a.QuadPart) * 1000000 / f.QuadPart);
++    return 1;
++}
++
++int rsx_fg_begin(ID3D12Device* dev, ID3D12GraphicsCommandList* l, ID3D12Resource* src,
++                 DXGI_FORMAT src_fmt, unsigned src_w, unsigned src_h, unsigned w, unsigned h, int gen)
++{
++    if (!rsx_fg_enabled() || !src || !fg.pt_on || fg.failed || fg.err) return -1;
++    if (src_fmt != DXGI_FORMAT_R8G8B8A8_UNORM && src_fmt != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB &&
++        src_fmt != DXGI_FORMAT_R8G8B8A8_TYPELESS) {
++        if (!fg.warned_fmt) { fg.warned_fmt = 1; fprintf(stderr, "[framegen] presented surface format %d is not RGBA8: none made\n", (int)src_fmt); }
++        fg.have = 0;
++        return -1;
++    }
++    if (src_w < w || src_h < h) { fg.have = 0; return -1; }   /* the window shows padding: present as before */
++    if (!fg_setup(dev, w, h)) return -1;
++
++    const LONG64 d = fg.seq + 1;
++    if (!fg_wait_done(d - 2)) return -1;   /* slot d % 3 and vectors d % 2 were last read for d - 2 / d - 3 */
++    const int n = (int)(d % FG_SLOTS), p = (int)((d + FG_SLOTS - 1) % FG_SLOTS), m = (int)(d % 2);
++    const int c = (int)(d % FG_COMBOS);
++
++    D3D12_RESOURCE_BARRIER b[2];
++    UINT nb = 0;
++    fg_trans(&b[nb++], src, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
++    if (fg.fstate[n] != D3D12_RESOURCE_STATE_COPY_DEST)
++        fg_trans(&b[nb++], fg.frame[n], fg.fstate[n], D3D12_RESOURCE_STATE_COPY_DEST);
++    l->lpVtbl->ResourceBarrier(l, nb, b);
++    D3D12_TEXTURE_COPY_LOCATION dst = {0}, s = {0};
++    dst.pResource = fg.frame[n]; dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++    s.pResource = src; s.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++    D3D12_BOX box = {0};
++    box.right = w; box.bottom = h; box.back = 1;
++    l->lpVtbl->CopyTextureRegion(l, &dst, 0, 0, 0, &s, &box);
++    fg_trans(&b[0], src, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
++    fg_trans(&b[1], fg.frame[n], D3D12_RESOURCE_STATE_COPY_DEST, FG_SR);
++    l->lpVtbl->ResourceBarrier(l, 2, b);
++    fg.fstate[n] = FG_SR;
++
++    l->lpVtbl->SetDescriptorHeaps(l, 1, &fg.heap);
++    l->lpVtbl->SetComputeRootSignature(l, fg.crs);
++    fg_dispatch(l, 0, c, fg.QW, fg.QH);
++    fg_uav_barrier(l);
++    fg_dispatch(l, 1, c, fg.SW, fg.SH);
++    fg_uav_barrier(l);
++
++    int ready = 0;
++    if (gen > 0 && fg.have) {
++        fg_dispatch(l, 2, c, fg.GSW, fg.GSH);
++        fg_uav_barrier(l);
++        fg_dispatch(l, 3, c, fg.GQW, fg.GQH);
++        fg_uav_barrier(l);
++        fg_dispatch(l, 4, c, fg.GQW, fg.GQH);
++        fg_uav_barrier(l);
++        ready = gen > 3 ? 3 : gen;
++    }
++    fg.cur.seq = d; fg.cur.n = n; fg.cur.p = p; fg.cur.m = m; fg.cur.made = ready; fg.cur.pace_us = 0;
++    fg.seq = d;
++    fg.have = 1;
++    fg.drawn++;
++
++    const ULONGLONG now = GetTickCount64();
++    if (!fg.rep_at) fg.rep_at = now;
++    if (now - fg.rep_at >= 5000) {
++        const LONG64 made = InterlockedCompareExchange64(&fg.made, 0, 0);
++        const LONG64 shown = InterlockedCompareExchange64(&fg.shown, 0, 0);
++        const LONG64 dropped = InterlockedCompareExchange64(&fg.dropped, 0, 0);
++        fprintf(stderr, "[framegen] %.1f s: %lld drawn, %lld shown, %lld made, %lld dropped; RSX thread waited %.1f ms for the presenter\n",
++                (now - fg.rep_at) / 1000.0, fg.drawn - fg.rep_drawn, shown - fg.rep_shown, made - fg.rep_made,
++                dropped - fg.rep_dropped, fg.waited_us / 1000.0);
++        fg.rep_drawn = fg.drawn; fg.rep_shown = shown; fg.rep_made = made; fg.rep_dropped = dropped;
++        fg.waited_us = 0; fg.rep_at = now;
++    }
++    return ready;
++}
++
++void rsx_fg_set_pace(unsigned us) { fg.cur.pace_us = us; }
++
++void rsx_fg_hand_off(void)
++{
++    if (!fg.pt_on) return;
++    EnterCriticalSection(&fg.mb_lock);
++    if (fg.mb_full) InterlockedIncrement64(&fg.dropped);   /* the presenter never got to it */
++    fg.mb = fg.cur;
++    fg.mb_full = 1;
++    LeaveCriticalSection(&fg.mb_lock);
++    SetEvent(fg.mb_event);
++}
++#endif /* _WIN32 */
+diff --git a/libs/video/rsx_framegen.h b/libs/video/rsx_framegen.h
+new file mode 100644
+--- /dev/null
++++ b/libs/video/rsx_framegen.h
+@@ -0,0 +1,66 @@
++/*
++ * ps3recomp - frame generation for the D3D12 live renderer (Windows)
++ *
++ * Watch mode (B-Spec, replays, F9) and the launcher's 30 fps Speed setting leave game frames undrawn
++ * to spare the CPU; the screen then holds each drawn frame for two refreshes. With LD_FRAMEGEN=1 the
++ * renderer fills those refreshes with frames made on the GPU from the drawn frame before and the one
++ * after: a block motion search at 1/16 and 1/4 size, then each pixel taken from both frames halfway
++ * along its motion.
++ *
++ * Presenting moves to a thread of its own. The RSX thread only records the frame into a history slot
++ * (and the motion, when frames went undrawn), submits, hands the frame over and goes on with the game;
++ * the presenter draws the made frames and the drawn one into the window and waits for each refresh.
++ * The first version presented on the RSX thread, twice per drawn frame, and the game itself dropped
++ * from 60 frames a second to about 24 with a busy graphics card.
++ */
++#ifndef RSX_FRAMEGEN_H
++#define RSX_FRAMEGEN_H
++#ifdef _WIN32
++#include <windows.h>
++#include <d3d12.h>
++#include <dxgi1_4.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* LD_FRAMEGEN=1 turns it on (off by default). */
++int  rsx_fg_enabled(void);
++
++/* Starts the presenter once: it presents into swap's back buffers (with their render target views),
++ * on queue, with sync_interval, holding swap_lock around each back buffer's use and Present. Anyone
++ * else who presents on swap must hold swap_lock too. A Present can wait for the window's thread, so
++ * the caller (that thread) must answer window messages whenever it waits for the presenter: rsx_fg_begin
++ * calls pump while it waits. Returns 1 when it runs. */
++int  rsx_fg_presenter_start(ID3D12CommandQueue* queue, IDXGISwapChain3* swap, ID3D12Resource* const* backbuf,
++                            const D3D12_CPU_DESCRIPTOR_HANDLE* rtv, unsigned n_backbuf, UINT sync_interval,
++                            CRITICAL_SECTION* swap_lock, void (*pump)(void));
++
++/* RSX thread, at a present, before anything else is recorded for it: keeps this frame (src, a
++ * RENDER_TARGET surface of src_w x src_h, of which the top-left w x h is what the window shows) in a
++ * history slot and, when gen > 0 game frames went undrawn since the frame before, finds the motion
++ * between the two, all on list. Returns how many frames will be made (0..3) when the presenter will
++ * show this frame: then submit list and call rsx_fg_hand_off, and present nothing yourself. Returns -1
++ * when the caller presents this frame itself (frame generation off, failed or not fit for it). */
++int  rsx_fg_begin(ID3D12Device* dev, ID3D12GraphicsCommandList* list, ID3D12Resource* src,
++                  DXGI_FORMAT src_fmt, unsigned src_w, unsigned src_h, unsigned w, unsigned h, int gen);
++
++/* RSX thread, between rsx_fg_begin and rsx_fg_hand_off: the frames of this hand-over (the made ones, then
++ * the drawn one) are presented us microseconds apart, the first at once. 0 (what rsx_fg_begin leaves) =
++ * each as soon as the one before is presented, the screen's refresh spacing them: right when the screen
++ * runs at the rate the frames fill, wrong when it is faster (a 60 fps game doubled on a 144 or 164 Hz
++ * screen: the made frame and the drawn one would follow each other one refresh apart instead of half a
++ * game frame apart). */
++void rsx_fg_set_pace(unsigned us);
++
++/* RSX thread, after list was submitted: the presenter takes the frame rsx_fg_begin prepared. */
++void rsx_fg_hand_off(void);
++
++/* The HRESULT of a failed Present on the presenter, 0 while all is well. */
++long rsx_fg_present_error(void);
++
++#ifdef __cplusplus
++}
++#endif
++#endif /* _WIN32 */
++#endif /* RSX_FRAMEGEN_H */
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
@@ -35378,7 +35432,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      fprintf(file, "at=%u/0x%X/0x%X ", rs.alpha_test_enable, rs.alpha_func, rs.alpha_ref_raw);
      fprintf(file, "sc=%08X/%08X ", rsx_dsp_reg(&g.rsx, M_SCISSOR_HORIZONTAL), rsx_dsp_reg(&g.rsx, M_SCISSOR_VERTICAL));
      if (rs.stencil_enable)
-@@ -7063,9 +11271,236 @@
+@@ -7063,9 +11271,262 @@
      }
  }
  
@@ -35395,6 +35449,32 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 +int g_ld_skip_frame;
 +static unsigned long long g_ld_skip_n, g_ld_skip_frames;
 +static HWND s_ld_hwnd;   /* the window the swap chain presents to (for IsIconic) */
++
++/* The refresh rate of the screen the window is on, looked up again every two seconds (the window can
++ * be moved to another screen). LD_DISPLAY_HZ=<n> says it instead (tests). 60 when it cannot be read. */
++static int ld_display_hz(void)
++{
++    static int hz = 60;
++    static ULONGLONG at;
++    const ULONGLONG now = GetTickCount64();
++    if (!at || now - at > 2000) {
++        int v = 0;
++        at = now;
++        HMONITOR m = s_ld_hwnd ? MonitorFromWindow(s_ld_hwnd, MONITOR_DEFAULTTONEAREST) : NULL;
++        MONITORINFOEXW mi;
++        memset(&mi, 0, sizeof mi);
++        mi.cbSize = sizeof mi;
++        if (m && GetMonitorInfoW(m, (MONITORINFO*)&mi)) {
++            DEVMODEW dm;
++            memset(&dm, 0, sizeof dm);
++            dm.dmSize = sizeof dm;
++            if (EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm)) v = (int)dm.dmDisplayFrequency;
++        }
++        { const char* e = getenv("LD_DISPLAY_HZ"); if (e && atoi(e) > 0) v = atoi(e); }
++        hz = v >= 30 ? v : 60;
++    }
++    return hz;
++}
 +
 +/* Which passes a left-out frame may leave out. A pass is a (colour target, zeta) pair from the
 + * register file. One the game draws every frame (the scene, its shadows, the bloom chain, the
@@ -35615,7 +35695,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      if (g_ld_movie_mode && !ld_movie_composite_ui_enabled()) return;
      if (!dc.n_packets) { g_ld_stats.groups_empty++; return; }
      g_ld_stats.groups_seen++;
-@@ -7094,6 +11529,7 @@
+@@ -7094,6 +11555,7 @@
              for (u32 i = 0; i < 16; i++)
                  g.rsx.constants[108 + i / 4][i % 4] =
                      g_ld_a010_camera_bits[i];
@@ -35623,7 +35703,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
              static u64 repairs = 0;
              repairs++;
              if (repairs <= 16 || (repairs & (repairs - 1)) == 0) {
-@@ -7124,8 +11560,58 @@
+@@ -7124,8 +11586,58 @@
          g_ld_profile.total_used_attribute_max = used_layout.count;
      const LONGLONG fetch_pack_begin = ld_profile_qpc();
  #endif
@@ -35684,7 +35764,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      } else if (ld_vertex_hoist_fetch()) {
          rsx_vertex_layout_plan legacy_layout;
          ld_layout_plan_get(0xFFFFu, &legacy_layout);
-@@ -7139,33 +11625,62 @@
+@@ -7139,33 +11651,62 @@
      g_ld_profile.total.vertex_fetch_pack_qpc +=
          (u64)(ld_profile_qpc() - fetch_pack_begin);
  #endif
@@ -35757,7 +35837,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      const u64 vb_capacity = VERT_BUFFER_SIZE;
      if (draw_vb_bytes > vb_capacity || draw_ib_bytes > INDEX_BUFFER_SIZE) {
          live_draw_csv_emit(prim, n_tri, "drop_vbring_oversize");
-@@ -7193,13 +11708,16 @@
+@@ -7193,13 +11734,16 @@
          memcpy(
              g.vb_mapped + g.vb_used, vertex_data,
              (size_t)draw_vb_bytes);
@@ -35775,7 +35855,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      if (!pso) {
  #if defined(YZ_PERF_PROFILE)
          ld_profile_note_rejected_pso();
-@@ -7258,6 +11776,24 @@
+@@ -7258,6 +11802,24 @@
                rsx_dsp_texture st; rsx_dsp_get_texture(&g.rsx, u, &st);
                if (st.enabled && st.offset == (u32)skip) return;
            } }
@@ -35800,7 +35880,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      /* LD_TRACE_PSO=<hex key>: raw vertex attributes + unit-0 texels of the
       * first three draws with that CSV pso_key. */
      { static u64 tk = 1; static int tn;
-@@ -7371,6 +11907,8 @@
+@@ -7371,6 +11933,8 @@
      const u32 current_zslot = g.depth
          ? zdepth_get(sf.zeta_location, sf.zeta_offset, sf.clip_w, sf.clip_h)
          : 0;
@@ -35809,7 +35889,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      u32 slots[SRV_TABLE_SIZE], smp_slots[SMP_TABLE_SIZE];
      u32 surf_used[SRV_TABLE_SIZE], n_surf_used = 0;
      u32 zdepth_used[SRV_TABLE_SIZE], n_zdepth_used = 0;
-@@ -7423,7 +11961,11 @@
+@@ -7423,7 +11987,11 @@
                }
            }
        } }
@@ -35821,7 +35901,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
          /* LD_PS1_BUF0=1 -- DIAGNOSTIC, not a fix. Force a 24-bit PS1 VRAM
           * bind at buffer 1 (offset 0x4003C0) to sample buffer 0 (0x400000).
-@@ -7442,6 +11984,43 @@
+@@ -7442,6 +12010,43 @@
          if (!t.enabled) continue;
          texture_mask |= 1u << u;
          smp_slots[u] = sampler_slot(&t, sampler_key(&t));
@@ -35865,7 +35945,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          /* Pick WHICH surface at this offset to sample.
           *
           * Matching on (location, offset) alone was fine when only one surface
-@@ -7463,7 +12042,8 @@
+@@ -7463,7 +12068,8 @@
           * depth read: try the zeta first. Before, the colour surface at the
           * same address was taken (zeros). */
          int zeta_pref = 0;
@@ -35875,7 +35955,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
              for (u32 i = 0; i < g.n_zdepths; i++)
                  if (g.zdepths[i].location == t.location &&
                      g.zdepths[i].offset == t.offset &&
-@@ -7471,18 +12051,36 @@
+@@ -7471,18 +12077,36 @@
                      zeta_pref = 1;
                      break;
                  }
@@ -35916,7 +35996,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          /* LD_UVDBG=1: the texture coordinates of the draw that samples the PS1
           * framebuffer. Placed here rather than in fetch_batches because that
           * function is not on this draw's path -- probing it printed nothing at
-@@ -7559,7 +12157,53 @@
+@@ -7559,7 +12183,53 @@
                    }
                }
            } }
@@ -35971,7 +36051,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
              static u32 n_dbg = 0;
              if (PS3_LOG_FIRST(n_dbg, 24)) {
                  fprintf(stderr, "[alias-miss] tex %u:0x%08X fmt=0x%02X %ux%u target=%u surf:",
-@@ -7572,8 +12216,10 @@
+@@ -7572,8 +12242,10 @@
          }
          if (sampled < 0 && !zeta_pref && g.surfaces[target].location == t.location &&
              g.surfaces[target].offset == t.offset) {
@@ -35984,7 +36064,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
              g_ld_bind_surf++;
          } else if (sampled >= 0) {
              /* LD_ALIAS_DBG also reports the HIT. A texture that aliases a render
-@@ -7595,6 +12241,10 @@
+@@ -7595,6 +12267,10 @@
                              g.surfaces[sampled].offset,
                              g.surfaces[sampled].w, g.surfaces[sampled].h);
              }
@@ -35995,7 +36075,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
              {   /* a smaller texture reads the surface's top-left samples, texel for sample */
                  const int sw = surface_window((u32)sampled, &t, alias_dbg);
                  if (sw >= 0) { slots[u] = (u32)sw; g_ld_bind_surf++; continue; }
-@@ -7611,7 +12261,7 @@
+@@ -7611,7 +12287,7 @@
              /* Mirror the replay-proven depth-RT contract: address and format
               * must match, and the pass must have executed a depth-writing draw.
               * Clear-only zetas intentionally fall through to guest VRAM. */
@@ -36004,7 +36084,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
                  for (u32 i = 0; i < g.n_zdepths; i++)
                      if (g.zdepths[i].location == t.location &&
                          g.zdepths[i].offset == t.offset &&
-@@ -7650,12 +12300,27 @@
+@@ -7650,12 +12326,27 @@
                  if (!seen && n_zdepth_used < SRV_TABLE_SIZE)
                      zdepth_used[n_zdepth_used++] = (u32)sampled_depth;
              } else {
@@ -36034,7 +36114,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      const u32 vtex_mask = vertex_texture_mask();
      u32 vtex_slots[SRV_TABLE_SIZE];
      for (u32 u = 0; u < SRV_TABLE_SIZE; u++)
-@@ -7724,23 +12389,27 @@
+@@ -7724,23 +12415,27 @@
          rtvs[0] = rtv;
          for (u32 r = 1; r < n_mrt; r++)
              rtvs[r] = rtv_handle(LD_SWAP_BUFFERS + mrt[r]);
@@ -36067,7 +36147,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  
      const float W = sf.clip_w ? (float)sf.clip_w : (float)g.width;
      const float H = sf.clip_h ? (float)sf.clip_h : (float)g.height;
-@@ -7757,14 +12426,36 @@
+@@ -7757,14 +12452,36 @@
          xf[5] = -((vp.translate[1] - Hv * 0.5f) / (Hv * 0.5f));
          xf[6] = vp.translate[2];
      }
@@ -36111,7 +36191,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      if (ld_fp_constants_buffered())
          g.list->lpVtbl->SetGraphicsRootConstantBufferView(
              g.list, 4,
-@@ -7775,7 +12466,6 @@
+@@ -7775,7 +12492,6 @@
      if (vtex_mask)
          g.list->lpVtbl->SetGraphicsRootDescriptorTable(
              g.list, 3, vtex_table);
@@ -36119,7 +36199,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  
      D3D12_VIEWPORT dvp = {0, 0, W, H, 0.0f, 1.0f};
      D3D12_RECT sc = {
-@@ -7808,19 +12498,68 @@
+@@ -7808,19 +12524,68 @@
              if (sc.bottom < sc.top)      sc.bottom = sc.top;
          }
      }
@@ -36193,7 +36273,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      {
          const u64 serial = ++g_ld_recent_draw_total;
          ld_recent_draw* draw =
-@@ -7850,14 +12589,16 @@
+@@ -7850,14 +12615,16 @@
          draw->clip_h = sf.clip_h;
          draw->srv_ring_used = g.srv_ring_used;
          draw->sampler_ring_used = g.smp_ring_used;
@@ -36214,7 +36294,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          ibv.Format = DXGI_FORMAT_R32_UINT;
          g.list->lpVtbl->IASetIndexBuffer(g.list, &ibv);
          g.list->lpVtbl->DrawIndexedInstanced(
-@@ -7865,13 +12606,23 @@
+@@ -7865,13 +12632,23 @@
      } else {
          g.list->lpVtbl->DrawInstanced(g.list, n_tri, 1, 0, 0);
      }
@@ -36241,7 +36321,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          z->draws++;
          if (depth_state.depth_test) z->depth_test_draws++;
          if (depth_state.depth_write) z->depth_write_draws++;
-@@ -7880,8 +12631,12 @@
+@@ -7880,8 +12657,12 @@
          /* A write-enable bit alone does not prove that this draw produced a
           * usable depth map.  With depth testing disabled RSX does not execute
           * the depth pass represented by this tracked zeta. */
@@ -36255,7 +36335,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      }
      g_ld_stats.groups_executed++;
  #if defined(YZ_PERF_PROFILE)
-@@ -7947,7 +12702,11 @@
+@@ -7947,7 +12728,11 @@
  #if defined(YZ_PERF_PROFILE)
      const LONGLONG begin = ld_profile_qpc();
  #endif
@@ -36267,7 +36347,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.sink_end_qpc += (u64)(ld_profile_qpc() - begin);
  #endif
-@@ -7956,6 +12715,16 @@
+@@ -7956,6 +12741,16 @@
  static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
  {
      (void)user; (void)r;
@@ -36284,7 +36364,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      if (g_ld_movie_mode && !ld_movie_composite_ui_enabled()) return;
      g_ld_stats.clears++;
      const u32 target = current_surface();
-@@ -8039,6 +12808,9 @@
+@@ -8039,6 +12834,9 @@
              g.zdepths[zslot - 1].cleared = 1;
              if (mask & RSX_CLEAR_DEPTH) {
                  g.zdepths[zslot - 1].had_write = 0;
@@ -36294,7 +36374,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
                  /* Each guest zeta owns a distinct live resource.  A clear
                   * invalidates its older published image; do not resolve it
                   * speculatively.  The first later texture consumer resolves
-@@ -8220,11 +12992,138 @@
+@@ -8220,11 +13018,138 @@
      return SUCCEEDED(hr) ? 0 : -1;
  }
  
@@ -36433,7 +36513,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      ld_present_measure_init();
  #if defined(YZ_PERF_PROFILE)
      memset(&g_ld_profile, 0, sizeof(g_ld_profile));
-@@ -8339,7 +13238,7 @@
+@@ -8339,7 +13264,7 @@
      ld_enable_dred();
      IDXGIFactory4* factory = NULL;
      if (FAILED(CreateDXGIFactory1(&IID_IDXGIFactory4, (void**)&factory))) return -1;
@@ -36442,7 +36522,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          factory->lpVtbl->Release(factory); return -1;
      }
  #if defined(YZ_PERF_PROFILE)
-@@ -8356,10 +13255,13 @@
+@@ -8356,10 +13281,13 @@
      g.dev->lpVtbl->CreateCommandQueue(g.dev, &qd, &IID_ID3D12CommandQueue, (void**)&g.queue);
      g.dev->lpVtbl->CreateCommandAllocator(g.dev, D3D12_COMMAND_LIST_TYPE_DIRECT,
                                            &IID_ID3D12CommandAllocator, (void**)&g.alloc);
@@ -36456,7 +36536,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      g.dev->lpVtbl->CreateFence(g.dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void**)&g.fence);
      g.fence_event = CreateEventA(NULL, FALSE, FALSE, NULL);
  
-@@ -8373,8 +13275,12 @@
+@@ -8373,8 +13301,12 @@
              (HWND)hwnd, &scd, NULL, NULL, &sc1))) {
          factory->lpVtbl->Release(factory); return -1;
      }
@@ -36469,7 +36549,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      factory->lpVtbl->Release(factory);
  
      /* RTV heap: [0..1] backbuffers, [2..] surface cache */
-@@ -8385,7 +13291,7 @@
+@@ -8385,7 +13317,7 @@
      g.rtv_step = g.dev->lpVtbl->GetDescriptorHandleIncrementSize(g.dev, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
      for (u32 i = 0; i < LD_SWAP_BUFFERS; i++) {
          g.swap->lpVtbl->GetBuffer(g.swap, i, &IID_ID3D12Resource, (void**)&g.backbuf[i]);
@@ -36478,7 +36558,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      }
  
      /* upload arena */
-@@ -8395,28 +13301,28 @@
+@@ -8395,28 +13327,28 @@
      bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
      bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
      bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
@@ -36512,7 +36592,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          g.dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
          D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
          &IID_ID3D12Resource, (void**)&g.ps_cb);
-@@ -8475,23 +13381,29 @@
+@@ -8475,23 +13407,29 @@
          drd.MipLevels = 1; drd.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT; drd.SampleDesc.Count = 1;
          drd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
          D3D12_CLEAR_VALUE dcv = {0}; dcv.Format = drd.Format; dcv.DepthStencil.Depth = 1.0f;
@@ -36545,7 +36625,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  
      /* dispatcher + sink */
      rsx_dispatch_sink sink = {0};
-@@ -8501,9 +13413,11 @@
+@@ -8501,9 +13439,11 @@
      sink.end = sink_end;
      sink.draw_arrays = sink_draw_arrays;
      sink.inline_array = sink_inline_array;
@@ -36557,7 +36637,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  
      g.ready = 1;
      g.enabled = 1;
-@@ -8615,6 +13529,32 @@
+@@ -8615,6 +13555,32 @@
      rsx_dispatch_method(&g.rsx, method, arg);
  }
  
@@ -36590,7 +36670,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  void rsx_live_draw_set_movie_mode(int on)
  {
      static unsigned long long suppressed_at_start = 0;
-@@ -8738,6 +13678,10 @@
+@@ -8738,6 +13704,10 @@
   * "presenting fresh content" from "flipping a static image" -- the dead
   * journal-consumer limp state renders ~0 draws/frame while flips tick). */
  u32 rsx_live_draw_get_last_draws(void) { return g_ld_last_frame_draws; }
@@ -36601,7 +36681,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  
  double rsx_live_draw_get_present_fps(void)
  {
-@@ -8853,6 +13797,7 @@
+@@ -8853,6 +13823,7 @@
          }
      }
  
@@ -36609,7 +36689,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      const u32 bbi = g.swap->lpVtbl->GetCurrentBackBufferIndex(g.swap);
      ID3D12Resource* bb = g.backbuf[bbi];
  
-@@ -8883,6 +13828,7 @@
+@@ -8883,6 +13854,7 @@
      ld_flush(LD_FLUSH_MOVIE_PRESENT);
      {
          const HRESULT present_hr = g.swap->lpVtbl->Present(g.swap, 1, 0);
@@ -36617,7 +36697,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          if (SUCCEEDED(present_hr))
              ld_present_measure_record(g_ld_frames);
          else {
-@@ -8929,12 +13875,122 @@
+@@ -8929,12 +13901,122 @@
   * through here while recording). */
  static FILE* g_ld_record_to;
  
@@ -36742,7 +36822,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      if (!width || !height) return UINT64_MAX;
      const int fp16 = surface->fmt == DXGI_FORMAT_R16G16B16A16_FLOAT;
      const u32 texel = fp16 ? 8u : 4u;
-@@ -8948,7 +14004,7 @@
+@@ -8948,7 +14030,7 @@
      bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
      bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
      ID3D12Resource* rb = NULL;
@@ -36751,7 +36831,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
              D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&rb)))
          return UINT64_MAX;
  
-@@ -8968,7 +14024,9 @@
+@@ -8968,7 +14050,9 @@
      dst.PlacedFootprint.Footprint.Height = height;
      dst.PlacedFootprint.Footprint.Depth = 1;
      dst.PlacedFootprint.Footprint.RowPitch = pitch;
@@ -36762,7 +36842,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  
      b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
      b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-@@ -9202,6 +14260,7 @@
+@@ -9202,6 +14286,7 @@
  void rsx_live_draw_present(u32 buffer_id)
  {
      if (!g.ready) return;
@@ -36770,7 +36850,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  
      /* LD_SURF_DUMP=<dir>: dump EVERY live surface once, with its non-black
       * count, at LD_SURF_DUMP_FRAME (default 1200).
-@@ -9262,20 +14321,38 @@
+@@ -9262,20 +14347,38 @@
       * late scene, e.g. frames for a GIF, without thousands of early files). */
      static long dump_from = -1;
      if (dump_from < 0) { const char* e = getenv("LD_FRAME_DUMP_FROM"); dump_from = e ? atol(e) : 0; }
@@ -36814,7 +36894,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          }
      }
      if (target == LD_INVALID_SURFACE && buffer_id < 8 &&
-@@ -9296,10 +14373,25 @@
+@@ -9296,10 +14399,25 @@
          return;
      }
      g_ld_last_present_target = target;
@@ -36840,7 +36920,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          fprintf(stderr, "[frame-dump] %s %ux%u nonblack=%llu\n", path,
                  g.surfaces[target].w, g.surfaces[target].h,
                  (unsigned long long)(nb == UINT64_MAX ? 0 : nb));
-@@ -9399,10 +14491,82 @@
+@@ -9399,10 +14517,107 @@
            ld_trace_target("present", target, buffer_id);
            last_present_target = target;
        } }
@@ -36903,9 +36983,34 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
 +                  const int n = (int)((double)(now - fg_last_t) * 60.0 / (double)fq.QuadPart + 0.5) - 1;
 +                  gen = n < 0 ? 0 : n > fill ? fill : n;
 +              } }
++            /* LD_FRAMEGEN_MULT=2..4: that many frames on the screen for each one the game draws, on a
++             * screen fast enough to show them. A drawn frame stands for `slots` sixtieths of a second (1
++             * at 60 frames a second, 2 where a frame was left out or the game runs at 30); the screen
++             * can show hz * slots / 60 frames in that time, so that many less the drawn one is the most
++             * that is made (a 164 Hz screen: 2x; 180 Hz: 3x; 240 Hz: 4x), and never more than three.
++             * The frames of one hand-over are then presented evenly over the drawn frame's time. */
++            unsigned fg_pace_us = 0;
++            { static int mult = -1; static int said_made = -1;
++              if (mult < 0) { const char* e = getenv("LD_FRAMEGEN_MULT"); mult = e ? atoi(e) : 1; if (mult < 1) mult = 1; if (mult > 4) mult = 4; }
++              if (mult > 1 && fg_last_t && (now - fg_last_t) * 1000 < 150 * fq.QuadPart) {
++                  const int slots = gen + 1;
++                  const int hz = ld_display_hz();
++                  int want = slots * mult - 1;
++                  const int room = (hz * slots + 3) / 60 - 1;
++                  if (want > room) want = room;
++                  if (want > 3) want = 3;
++                  if (want > gen) gen = want;
++                  if (gen > 0) fg_pace_us = 1000000u * (unsigned)slots / 60u / (unsigned)(gen + 1);
++                  if (gen != said_made && slots == 1) {
++                      said_made = gen;
++                      fprintf(stderr, "[framegen] x%d asked, screen at %d Hz: %d made for each drawn frame, %u us apart\n",
++                              mult, hz, gen, fg_pace_us);
++                  }
++              } }
 +            fg_last_game = gf; fg_last_t = now;
 +            const int made = rsx_fg_begin(g.dev, g.list, presented_surface->tex, presented_surface->fmt,
 +                                          presented_surface->w, presented_surface->h, g.width, g.height, gen);
++            if (made > 0 && fg_pace_us) rsx_fg_set_pace(fg_pace_us);
 +            if (made >= 0) {
 +                ld_flush(LD_FLUSH_PRESENT);
 +                rsx_fg_hand_off();
@@ -36923,7 +37028,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      D3D12_RESOURCE_BARRIER bar[2] = {0};
      bar[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
      bar[0].Transition.pResource = srcimg;
-@@ -9416,17 +14580,39 @@
+@@ -9416,17 +14631,39 @@
      bar[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
      g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
  
@@ -36967,7 +37072,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
          if (SUCCEEDED(present_hr))
              ld_present_measure_record(g_ld_frames + 1u);
          else {
-@@ -9475,6 +14661,7 @@
+@@ -9475,6 +14712,7 @@
        g_ld_last_frame_draws = (u32)(g_ld_stats.packets_seen - packets_at_last_frame);
        packets_at_last_frame = g_ld_stats.packets_seen; }
      g_ld_frames++;
@@ -36975,7 +37080,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  #if defined(YZ_PERF_PROFILE)
      ld_profile_present(g_ld_frames);
  #endif
-@@ -10153,6 +15340,30 @@
+@@ -10153,6 +15391,30 @@
                    } }
                  (void)hi; (void)rbase;
              } }
@@ -37006,7 +37111,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
            fprintf(stderr, "[fps] %.1f (frames %u..%u over %.1fs)\n",
                    (g_ld_frames - fps_f0) * 1000.0 / (double)(now - fps_t0),
                    fps_f0, g_ld_frames, (now - fps_t0) / 1000.0);
-@@ -10275,9 +15486,11 @@
+@@ -10275,9 +15537,11 @@
      }
  #endif
  
@@ -37021,7 +37126,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
  #if !defined(YZ_PERF_CLEAN)
      g_ld_frame_vertex_constant_ring_recycles = 0;
  #endif
-@@ -10498,7 +15711,10 @@
+@@ -10498,7 +15762,10 @@
                  (unsigned long long)g_ld_shader_disk_writes[1],
                  (unsigned long long)g_ld_shader_disk_rejects);
      }
@@ -37033,7 +37138,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      shader_blob_cache_release(&g.vs_blobs);
      shader_blob_cache_release(&g.ps_blobs);
      for (u32 i = 0; i < g.n_textures; i++) if (g.textures[i].tex) g.textures[i].tex->lpVtbl->Release(g.textures[i].tex);
-@@ -10516,10 +15732,16 @@
+@@ -10516,10 +15783,16 @@
      if (g.movie_overlay_rgba) free(g.movie_overlay_rgba);
      if (g.movie_overlay_mask) free(g.movie_overlay_mask);
      if (g.white_tex) g.white_tex->lpVtbl->Release(g.white_tex);
@@ -37050,7 +37155,7 @@ diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
      for (u32 i = 0; i < 4; i++)
          if (g.downsample_pso[i]) g.downsample_pso[i]->lpVtbl->Release(g.downsample_pso[i]);
      if (g.downsample_rootsig)
-@@ -10552,3 +15774,38 @@
+@@ -10552,3 +15825,38 @@
  }
  
  #endif /* _WIN32 */

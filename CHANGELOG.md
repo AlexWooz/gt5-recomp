@@ -9,6 +9,27 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.98**
+
+🎞️ **Frame rate multiplier: 2x, 3x or 4x on screens faster than 60 Hz (DirectX 12)**
+- Frame generation could only fill frames the game left out (watch mode, 30 fps). It can now multiply:
+  for every frame the game draws, one, two or three more are made on the graphics card and shown between
+  the drawn ones, evenly spaced. Launcher, Display: **Frame rate multiplier** (`LD_FRAMEGEN_MULT=2..4`;
+  it turns frame generation on by itself).
+- It never makes more than the screen can show: 2x needs 120 Hz, 3x needs 180 Hz, 4x needs 240 Hz. A 144
+  or 165 Hz screen gets 2x. The refresh rate is read from the screen the window is on.
+- Measured in a race on a 165 Hz screen: 287 drawn and 301 made frames in 5 seconds (about 118 a second
+  on screen) with the game itself at 57 frames a second, the same as without it; the thread that draws
+  did not wait for the presenter at all.
+- Two things had to change to get there. The first version spaced each group of frames over the whole
+  frame time and waited for the screen's refresh at every present: the presenter was inside the driver
+  most of the time, the drawing thread queued behind it and the game fell to 17-22 frames a second. Now
+  a group's frames are timed by the presenter's own clock and presented without waiting for the
+  refresh, and it stops spacing a group the moment a newer frame is waiting.
+- The game still runs at 60; the newest drawn frame reaches the screen about half a frame later. Made
+  frames have the usual limits: fast detail close to the camera can smear. Still marked beta.
+- No re-lift: the update rebuilds the runtime and the launcher.
+
 🏷️ Released as **v0.1.97**
 
 🧹 **Fix: after many cars, new ones were no longer drawn (DirectX 12). And a picture check before every release**
