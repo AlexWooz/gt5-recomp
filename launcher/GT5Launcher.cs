@@ -136,6 +136,9 @@ namespace Gt5Launcher
             { "res.help", new[] { "The TV mode the game is told it's on, like on a PS3. 1080p: races drawn at 1728x972 with a sharp 1920x1080 HUD. 720p: races at 1152x648, for slow graphics chips.", "游戏所认为的电视模式（同 PS3）。1080p：比赛以 1728x972 绘制，界面为 1920x1080。720p：比赛以 1152x648 绘制，适合较慢的显卡。" } },
             { "res.1080", new[] { "1080p (sharper)", "1080p（更清晰）" } },
             { "res.720", new[] { "720p (faster on slow graphics)", "720p（较慢显卡更流畅）" } },
+            { "rres", new[] { "Render resolution", "渲染分辨率" } },
+            { "rres.same", new[] { "Same as the game draws", "与游戏绘制的相同" } },
+            { "rres.help", new[] { "The height the picture is really drawn at, whatever the game's own mode above is: 1440p, 4K or 5K make everything sharper and smooth jagged edges, and cost graphics-card time. On a smaller screen the bigger picture is scaled down to it, which smooths edges further. Can also be changed while playing, in the game's menu (F1). DirectX 12 only.", "画面实际绘制的高度，与上面的游戏模式无关：1440p、4K 或 5K 更清晰、锯齿更少，但更占用显卡。屏幕较小时会缩小显示，边缘更平滑。也可以在游戏中按 F1 打开菜单随时更改。仅限 DirectX 12。" } },
             { "shape", new[] { "Screen shape", "画面比例" } },
             { "shape.help", new[] { "Auto uses your monitor's shape: on an ultrawide the game draws a wider view and keeps the HUD 16:9 in the middle.", "自动：使用显示器的比例。超宽屏上游戏会显示更宽的视野，界面保持 16:9 居中。" } },
             { "shape.auto", new[] { "Auto (your monitor)", "自动（跟随显示器）" } },
@@ -350,7 +353,7 @@ namespace Gt5Launcher
             new[] { "GT5_LAUNCH_WINDOW", "windowed" }, new[] { "GT5_LAUNCHER_LANG", "" },
             new[] { "GT5_LAUNCHER_HIDE", "1" }, new[] { "GT5_LAUNCHER_AUTOCHECK", "1" },
             new[] { "GT5_SPEED", "" }, new[] { "PS3_SKIP_INTRO", "1" }, new[] { "LD_WATCH_DRAW", "" },
-            new[] { "LD_FRAMEGEN", "" }, new[] { "LD_FRAMEGEN_MULT", "" }, new[] { "GT5_RENDERER", "" }, new[] { "PS3_TEX_DUMP", "" },
+            new[] { "LD_FRAMEGEN", "" }, new[] { "LD_FRAMEGEN_MULT", "" }, new[] { "LD_RES_TARGET", "" }, new[] { "GT5_RENDERER", "" }, new[] { "PS3_TEX_DUMP", "" },
             new[] { "PS3_MOUSE_STEER", "" }, new[] { "PS3_MOUSE_STEER_SENS", "" }, new[] { "PS3_MOUSE_STEER_CENTER", "" },
             new[] { "PS3_KEYS", "" },
             new[] { "PS3_COCKPIT_FOV", "" }, new[] { "PS3_COCKPIT_SEAT", "" }, new[] { "PS3_COCKPIT_HEIGHT", "" },
@@ -1380,6 +1383,7 @@ namespace Gt5Launcher
             y = AddHeading(p, T.Get("nav.display"), y);
             y = AddCombo(p, "renderer", "renderer.help", "GT5_RENDERER", new[] { new Choice("", T.Get("renderer.dx12")), new Choice("vulkan", T.Get("renderer.vk")) }, y);
             y = AddCombo(p, "res", "res.help", "PS3_VIDEO_MODE", new[] { new Choice("1080", T.Get("res.1080")), new Choice("720", T.Get("res.720")) }, y);
+            y = AddCombo(p, "rres", "rres.help", "LD_RES_TARGET", new[] { new Choice("", T.Get("rres.same")), new Choice("1080", "1080p"), new Choice("1440", "1440p"), new Choice("2160", "4K (2160p)"), new Choice("2880", "5K (2880p)") }, y);
             y = AddCombo(p, "speed", "speed.help", "GT5_SPEED", new[] { new Choice("", T.Get("speed.full")), new Choice("30", T.Get("speed.30")) }, y);
             y = AddCombo(p, "shape", "shape.help", "PS3_ASPECT", new[] { new Choice("auto", T.Get("shape.auto")), new Choice("16:9", "16:9"), new Choice("21:9", "21:9"), new Choice("32:9", "32:9") }, y);
             y = AddCombo(p, "window", "window.help", "GT5_LAUNCH_WINDOW", new[] { new Choice("windowed", T.Get("window.windowed")), new Choice("max", T.Get("window.max")), new Choice("borderless", T.Get("window.borderless")) }, y);

@@ -9,6 +9,37 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.99**
+
+🖥️ **Render resolution up to 5K, and a settings menu inside the game (F1) (DirectX 12)**
+- **Render resolution** (launcher, Display; or the new menu): the picture is drawn at 1080p, 1440p, 4K or
+  5K, whatever the game's own 720p / 1080p mode is. The game still thinks it draws its PS3 picture; every
+  screen-sized target it draws into (the race, the HUD, the menus, the passes behind them) is made that
+  much larger on the graphics card. Sharper, and far fewer jagged edges; on a screen smaller than the
+  picture it is filtered down to the window, which smooths edges further. `LD_RES_TARGET=<lines>`
+  (or `LD_RES_SCALE=<factor>`, 0.25 to 8; below 1 draws fewer pixels for a slow graphics chip).
+- Measured in a race in the 1080p mode on an RTX 4070 Ti SUPER, switching to 4K while driving: 57 to 60
+  frames a second before and after. The cost is the graphics card's alone; an older card will feel it.
+- **The menu: F1**, or hold Select + Start on the controller. Display, Performance, Controls, Game and
+  About, over the running game, with the keyboard, the mouse or the controller. It reads and writes the
+  same `settings.bat` as the launcher, so the two always agree.
+- Each row says when it counts. **Applies now:** render resolution, frame generation and its multiplier,
+  vertical sync, window mode and window size, watch mode and how much it draws, the 30 fps Speed
+  setting, how waiting threads wait, the keyboard keys (with a "press a key" map), controller in the
+  background, keeping the mouse in the window. **From the next start:** the game's 720p / 1080p mode
+  and screen shape (the game sizes itself from them once, at boot), the renderer, the game's language,
+  the steering wheel and mouse steering, the cockpit view. Those rows say so.
+- The Performance page shows the game's and the drawn frame rate, cores busy, the frame's size, the
+  screen's refresh rate and the draw count; the same as a small corner readout if you switch it on.
+- The game is not paused by the menu: in a race, pause first. While it is open nothing you press reaches
+  the game.
+- The anti-aliasing / upscaling row is there and greyed out: those modes are the next step. Until then
+  a render resolution above your screen's is the anti-aliasing (4K on a 1440p screen is 2.25 samples a
+  pixel).
+- The menu is drawn with Dear ImGui 1.93.0 (MIT licence, unmodified, in `GT5/third_party/imgui`).
+- Vulkan: neither yet. No re-lift: the update rebuilds the runtime, the game's own sources and the
+  launcher.
+
 🏷️ Released as **v0.1.98**
 
 🎞️ **Frame rate multiplier: 2x, 3x or 4x on screens faster than 60 Hz (DirectX 12)**

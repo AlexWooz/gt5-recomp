@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.99](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.99) | 17 Nov 2026 | Render resolution up to 5K and a settings menu inside the game (F1) |
 | [v0.1.98](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.98) | 17 Nov 2026 | Frame rate multiplier: 2x/3x/4x frame generation on screens faster than 60 Hz (launcher, Display) |
 | [v0.1.97](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.97) | 17 Nov 2026 | Fix: new cars no longer drawn after a long session (DirectX 12 pipeline table full); picture check before every release |
 | [v0.1.96](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.96) | 17 Nov 2026 | Fix cars missing body panels (since v0.1.92); waiting threads sleep on every processor; faster exact float path |

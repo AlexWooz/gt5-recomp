@@ -86,6 +86,28 @@ add_executable(gt5
     ${SPU_SOURCES}
 )
 
+# The in-game settings menu (F1): Dear ImGui 1.93.0 (third_party/imgui, MIT, unmodified) on the D3D12 renderer.
+# The runtime calls it through runtime/settings/gt5_menu.h; a build without these sources links the
+# runtime's empty stand-ins (gt5_menu_stub.c) instead.
+set(GT5_IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui")
+if(WIN32 AND EXISTS "${GT5_IMGUI_DIR}/imgui.cpp" AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/menu/gt5_menu.cpp")
+    set(GT5_MENU_SOURCES
+        src/menu/gt5_menu.cpp
+        src/menu/gt5_menu_ui.cpp
+        src/menu/gt5_binds.c)
+    set(GT5_IMGUI_SOURCES
+        "${GT5_IMGUI_DIR}/imgui.cpp" "${GT5_IMGUI_DIR}/imgui_draw.cpp" "${GT5_IMGUI_DIR}/imgui_tables.cpp"
+        "${GT5_IMGUI_DIR}/imgui_widgets.cpp" "${GT5_IMGUI_DIR}/backends/imgui_impl_dx12.cpp")
+    target_sources(gt5 PRIVATE ${GT5_MENU_SOURCES} ${GT5_IMGUI_SOURCES})
+    set(_menu_inc "${GT5_IMGUI_DIR};${GT5_IMGUI_DIR}/backends;${PS3RECOMP_DIR}/runtime/settings")
+    set(_menu_defs "IMGUI_DISABLE_DEMO_WINDOWS;IMGUI_DISABLE_DEBUG_TOOLS;IMGUI_DISABLE_OBSOLETE_FUNCTIONS")
+    set_source_files_properties(${GT5_MENU_SOURCES} ${GT5_IMGUI_SOURCES} PROPERTIES
+        INCLUDE_DIRECTORIES "${_menu_inc}" COMPILE_DEFINITIONS "${_menu_defs}")
+    set_source_files_properties(${GT5_IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "/w")
+    target_link_libraries(gt5 PRIVATE d3dcompiler shell32)
+    message(STATUS "In-game menu:    on (Dear ImGui)")
+endif()
+
 # Game-code mods (scripts/mods.py, MODDING.md): the start-up switch of each mod that applies to
 # this EBOOT. The file only exists when one does.
 file(GLOB GT5_MOD_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/gen/mods.cpp")
