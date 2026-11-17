@@ -102,8 +102,21 @@ or the mod is left out for that copy. Two mods may replace the same instruction;
 whose name sorts first wins. `GT5\mods\half-rate` works this way: it makes the game draw 30 frames a
 second at real speed (it steps its simulation twice a frame), for about half the frames' work.
 
-`GT5\mods\unlock-fps` is a working example. It's experimental: GT5's clock counts frames, so with it
-on, races run faster than real time whenever the frame rate goes over 60.
+`GT5\mods\unlock-fps` is the example of the format, and of what a one-instruction change can and can't
+do. It takes out the game's own wait for the next screen refresh (RPCS3's "Unlock FPS" patch is the same
+change), and that alone does **not** make the game run faster than 60 frames a second here: the port
+finishes a frame's flip no more than 60 times a second, and GT5 also follows the PS3's 60-a-second
+vertical blank in other places. Measured on 17 Nov 2026 with the mod on: 60.0 frames a second, the same
+race clock; with the port's own limit lifted as a test, still 60.0; with the vertical blank at 120 a
+second the game fell to 8-18 frames a second and never reached the race. So the mod is kept as a
+harmless example, off by default (its own description in the launcher's mod list still promises more;
+that text changes with the next version that re-lifts, since a changed `mod.json` means a re-lift). For
+more frames on a fast screen use the launcher's **Frame rate multiplier** (frame generation), which
+leaves the game at 60.
+
+Checked on v0.1.100 (17 Nov 2026): `half-rate` gives 29.97 game frames a second at the unmodded race
+clock's speed with about 40% less CPU, and 60 frames on screen with frame generation; the in-game
+menu (F1) keeps `GT5_MOD_...` lines and your own lines when it saves `settings.bat`.
 
 **RPCS3 patches.** RPCS3's game patches (`patch.yml`, from RPCS3's patch manager) can become mods
 when they only change instructions in place. `scripts\rpcs3_mods.py` finds the patches written for
