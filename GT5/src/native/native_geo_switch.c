@@ -41,7 +41,7 @@ void native_geo_compared(void)
 #include <windows.h>
 unsigned long long g_native_geo_why[16];
 extern unsigned long long g_native8038_stat[8], g_native5BA8_stat[3], g_native7DC8_stat[5];
-extern unsigned long long g_n4_66A8_stat[4], g_n4_6418_stat[6];
+extern unsigned long long g_n4_66A8_stat[4], g_n4_6418_stat[6], g_n4_66A8_exact[2], g_n4_6418_exact[2];
 static DWORD WINAPI native_geo_stat_thread(LPVOID p)
 {
     (void)p;
@@ -54,11 +54,12 @@ static DWORD WINAPI native_geo_stat_thread(LPVOID p)
                 w[0], w[6], w[1], w[7], w[2], w[3], w[4], w[5], a[0], a[1], a[2], a[3], a[4]);
         fprintf(stderr, "[native-geo-stat] 5BA8: calls %llu, fast %llu, lines %llu | 7DC8: calls %llu, fast-forwards %llu, passes %llu, helper ops %llu, "
                 "conversions redone %llu | 66A8: calls %llu, to lifted %llu (guard %llu, range %llu) | 6418: calls %llu, to lifted %llu "
-                "(guard %llu, range %llu), left for 6CA4 %llu, normalised %llu\n",
+                "(guard %llu, range %llu), left for 6CA4 %llu, normalised %llu | done exactly in native code: 66A8 %llu + %llu, 6418 %llu + %llu\n",
                 g_native5BA8_stat[0], g_native5BA8_stat[1], g_native5BA8_stat[2],
                 g_native7DC8_stat[0], g_native7DC8_stat[1], g_native7DC8_stat[2], g_native7DC8_stat[3], g_native7DC8_stat[4],
                 g_n4_66A8_stat[0], g_n4_66A8_stat[1], g_n4_66A8_stat[2], g_n4_66A8_stat[3],
-                g_n4_6418_stat[0], g_n4_6418_stat[1], g_n4_6418_stat[2], g_n4_6418_stat[3], g_n4_6418_stat[4], g_n4_6418_stat[5]);
+                g_n4_6418_stat[0], g_n4_6418_stat[1], g_n4_6418_stat[2], g_n4_6418_stat[3], g_n4_6418_stat[4], g_n4_6418_stat[5],
+                g_n4_66A8_exact[0], g_n4_66A8_exact[1], g_n4_6418_exact[0], g_n4_6418_exact[1]);
         fflush(stderr);
     }
     return 0;

@@ -9,6 +9,37 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.96**
+
+🚨 **Fix: cars missing body panels since v0.1.92. And the waiting threads sleep: a fifth less CPU on big processors**
+- **The bug.** From v0.1.92 to v0.1.95, premium cars lost parts of their body: in car select while the car
+  turns, and in races (bonnet, doors, panels gone, the inside showing). Reported by two players on the
+  Discord, on DirectX 12 and Vulkan; the same here once looked for. The cause was one of the two changes
+  to the SPU translation in v0.1.92: float chains ran on values that had not had the SPU's "a zero is +0"
+  rule applied yet ("twins"), and somewhere an operation got a twin that no longer belonged to its
+  value. It passed 4.27 million differential runs on six job images and every compare race, and it was
+  wrong in the game. It is switched off (the helpers compute from the values again; no re-lift), and it
+  stays off until the fault is found and the car-select picture is part of the check. My test runs had
+  the broken picture in their frames all along and I had not looked at them: releases now get the car
+  looked at, at an angle and in a race, old build next to new.
+- **Waiting threads sleep instead of spin, on every processor.** The thread that walks the game's graphics
+  commands and the one that records them for DirectX 12 spun while they waited, on processors with more
+  than 12 threads (smaller ones already slept). Switched off and on every 10 seconds inside one race on a
+  32-thread i9: cores busy 3.53 to 2.96 (-22% +-3%), frames a second +0.7% +-0.3%. On 16 slow cores alone:
+  -10% CPU and -2.5% frames a second (there the CPU is the limit). `PS3_SPIN_SLEEP=0` spins as before.
+- **Float operations with a lane out of range** (real game vectors often carry something that is not a
+  number in their fourth lane) were redone one lane at a time in slow exact code; they are now done for
+  all four lanes in double precision on the CPU's vector unit, with the same results: 2.4 billion random
+  lanes per operation and all pairs of an edge set against the exact reference, no difference; 2.5 to 6
+  times faster per such call. Those routines were 3.8% of the SPU workers' time.
+- **Native 0x66A8 and 0x6418** (job `w0163C080`) no longer hand a call back when a lane is out of range:
+  counted in a race, 0 calls handed back (it was 79% and 100%), and on 96 inputs captured from the game
+  6-8 ns a call against 43-47 ns.
+- Measured before the fix above was in (so with the faulty translation feature still on, which was a
+  little faster): against v0.1.95 on 8 slow cores, three pairs, the whole game about 4% less CPU. The
+  numbers for this exact build are still to be measured.
+- No re-lift: the update rebuilds the SPU jobs and the runtime.
+
 🏷️ Released as **v0.1.95**
 
 💤 **The SPU workers are woken one at a time: 6% less CPU for the whole game**

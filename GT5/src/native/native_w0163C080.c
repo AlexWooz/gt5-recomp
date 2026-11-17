@@ -13,7 +13,15 @@
  * same signature and ABI as the lifted function; reads its live-in registers from ctx->gpr[];
  * leaves every register and local-store byte the lifted function writes exactly as it would; hands
  * control on the same way (the same SPU_DIRECT_SV / SPU_RET). Whatever the native code does not
- * cover is given to the lifted function before anything has been written to local store.
+ * cover (a register that is not the expected constant, the local-store diagnostics switched on)
+ * is given to the lifted function before anything has been written to local store.
+ *
+ * Floats outside the host's range are NOT such a case. Both functions first run on bare host
+ * operations with one range check (native_common.h). In the game the vectors they get mostly
+ * have a last word that is no float (0x6D6D6D07 and the like: its square overflows), so the check
+ * fails on most calls of 0x66A8 and on every call of 0x6418; those are finished here, exactly:
+ * the sum of squares in double precision (n4x_sumsq), any later operation that leaves the range
+ * with the runtime's exact helpers (n4x_fm / n4x_fma / n4x_fa).
  *
  * Build: the job's flags, as the game gives lifted SPU code,
  *     -O2 /w /GS- -mavx2 -mfma -ffp-contract=off -DSPU_X86_RZ_ALWAYS=1 -DSPU_USE_DISPATCH_MT
@@ -24,7 +32,9 @@
  * (scripts/spu_native_patch.py, the `hooked` lines of natives.txt) and this file defines those names. Without it
  * (stand-alone harness) the functions are gt5_w0163C080_native_XXXXXXXX[_sv]. GT5_NATIVE_GEO
  * (native_geo.h) picks lifted / native / run both and compare. -DNATIVE_STATS adds counters and
- * the fault injection of the harness; the game does not define it.
+ * the fault injection of the harness; the game does not define it. N4_DUMP("66A8t") / ("6418t"):
+ * with the game's test build and GT5_NATIVE_GEO_DUMP set, inputs of calls that needed the exact
+ * helpers after the sum of squares are written out (none of the 96 real inputs at hand did).
  */
 #include "spu_recomp.h"
 #include "spu_helpers.h"
@@ -44,12 +54,16 @@ SPU_SV void gt5_w0163C080_spu_func_00004AE0_orig_sv(spu_context* ctx);
 #endif
 
 #ifdef NATIVE_STATS
-/* Harness self-test: the native functions flip one bit of a line they stored. */
+/* Harness self-test. g_n4_fault = 1: the native functions flip one bit of a line they stored.
+ * g_n4_fault = 2: they flip one bit of the last word of a register they redid exactly (the sum of
+ * squares), for inputs whose path stores nothing to local store. */
 int g_n4_fault;
 unsigned long long g_n4_faults;
-#  define N4_FAULT(ls, a) do { if (g_n4_fault) { (ls)[((a) & N4_LSM) + 15u] ^= 1u; g_n4_faults++; } } while (0)
+#  define N4_FAULT(ls, a) do { if (g_n4_fault == 1) { (ls)[((a) & N4_LSM) + 15u] ^= 1u; g_n4_faults++; } } while (0)
+#  define N4_FAULT_REG(ctx, n) do { if (g_n4_fault == 2) { (ctx)->gpr[n]._u32[3] ^= 1u; g_n4_faults++; } } while (0)
 #else
 #  define N4_FAULT(ls, a) ((void)0)
+#  define N4_FAULT_REG(ctx, n) ((void)0)
 #endif
 
 #ifdef NATIVE_STATS
@@ -61,8 +75,11 @@ void native_geo_dump(const char* name, const void* gpr, unsigned gpr_bytes, cons
 #endif
 #ifdef NATIVE_STATS
 /* [0] calls  [1] calls given to the lifted function  [2] of those: a register or a diagnostic
- * gate was not as expected  [3] of those: a float out of the host's range */
+ * gate was not as expected  [3] of those: a float out of the host's range (none any more: 0) */
 unsigned long long g_n4_66A8_stat[4];
+/* calls finished natively with floats out of the host's range:
+ * [0] the sum of squares redone in double precision  [1] the long path redone with the exact helpers */
+unsigned long long g_n4_66A8_exact[2];
 #endif
 
 /* ---------------------------------------------------------------------------------------------
@@ -78,8 +95,45 @@ unsigned long long g_n4_66A8_stat[4];
  *
  * Expects r123 = 0.25, r124 = 0x00010203 (shufb control: preferred word to every lane),
  * r125 = 0.1, r127 = -2.0 in every lane, as 0x6630 sets them before the loop; anything else goes to
- * the lifted function.
+ * the lifted function. Floats of any kind are handled here (see the top of the file).
  * ------------------------------------------------------------------------------------------- */
+/* The long path of 0x66A8 from r12 on when some operation of it leaves the host range: each
+ * operation with the runtime's exact helper, the 14 registers that depend on the chain written
+ * again, and the store. Arguments: what the fast path had loaded or computed and what stays valid
+ * whatever the floats are (r38 = the preferred word of the clamped 1/length in every lane, r34 and
+ * r4 the two lines loaded, r28 / r23 = r34 rotated, r31 = (s - 0.025) * 3 = r26, r27 the weight).
+ * r35, r31 and r32 need no redoing (see the fast path), nor do the loads and rotations. r14 can be
+ * any word here, so the compare and the select are the SPU's. The caller hands control on. */
+static N4_NOINLINE SPU_SV void n4_66A8_exact(spu_context* ctx, uint32_t sp, __m128i r9, __m128i r38, __m128i r34, __m128i r28,
+                                             __m128i r23, __m128i r31, __m128i r27, __m128i r4) {
+    uint8_t* const ls = ctx->ls;
+    const __m128i k01 = n4_splat(0x3DCCCCCCu), km2 = n4_splat(0xC0000000u), zero = _mm_setzero_si128();
+    N4_STAT(g_n4_66A8_exact, 1);
+    N4_DUMP("66A8t");            /* what the function reads is intact; registers the fast path wrote are not entry values */
+    const __m128i x12 = n4x_fm(r9, r38);
+    const __m128i x29 = n4x_fm(x12, r34);
+    const __m128i x30 = n4_rot4(x12), x25 = n4_rot8(x12);
+    const __m128i x24 = n4x_fma(r28, x30, x29);
+    const __m128i x19 = n4x_fm(r31, r27);
+    const __m128i x22 = n4x_fma(r23, x25, x24);
+    const __m128i x21 = n4x_fa(x22, k01);
+    const __m128i x14 = n4x_fm(x21, km2);
+    const __m128i x20 = n4_from(spu_fcgt(n4_to(zero), n4_to(x14)));
+    const __m128i x2 = _mm_andnot_si128(x20, x14);                                   /* selb(r14, 0, r20) */
+    const __m128i x13 = n4x_fm(x2, x19);
+    const __m128i x6 = n4_splat0(x13);
+#ifdef N4X_MUT_TAILHOST /* mutation test of the harness: must produce mismatches */
+    const __m128i x18 = n4_flush(n4_fmadd(x12, x6, r4));
+#else
+    const __m128i x18 = n4x_fma(x12, x6, r4);
+#endif
+    n4_p(ctx, 12, x12); n4_p(ctx, 29, x29); n4_p(ctx, 30, x30); n4_p(ctx, 25, x25); n4_p(ctx, 24, x24); n4_p(ctx, 19, x19);
+    n4_p(ctx, 22, x22); n4_p(ctx, 21, x21); n4_p(ctx, 14, x14); n4_p(ctx, 20, x20); n4_p(ctx, 2, x2);
+    n4_p(ctx, 13, x13); n4_p(ctx, 6, x6); n4_p(ctx, 18, x18);
+    n4_sq(ls, sp + 0xF0, x18);
+    N4_FAULT(ls, sp + 0xF0);
+}
+
 static SPU_SV void n4_66A8_sv(spu_context* ctx) {
     uint8_t* const ls = ctx->ls;
     const __m128i k025 = n4_splat(0x3E800000u), k0025 = n4_splat(0x3CCCCCCCu), k01 = n4_splat(0x3DCCCCCCu);
@@ -96,21 +150,27 @@ static SPU_SV void n4_66A8_sv(spu_context* ctx) {
     }
     const uint32_t sp = n4_g0(ctx, 1);
     const __m128i r9 = n4_lq(ls, sp + 0xE0);
-    const __m128i r11a = n4_mul(r9, r9);                    /* squares and their sums are never -0 */
+    __m128i r11a = n4_mul(r9, r9);                          /* squares and their sums are never -0 */
     const __m128i r8 = n4_rot4(r9), r7 = n4_rot8(r9);
-    const __m128i r16 = n4_fmadd(r8, r8, r11a);
-    const __m128i r79 = n4_fmadd(r7, r7, r16);
+    __m128i r16 = n4_fmadd(r8, r8, r11a);
+    __m128i r79 = n4_fmadd(r7, r7, r16);
+    /* r11a <= r16 <= r79 lane by lane (or NaN all the way), so r79 in range covers all three.
+     * Out of range (in the game: the last word of the vector is no float): all three again, exactly. */
+    if (n4_chk_bad(_mm_and_si128(r79, _mm_set1_epi32(0x7FFFFFFF)))) {
+        const n4x_sumsq_t x = n4x_sumsq(r9);
+        r11a = x.a; r16 = x.b; r79 = x.c;
+        N4_STAT(g_n4_66A8_exact, 0);
+    }
     const __m128i r10 = n4_frsqest(r79);
     const __m128i r77 = n4_fi(r79, r10);                    /* sign 0: +0, a positive float, or exponent 255 */
     const __m128i r78 = _mm_cmpgt_epi32(r77, k025);
     const __m128i r76 = _mm_cmpgt_epi32(r77, k0025);
     const __m128i r2a = _mm_min_epi32(r77, k025);           /* selb(r77, 0.25, r78): +0 or [2^-126, 0.25] */
-    /* r11a <= r16 <= r79 lane by lane (or NaN all the way), so r79 in range covers all three. From
-     * here on the lifted function would take the same branch as this code, and no register written
-     * below is one it reads: on a later range failure it starts over and overwrites them all. */
-    if (N4_UNLIKELY(n4_chk_bad(_mm_and_si128(r79, _mm_set1_epi32(0x7FFFFFFF))))) goto lifted;
+    /* frsqest and fi are integer work on the bit fields, exact for any r79; r77 has sign 0, so the
+     * two compares and the select are the integer ones for any r77. */
     n4_p(ctx, 5, k0025); n4_p(ctx, 7, r7); n4_p(ctx, 8, r8); n4_p(ctx, 9, r9); n4_p(ctx, 10, r10);
     n4_p(ctx, 16, r16); n4_p(ctx, 76, r76); n4_p(ctx, 77, r77); n4_p(ctx, 78, r78); n4_p(ctx, 79, r79);
+    N4_FAULT_REG(ctx, 79);
     if (_mm_cvtsi128_si32(r76) == 0) {
         n4_p(ctx, 2, r2a); n4_p(ctx, 11, r11a);
         SPU_DIRECT_SV(ctx, 0x676C, gt5_w0163C080_spu_func_0000676C);
@@ -154,15 +214,16 @@ static SPU_SV void n4_66A8_sv(spu_context* ctx) {
         const __m128i r18 = n4_flush(n4_fmadd(r12u, n4_splat0(r13u), r4));
         n4_p(ctx, 13, r13); n4_p(ctx, 6, r6); n4_p(ctx, 18, r18);
         chk = n4_chk(n4_chk(chk, r13u), r18);
-        if (N4_UNLIKELY(n4_chk_bad(chk))) goto lifted;
-        n4_sq(ls, sp + 0xF0, r18);
-        N4_FAULT(ls, sp + 0xF0);
+        if (N4_LIKELY(!n4_chk_bad(chk))) {
+            n4_sq(ls, sp + 0xF0, r18);
+            N4_FAULT(ls, sp + 0xF0);
+            SPU_DIRECT_SV(ctx, 0x6770, gt5_w0163C080_spu_func_00006770);
+        }
+        /* Some operation of the chain left the host range. Nothing is in local store yet and no
+         * register written above is read again: the chain is done once more, exactly, out of line. */
+        n4_66A8_exact(ctx, sp, r9, r38, r34, r28, r23, r31, r27, r4);
         SPU_DIRECT_SV(ctx, 0x6770, gt5_w0163C080_spu_func_00006770);
     }
-lifted:
-    N4_STAT(g_n4_66A8_stat, 1); N4_STAT(g_n4_66A8_stat, 3);
-    N4_DUMP("66A8");
-    __attribute__((musttail)) return N4_ORIG_SV(000066A8)(ctx);
 }
 
 /* The one line 0x66A8 can store to. */
@@ -190,13 +251,17 @@ void gt5_w0163C080_native_000066A8(spu_context* ctx) { SPU_SV_CALL gt5_w0163C080
  *   r3 = sp + 144, r4 = r83 + 256;  call 0x4190 (copies the line at r4 to the line at r3);  -> 0x6478
  *
  * Expects r118 = 0x00010203 in every word (shufb control: preferred word to every lane), as the
- * code before the loop sets it; anything else goes to the lifted function. r98 is compared with
- * the lifted code's own helper. The call of 0x4190 and what follows it are the lifted statements.
+ * code before the loop sets it; anything else goes to the lifted function. Floats of any kind are
+ * handled here (see the top of the file). r98 is compared with the lifted code's own helper. The
+ * call of 0x4190 and what follows it are the lifted statements.
  * ------------------------------------------------------------------------------------------- */
 #ifdef NATIVE_STATS
 /* [0] calls  [1] calls given to the lifted function  [2] of those: r118 or a diagnostic gate
- * [3] of those: a float out of the host's range  [4] left for 0x6CA4  [5] normalised */
+ * [3] of those: a float out of the host's range (none any more: 0)  [4] left for 0x6CA4  [5] normalised */
 unsigned long long g_n4_6418_stat[6];
+/* calls finished natively with floats out of the host's range:
+ * [0] the sum of squares redone in double precision  [1] the scaled vector redone with the exact helper */
+unsigned long long g_n4_6418_exact[2];
 #endif
 
 static SPU_SV void n4_6418_sv(spu_context* ctx) {
@@ -212,12 +277,18 @@ static SPU_SV void n4_6418_sv(spu_context* ctx) {
     }
     const uint32_t sp = n4_g0(ctx, 1);
     const __m128i r5 = n4_lq(ls, sp + 0xA0);
-    const __m128i r70 = n4_mul(r5, r5);                     /* squares and their sums are never -0 */
+    __m128i r70 = n4_mul(r5, r5);                           /* squares and their sums are never -0 */
     const __m128i r69 = n4_rot4(r5), r67 = n4_rot8(r5);
-    const __m128i r68 = n4_fmadd(r69, r69, r70);
-    const __m128i r89 = n4_fmadd(r67, r67, r68);
-    /* r70 <= r68 <= r89 lane by lane (or NaN all the way), so r89 in range covers all three */
-    if (N4_UNLIKELY(n4_chk_bad(_mm_and_si128(r89, _mm_set1_epi32(0x7FFFFFFF))))) goto lifted;
+    __m128i r68 = n4_fmadd(r69, r69, r70);
+    __m128i r89 = n4_fmadd(r67, r67, r68);
+    /* r70 <= r68 <= r89 lane by lane (or NaN all the way), so r89 in range covers all three.
+     * Out of range (in the game: the last word of the vector is no float): all three again, exactly. */
+    if (n4_chk_bad(_mm_and_si128(r89, _mm_set1_epi32(0x7FFFFFFF)))) {
+        const n4x_sumsq_t x = n4x_sumsq(r5);
+        r70 = x.a; r68 = x.b; r89 = x.c;
+        N4_STAT(g_n4_6418_exact, 0);
+    }
+    /* frsqest and fi are integer work on the bit fields, exact for any r89 */
     const __m128i r66 = n4_frsqest(r89);
     const __m128i r85 = n4_fi(r89, r66);                    /* sign 0: +0, a positive float, or exponent 255 */
     const __m128i r63 = _mm_cmpgt_epi32(k1, r85);           /* fcgt(1.0, r85) */
@@ -229,14 +300,22 @@ static SPU_SV void n4_6418_sv(spu_context* ctx) {
         n4_p(ctx, 5, r5); n4_p(ctx, 59, r59); n4_p(ctx, 60, r60); n4_p(ctx, 61, r61); n4_p(ctx, 62, r62); n4_p(ctx, 63, r63);
         n4_p(ctx, 64, k1); n4_p(ctx, 66, r66); n4_p(ctx, 67, r67); n4_p(ctx, 68, r68); n4_p(ctx, 69, r69); n4_p(ctx, 70, r70);
         n4_p(ctx, 85, r85); n4_p(ctx, 89, r89);
+        N4_FAULT_REG(ctx, 89);
         N4_STAT(g_n4_6418_stat, 4);
         SPU_DIRECT_SV(ctx, 0x6CA4, gt5_w0163C080_spu_func_00006CA4);
     }
     {
         const __m128i r9 = n4_splat0(r85);
         const __m128i r10u = n4_mul(r5, r9);
-        if (N4_UNLIKELY(n4_chk_bad(_mm_and_si128(r10u, _mm_set1_epi32(0x7FFFFFFF))))) goto lifted;
-        const __m128i r10 = n4_flush(r10u);
+        __m128i r10 = n4_flush(r10u);
+        if (N4_UNLIKELY(n4_chk_bad(_mm_and_si128(r10u, _mm_set1_epi32(0x7FFFFFFF))))) {
+            /* a lane of the product left the host range: the product again, with the runtime's exact helper */
+            N4_STAT(g_n4_6418_exact, 1);
+            N4_DUMP("6418t");
+#ifndef N4X_MUT_TAILHOST    /* mutation test of the harness: without this line it must produce mismatches */
+            r10 = n4x_fm(r5, r9);
+#endif
+        }
         n4_sq(ls, sp + 0xA0, r10);
         N4_FAULT(ls, sp + 0xA0);
         ctx->gpr[0] = spu_link(0x6478);
@@ -245,15 +324,12 @@ static SPU_SV void n4_6418_sv(spu_context* ctx) {
         n4_p(ctx, 59, r59); n4_p(ctx, 60, r60); n4_p(ctx, 61, r61); n4_p(ctx, 62, r62); n4_p(ctx, 63, r63);
         n4_p(ctx, 64, k1); n4_p(ctx, 66, r66); n4_p(ctx, 67, r67); n4_p(ctx, 68, r68); n4_p(ctx, 69, r69); n4_p(ctx, 70, r70);
         n4_p(ctx, 85, r85); n4_p(ctx, 89, r89);
+        N4_FAULT_REG(ctx, 89);
         N4_STAT(g_n4_6418_stat, 5);
         /* the call of 0x4190 and the hand-over, as the lifted statements have them */
         { int32_t _si = (int32_t)ctx->image_id; ctx->host_depth++; gt5_w0163C080_spu_func_00004190_sv(ctx); spu_drain_call(ctx, 0x6478); ctx->host_depth--; spu_img_restore(ctx, _si); }
         { SPU_DIRECT_SV(ctx, 0x6478, gt5_w0163C080_spu_func_00006478); }
     }
-lifted:
-    N4_STAT(g_n4_6418_stat, 1); N4_STAT(g_n4_6418_stat, 3);
-    N4_DUMP("6418");
-    __attribute__((musttail)) return N4_ORIG_SV(00006418)(ctx);
 }
 
 /* The lines 0x6418 (with the 0x4190 it calls) can store to: the vector, and the line at sp+144. */

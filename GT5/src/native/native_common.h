@@ -14,7 +14,9 @@
  *     (b) applies flush, or proves t cannot be -0.
  *   n4_chk() accumulates the largest |t| bit pattern seen (as integers: NaN and Inf patterns
  *   are above 0x7F7FFFFF); n4_chk_bad() is the single test at the end. A function that fails it
- *   has stored nothing yet and calls the lifted function instead.
+ *   has stored nothing to local store yet and redoes the operations exactly (the n4x_ pieces
+ *   below): real data has vectors whose last lane is not a float at all, so "give the call to
+ *   the lifted function" would be most calls.
  *   flush(t) is t + (+0): under round toward zero (-0) + (+0) = +0 and x + 0 = x for every other
  *   x, NaN payloads included. It must stay a separate add: fused into a*b + 0 it would return -0
  *   for a product that underflows from below. clang does not fuse across intrinsics (contraction
@@ -144,6 +146,78 @@ static const __declspec(align(16)) char n4_rot_ctl[16][16] = {
 };
 N4_INLINE __m128i n4_rotqby(__m128i x, uint32_t sh) {
     return _mm_shuffle_epi8(x, _mm_load_si128((const __m128i*)n4_rot_ctl[sh & 15]));
+}
+
+/* ---- lanes outside the host float range, exactly ----------------------------------------------
+ * Two tools, both exact for every bit pattern (they give what spu_fm / spu_fma / spu_fa give):
+ *
+ * n4x_fm / n4x_fma / n4x_fa: the runtime's own helpers on __m128i. One host operation and, for
+ *   lanes that left the host range, the helper's exact out-of-line routine. For operations that
+ *   are redone one at a time.
+ *
+ * n4x_sumsq: the chain  a = v*v;  b = v'*v' + a;  c = v"*v" + b  (v' = v rotated one word, v" two
+ *   words: the sum of squares both functions here start with) for all four lanes in double
+ *   precision, with one widening for the three operations. Under MXCSR round toward zero:
+ *     - an SPU single widens exactly to a double: biased exponent 0 -> +0.0, anything else the
+ *       double with the same sign, power of two and fraction, so exponent 255 is one more binade
+ *       (n4x_wide; cvtps2pd would read it as Inf/NaN);
+ *     - a square of a 24-bit significand is exact in a double, and the squares of v' and v" are
+ *       the squares of v, rotated;
+ *     - a sum of a square and an SPU single is truncated once at 53 bits by the double add, and
+ *       truncating that at 24 bits gives the exact sum truncated at 24 bits (the 24-bit numbers
+ *       are 53-bit numbers, and truncation toward zero is monotone);
+ *     - n4x_round_pos makes a double >= 0 the SPU result: the 29 low significand bits cleared
+ *       (truncation at 24 bits), clamped to Smax, +0 below Smin = 2^-126. That value, still a
+ *       double, is the next step's addend; n4x_narrow_pos gives its bits as a single.
+ *   Everything is >= 0, so there is no sign and no -0 to handle. No value is a denormal double or
+ *   overflows one (squares lie in [2^-252, 2^258)), so FTZ/DAZ never act. */
+N4_INLINE __m128i n4x_fm(__m128i a, __m128i b) { return n4_from(spu_fm(n4_to(a), n4_to(b))); }
+N4_INLINE __m128i n4x_fa(__m128i a, __m128i b) { return n4_from(spu_fa(n4_to(a), n4_to(b))); }
+N4_INLINE __m128i n4x_fma(__m128i a, __m128i b, __m128i c) { return n4_from(spu_fma(n4_to(a), n4_to(b), n4_to(c))); }
+
+N4_INLINE __m256d n4x_wide(__m128i x) {
+    /* sign-extended and moved up 29 bits: sign at bit 63 (bits 60-62 are copies of it, masked off),
+     * the 8 exponent bits at 52, the fraction at 29; then the exponent rebiased (1023 - 127) */
+    const __m256i u = _mm256_and_si256(_mm256_slli_epi64(_mm256_cvtepi32_epi64(x), 29), _mm256_set1_epi64x((long long)0x8FFFFFFFE0000000ull));
+    const __m256i nz = _mm256_cmpgt_epi64(_mm256_add_epi64(u, u), _mm256_set1_epi64x(0x001FFFFFFFFFFFFFll));   /* biased exponent != 0 */
+    return _mm256_castsi256_pd(_mm256_and_si256(_mm256_add_epi64(u, _mm256_set1_epi64x(896ll << 52)), nz));
+}
+/* d >= 0 as the SPU would leave it, still a double; *keep = the lanes that are not +0 */
+N4_INLINE __m256d n4x_round_pos(__m256d d, __m256i* keep) {
+    const __m256d t = _mm256_and_pd(d, _mm256_castsi256_pd(_mm256_set1_epi64x(~0x1FFFFFFFll)));
+#ifdef N4X_MUT_NOSMIN   /* mutation test of the harness: must produce mismatches */
+    *keep = _mm256_castpd_si256(_mm256_cmp_pd(t, _mm256_setzero_pd(), _CMP_GT_OQ));
+#else
+    *keep = _mm256_castpd_si256(_mm256_cmp_pd(t, _mm256_castsi256_pd(_mm256_set1_epi64x(0x3810000000000000ll)), _CMP_GE_OQ));   /* 2^-126 */
+#endif
+    return _mm256_and_pd(_mm256_min_pd(t, _mm256_castsi256_pd(_mm256_set1_epi64x(0x47FFFFFFE0000000ll))),      /* Smax */
+                         _mm256_castsi256_pd(*keep));
+}
+/* the bits of such a value as a single: moved down 29 bits and rebiased; 0 where it is +0 */
+N4_INLINE __m128i n4x_narrow_pos(__m256d r, __m256i keep) {
+    const __m256i w = _mm256_and_si256(_mm256_sub_epi64(_mm256_srli_epi64(_mm256_castpd_si256(r), 29), _mm256_set1_epi64x(896ll << 23)), keep);
+    return _mm256_castsi256_si128(_mm256_permutevar8x32_epi32(w, _mm256_setr_epi32(0, 2, 4, 6, 0, 2, 4, 6)));
+}
+/* a = fm(v, v), b = fma(rot4(v), rot4(v), a), c = fma(rot8(v), rot8(v), b), every lane exact.
+ * Out of line, so that the functions using it hold no 256-bit state themselves (inlined, every
+ * exit of theirs got a vzeroupper, also on the path with all floats in range); the argument and
+ * the three results travel in registers (__vectorcall: a struct of three vectors comes back in
+ * xmm0-xmm2). */
+typedef struct n4x_sumsq_t { __m128i a, b, c; } n4x_sumsq_t;
+static N4_NOINLINE n4x_sumsq_t __vectorcall n4x_sumsq(__m128i v) {
+    const __m256d w = n4x_wide(v);
+    const __m256d p = _mm256_mul_pd(w, w);                                   /* exact */
+    __m256i ka, kb, kc;
+    const __m256d da = n4x_round_pos(p, &ka);
+#ifdef N4X_MUT_NOROUND  /* mutation test of the harness: must produce mismatches */
+    const __m256d db = n4x_round_pos(_mm256_add_pd(_mm256_permute4x64_pd(p, _MM_SHUFFLE(0, 3, 2, 1)), p), &kb);
+#else
+    const __m256d db = n4x_round_pos(_mm256_add_pd(_mm256_permute4x64_pd(p, _MM_SHUFFLE(0, 3, 2, 1)), da), &kb);
+#endif
+    const __m256d dc = n4x_round_pos(_mm256_add_pd(_mm256_permute4x64_pd(p, _MM_SHUFFLE(1, 0, 3, 2)), db), &kc);
+    n4x_sumsq_t r;
+    r.a = n4x_narrow_pos(da, ka); r.b = n4x_narrow_pos(db, kb); r.c = n4x_narrow_pos(dc, kc);
+    return r;
 }
 
 /* ---- GT5_NATIVE_GEO=2: run both and compare ---------------------------------------------------

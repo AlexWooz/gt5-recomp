@@ -12363,342 +12363,6 @@ index 66eef25c..b7c2e52d 100644
      if (!addr) return (int64_t)(int32_t)CELL_ENOMEM;
      if (out) write_be32(out, addr);
      return CELL_OK;
-diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread.c
---- a/runtime/syscalls/sys_ppu_thread.c
-+++ b/runtime/syscalls/sys_ppu_thread.c
-@@ -2,6 +2,11 @@
-  * ps3recomp - PPU thread management syscalls (implementation)
-  */
- 
-+/* sched_getaffinity / CPU_COUNT (ppu_small_host) are declared only under _GNU_SOURCE, which has to be
-+ * set before the first system header. */
-+#if defined(__linux__) && !defined(_GNU_SOURCE)
-+#  define _GNU_SOURCE
-+#endif
- #include <setjmp.h>
- 
- /* sys_ppu_thread_exit never returns on hardware. Returning CELL_OK to the
-@@ -26,11 +31,17 @@
- #include "ps3emu/ps3_tprof.h"            /* PS3_TPROF: in-process thread samples */
- #include <string.h>
- #include <stdio.h>
-+#include <time.h>
- #include <stdlib.h>   /* getenv (else return value truncated to int on x64) */
- #include "ps3emu/log_first.h"
- #include "ps3emu/thread_name.h"
- #ifndef _WIN32
- #include <errno.h>
-+#include <unistd.h>         /* sysconf: ppu_small_host */
-+#include <sys/resource.h>   /* getrusage: ps3_ab_frame */
-+#if defined(__linux__)
-+#include <sched.h>          /* sched_getaffinity: ppu_small_host */
-+#endif
- #endif
- 
- /* Host stack reserved per guest thread, for pthread_attr_setstacksize. The
-@@ -180,6 +191,12 @@
- {
-     ppu_thread_info* info = (ppu_thread_info*)param;
-     ps3_thread_name("ppu %s", info->name);
-+    /* A title's audio thread feeds a device clock. */
-+    if (strstr(info->name, "audio")) ps3_thread_on_fast_cores();
-+    /* PS3_PPU_FAST_ALL=1: every game thread prefers the fast cores. The main loop is on the
-+     * critical path as much as the RSX thread, and was left to land on an E-core. */
-+    else { static int all = -1; if (all < 0) all = getenv("PS3_PPU_FAST_ALL") ? 1 : 0;
-+           if (all) ps3_thread_on_fast_cores(); }
- 
- #ifdef _WIN32
-     /* Reserve stack for the STACK_OVERFLOW handler, same as main() does for the
-@@ -436,8 +453,14 @@
-     int slot = find_free_slot();
-     if (slot < 0) {
-         table_unlock();
-+        { static int n = 0; if (PS3_LOG_FIRST(n, 4))
-+            fprintf(stderr, "[ppu-thread] table full (%d slots): create returns EAGAIN\n", PPU_THREAD_MAX); }
-         return (int64_t)(int32_t)CELL_EAGAIN;
-     }
-+    /* Each new high in steps of 16, so a run shows whether threads are leaking. */
-+    { static int high = 0; int used = 1;
-+      for (int i = 0; i < PPU_THREAD_MAX; i++) used += g_ppu_threads[i].state != PPU_THREAD_STATE_FREE;
-+      if (used >= high + 16) { high = used; fprintf(stderr, "[ppu-thread] %d slots in use\n", used); } }
- 
-     ppu_thread_info* t = &g_ppu_threads[slot];
-     memset(t, 0, sizeof(*t));
-@@ -660,6 +683,10 @@
-     uint64_t tid          = LV2_ARG_U64(ctx, 0);
-     uint32_t status_addr  = LV2_ARG_PTR(ctx, 1);
-     { static int n=0; if(PS3_LOG_FIRST(n, 30)) fprintf(stderr,"[WAIT] ppu_thread_join(tid=%llu)\n", (unsigned long long)tid); }
-+    /* PS3_JOIN_BT=1: who is joining. A title tearing down reads as a hang here. */
-+    { static int bt = -1; if (bt < 0) bt = getenv("PS3_JOIN_BT") ? 1 : 0;
-+      if (bt) { extern void ppu_dump_guest_stack(ppu_context*, const char*);
-+                ppu_dump_guest_stack(ctx, "join"); } }
-     ppu_thread_note_block(ctx->thread_id);   /* PS3_PRIO_START */
- 
-     table_lock();
-@@ -788,6 +815,250 @@
- static unsigned long g_cdl_hits;
- static uint32_t g_yield_ctr;
- static uint32_t g_cdl_v0, g_cdl_s0, g_cdl_s1, g_cdl_s6;
-+
-+/* A guest wait loop that yields (GT5 waits for SPU results like this) spins at 100% of a core on a
-+ * small CPU: SwitchToThread hands over only to a thread queued on the same processor, and there is
-+ * usually none. On a laptop that is power the other game threads lose. So when a thread has yielded 16
-+ * times in a row, less than 50 us apart, it naps 50 us on a high-resolution timer instead, while the
-+ * process may use 12 logical CPUs or fewer (the count is checked again every second, so an affinity
-+ * change counts). PS3_YIELD_NAP=0 never naps, =1 always may. Hookshot (Switch 2 recomp) measured +9%
-+ * frame rate and 14% less CPU per frame at 4 threads with the same change.
-+ * Round 9 (15 Nov 2026) widened "small" from 8 to 12 logical CPUs, the 6-core/12-thread CPUs many players
-+ * have (Ryzen 5 3600/5600X, i5-10400F): on 6 P-cores with hyper-threading the policy (this nap and the
-+ * pollers' sleep below) kept the same game fps (-0.3% +- 2.8%, +0.4% +- 1.7%) at 4.9% and 14.4% less CPU
-+ * in two races; on 16 threads it was within noise (fps -1.1% +- 2.5%, CPU -4.0% +- 2.5%), so 16 stays big.
-+ * PS3_SMALL_HOST_CPUS=<n> sets the limit; PS3_AB_WHAT=small alternates the whole policy off and on. */
-+int ps3_ab_on(const char* what);
-+static int ps3_ab_state(void);
-+#ifdef _WIN32
-+static int ppu_yield_nap_enabled(void)
-+{
-+    static int forced = -2;
-+    if (forced == -2) { const char* e = getenv("PS3_YIELD_NAP"); forced = e ? (atoi(e) != 0) : -1; }
-+    if (forced >= 0) return forced;
-+    { /* PS3_AB_WHAT=small: whether the key is listed is worked out once, this runs on every yield */
-+      static signed char listed = -1;
-+      if (listed < 0) listed = (signed char)(ps3_ab_on("small") >= 0);
-+      if (listed) { const int ab = ps3_ab_state(); if (ab >= 0) return ab; } }
-+    static int small_max = -1;
-+    if (small_max < 0) { const char* e = getenv("PS3_SMALL_HOST_CPUS"); small_max = (e && *e) ? atoi(e) : 12; }
-+    static volatile long small_host = -1;
-+    static volatile long long checked_ms = 0;
-+#ifdef _WIN32
-+    const long long now = (long long)GetTickCount64();
-+    if (small_host < 0 || now - checked_ms > 1000) {
-+        DWORD_PTR pm = 0, sm = 0; int n = 0;
-+        if (GetProcessAffinityMask(GetCurrentProcess(), &pm, &sm))
-+            for (; pm; pm &= pm - 1) n++;
-+        small_host = (n > 0 && n <= small_max) ? 1 : 0;
-+        checked_ms = now;
-+    }
-+#endif
-+    return (int)small_host;
-+}
-+#else
-+/* POSIX: the same small-host test as Windows (12 logical CPUs or fewer, PS3_SMALL_HOST_CPUS=<n>,
-+ * PS3_AB_WHAT=small), for ps3_host_spin_sleep; the yield nap above stays Windows only. The CPUs
-+ * counted are the ones this process may run on (sched_getaffinity on Linux, so taskset counts as
-+ * Windows' affinity mask does), checked again every second. It was 8 CPUs here until v0.1.65's
-+ * Windows measurements moved the line to 12. */
-+static int ppu_small_host(void)
-+{
-+    { /* PS3_AB_WHAT=small: whether the key is listed is worked out once */
-+      static signed char listed = -1;
-+      if (listed < 0) listed = (signed char)(ps3_ab_on("small") >= 0);
-+      if (listed) { const int ab = ps3_ab_state(); if (ab >= 0) return ab; } }
-+    static int small_max = -1;
-+    if (small_max < 0) { const char* e = getenv("PS3_SMALL_HOST_CPUS"); small_max = (e && *e) ? atoi(e) : 12; }
-+    static volatile long small_host = -1;
-+    static volatile long long checked_s = 0;
-+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-+    if (small_host < 0 || (long long)ts.tv_sec - checked_s >= 1) {
-+        long n = 0;
-+#if defined(__linux__)
-+        cpu_set_t set;
-+        CPU_ZERO(&set);
-+        if (sched_getaffinity(0, sizeof set, &set) == 0) n = CPU_COUNT(&set);
-+#endif
-+        if (n <= 0) n = sysconf(_SC_NPROCESSORS_ONLN);
-+        const long was = small_host;
-+        small_host = (n > 0 && n <= small_max) ? 1 : 0;
-+        checked_s = (long long)ts.tv_sec;
-+        static int logs;
-+        if (was != small_host && logs < 4) {
-+            logs++;
-+            fprintf(stderr, "[ppu] %ld logical CPUs for this process: %s (the line is %d, PS3_SMALL_HOST_CPUS)\n",
-+                    n, small_host ? "small, waiting threads sleep" : "big, waiting threads spin", small_max);
-+        }
-+    }
-+    return (int)small_host;
-+}
-+#endif
-+
-+static void ppu_yield_or_nap(void)
-+{
-+#ifdef _WIN32
-+    static __declspec(thread) unsigned run;
-+    static __declspec(thread) LONGLONG last;
-+    static __declspec(thread) HANDLE timer;
-+    static LONGLONG qpf;
-+    LARGE_INTEGER t; QueryPerformanceCounter(&t);
-+    if (!qpf) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); qpf = f.QuadPart; }
-+    run = (last && (t.QuadPart - last) * 20000 < qpf) ? run + 1 : 0;   /* < 50 us since the last yield */
-+    last = t.QuadPart;
-+    if (run >= 16 && ppu_yield_nap_enabled()) {
-+        if (!timer) timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
-+        if (timer) {
-+            LARGE_INTEGER due; due.QuadPart = -500;   /* 50 us, relative, in 100 ns units */
-+            if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) { WaitForSingleObject(timer, INFINITE); return; }
-+        }
-+    }
-+    SwitchToThread();
-+#else
-+    sched_yield();
-+#endif
-+}
-+
-+/* For the runtime's own polling waits (the SPU repeated-DMA back-off): a 50 us timer nap on a small
-+ * host, a plain yield elsewhere. */
-+void ps3_host_nap_or_yield(void)
-+{
-+#ifdef _WIN32
-+    static __declspec(thread) HANDLE timer;
-+    if (ppu_yield_nap_enabled()) {
-+        if (!timer) timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
-+        if (timer) {
-+            LARGE_INTEGER due; due.QuadPart = -500;
-+            if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) { WaitForSingleObject(timer, INFINITE); return; }
-+        }
-+    }
-+    SwitchToThread();
-+#else
-+    sched_yield();
-+#endif
-+}
-+
-+/* Host threads that poll for work (the RSX walker parked on a command-buffer word, the D3D12 record
-+ * thread between batches) spin, which on a 4-8 thread CPU takes a core from the game threads doing the
-+ * work they wait for, and on a laptop spends the shared power budget. ps3_host_spin_sleep() says whether
-+ * such a poller should sleep after a short spin: on a small host as above, or PS3_SPIN_SLEEP=0/1.
-+ * ps3_host_sleep_on() then waits for `ev` (may be NULL) or `us` microseconds on a high-resolution
-+ * timer, whichever comes first, and returns 1 if `ev` fired. */
-+/* PS3_AB_PERIOD=<s> (tests): the switches named in PS3_AB_WHAT (default "spin,slot,pace": the pollers'
-+ * sleep below, SPURS_SLOT_WAKE, SPURS_PROBE_PACE) are off for <s> seconds, then on, and so on, so one race
-+ * measures both under the same load. ps3_ab_frame(), called once a game frame, logs a line per segment:
-+ * "[ab] on|off: N game frames in T s, F a second, C cores busy". ps3_ab_on("spin") is -1 when that
-+ * switch is not being alternated, else 0 (off) or 1 (on). */
-+static double ab_now_s(void)
-+{
-+#ifdef _WIN32
-+    static LARGE_INTEGER f; if (!f.QuadPart) QueryPerformanceFrequency(&f);
-+    LARGE_INTEGER c; QueryPerformanceCounter(&c);
-+    return (double)c.QuadPart / (double)f.QuadPart;
-+#else
-+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-+    return (double)ts.tv_sec + ts.tv_nsec * 1e-9;
-+#endif
-+}
-+static double s_ab_period = -1.0, s_ab_t0;
-+static char s_ab_what[64];
-+static int ps3_ab_state(void)
-+{
-+    if (s_ab_period < 0) {
-+        const char* e = getenv("PS3_AB_PERIOD");
-+        const char* w = getenv("PS3_AB_WHAT");
-+        snprintf(s_ab_what, sizeof s_ab_what, ",%s,", w && *w ? w : "spin,slot,pace");
-+        s_ab_period = e ? atof(e) : 0.0;
-+    }
-+    if (s_ab_period <= 0) return -1;
-+    const double now = ab_now_s();
-+    if (s_ab_t0 == 0) s_ab_t0 = now;
-+    return (int)((long long)((now - s_ab_t0) / s_ab_period) & 1);
-+}
-+int ps3_ab_on(const char* what)
-+{
-+    const int st = ps3_ab_state();
-+    if (st < 0) return -1;
-+    char key[32]; snprintf(key, sizeof key, ",%s,", what);
-+    return strstr(s_ab_what, key) ? st : -1;
-+}
-+void ps3_ab_frame(void)
-+{
-+    const int st = ps3_ab_state();
-+    if (st < 0) return;
-+    static double seg_t0, cpu0; static unsigned long long frames; static int seg = -1;
-+    const double now = ab_now_s();
-+    if (st != seg) {
-+        double cpu = 0;
-+#ifdef _WIN32
-+        { FILETIME a, b, k, u; if (GetProcessTimes(GetCurrentProcess(), &a, &b, &k, &u))
-+              cpu = ((double)(((unsigned long long)k.dwHighDateTime << 32) | k.dwLowDateTime) +
-+                     (double)(((unsigned long long)u.dwHighDateTime << 32) | u.dwLowDateTime)) * 1e-7; }
-+#else
-+        { struct rusage ru; if (getrusage(RUSAGE_SELF, &ru) == 0)
-+              cpu = (double)ru.ru_utime.tv_sec + ru.ru_utime.tv_usec * 1e-6 +
-+                    (double)ru.ru_stime.tv_sec + ru.ru_stime.tv_usec * 1e-6; }
-+#endif
-+        if (seg >= 0 && now > seg_t0)
-+            fprintf(stderr, "[ab] %s: %llu game frames in %.2f s, %.2f a second, %.2f cores busy\n",
-+                    seg ? "on" : "off", frames, now - seg_t0, frames / (now - seg_t0), (cpu - cpu0) / (now - seg_t0));
-+        seg = st; seg_t0 = now; frames = 0; cpu0 = cpu;
-+    }
-+    frames++;
-+}
-+
-+int ps3_host_spin_sleep(void)
-+{
-+#ifdef _WIN32
-+    static int forced = -2;
-+    if (forced == -2) { const char* e = getenv("PS3_SPIN_SLEEP"); forced = e ? (atoi(e) != 0) : -1; }
-+    if (forced >= 0) return forced;
-+    { const int ab = ps3_ab_on("spin"); if (ab >= 0) return ab; }
-+    static int forced_nap = -2;   /* PS3_YIELD_NAP=1 tests the small-host behaviour on a big one */
-+    if (forced_nap == -2) { const char* e = getenv("PS3_YIELD_NAP"); forced_nap = e ? (atoi(e) != 0) : -1; }
-+    if (forced_nap >= 0) return forced_nap;
-+    return ppu_yield_nap_enabled();
-+#else
-+    /* The same switches; PS3_YIELD_NAP only steers this here, the yield nap itself being Windows only. */
-+    static int forced = -2;
-+    if (forced == -2) { const char* e = getenv("PS3_SPIN_SLEEP"); forced = e ? (atoi(e) != 0) : -1; }
-+    if (forced >= 0) return forced;
-+    { const int ab = ps3_ab_on("spin"); if (ab >= 0) return ab; }
-+    static int forced_nap = -2;
-+    if (forced_nap == -2) { const char* e = getenv("PS3_YIELD_NAP"); forced_nap = e ? (atoi(e) != 0) : -1; }
-+    if (forced_nap >= 0) return forced_nap;
-+    return ppu_small_host();
-+#endif
-+}
-+
-+int ps3_host_sleep_on(void* ev, unsigned us)
-+{
-+#ifdef _WIN32
-+    static __declspec(thread) HANDLE timer;
-+    if (!timer) timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
-+    if (timer) {
-+        LARGE_INTEGER due; due.QuadPart = -(LONGLONG)us * 10;   /* relative, 100 ns units */
-+        if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
-+            if (!ev) { WaitForSingleObject(timer, INFINITE); return 0; }
-+            HANDLE h[2] = { (HANDLE)ev, timer };
-+            const DWORD r = WaitForMultipleObjects(2, h, FALSE, INFINITE);
-+            if (r == WAIT_OBJECT_0) { CancelWaitableTimer(timer); return 1; }
-+            return 0;
-+        }
-+    }
-+    if (ev) return WaitForSingleObject((HANDLE)ev, 1) == WAIT_OBJECT_0;
-+    Sleep(1);
-+    return 0;
-+#else
-+    /* The shim's event wakes a condition variable, so a SetEvent ends this at once; the timeout is
-+     * clock_nanosleep-grade (tens of microseconds of timer slack), not the 1 ms of a Win32 wait. */
-+    extern DWORD ps3_wait_object_us(HANDLE h, unsigned us);   /* win32_compat.c */
-+    if (ev) return ps3_wait_object_us((HANDLE)ev, us) == WAIT_OBJECT_0;
-+    { struct timespec ts = { (time_t)(us / 1000000u), (long)(us % 1000000u) * 1000L };
-+      nanosleep(&ts, NULL); }
-+    return 0;
-+#endif
-+}
- 
- int64_t sys_ppu_thread_yield(ppu_context* ctx)
- {
-@@ -1182,11 +1453,7 @@
-           }
-       } }
-     (void)ctx;
--#ifdef _WIN32
--    SwitchToThread();
--#else
--    sched_yield();
--#endif
-+    ppu_yield_or_nap();
-     return CELL_OK;
- }
- 
 diff --git a/runtime/syscalls/sys_ppu_thread.h b/runtime/syscalls/sys_ppu_thread.h
 index 633446e0..54321b00 100644
 --- a/runtime/syscalls/sys_ppu_thread.h
@@ -32905,599 +32569,6 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
      if lifter.unsupported:
          total = sum(lifter.unsupported.values())
          print(f"  {total} unsupported instruction(s) across "
-diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
---- a/runtime/spu/spu_helpers.h
-+++ b/runtime/spu/spu_helpers.h
-@@ -313,10 +313,23 @@
- #else
- static inline u128 spu_xor(u128 a, u128 b) { return spu_xor_ref(a, b); }
- #endif
--static inline u128 spu_nand(u128 a, u128 b){ u128 r; r._u64[0]=~(a._u64[0]&b._u64[0]); r._u64[1]=~(a._u64[1]&b._u64[1]); return r; }
--static inline u128 spu_nor(u128 a, u128 b) { u128 r; r._u64[0]=~(a._u64[0]|b._u64[0]); r._u64[1]=~(a._u64[1]|b._u64[1]); return r; }
--static inline u128 spu_andc(u128 a, u128 b){ u128 r; r._u64[0]=a._u64[0]&~b._u64[0]; r._u64[1]=a._u64[1]&~b._u64[1]; return r; }
--static inline u128 spu_orc(u128 a, u128 b) { u128 r; r._u64[0]=a._u64[0]|~b._u64[0]; r._u64[1]=a._u64[1]|~b._u64[1]; return r; }
-+static inline u128 spu_nand_ref(u128 a, u128 b){ u128 r; r._u64[0]=~(a._u64[0]&b._u64[0]); r._u64[1]=~(a._u64[1]&b._u64[1]); return r; }
-+static inline u128 spu_nor_ref(u128 a, u128 b) { u128 r; r._u64[0]=~(a._u64[0]|b._u64[0]); r._u64[1]=~(a._u64[1]|b._u64[1]); return r; }
-+static inline u128 spu_andc_ref(u128 a, u128 b){ u128 r; r._u64[0]=a._u64[0]&~b._u64[0]; r._u64[1]=a._u64[1]&~b._u64[1]; return r; }
-+static inline u128 spu_orc_ref(u128 a, u128 b) { u128 r; r._u64[0]=a._u64[0]|~b._u64[0]; r._u64[1]=a._u64[1]|~b._u64[1]; return r; }
-+/* The 64-bit halves above made clang split a register into scalar pieces wherever one of
-+ * these met a vector op (an andc of two compares cost about ten moves between register files). */
-+#if SPU_X86
-+static inline u128 spu_nand(u128 a, u128 b) { return spu__xs(_mm_xor_si128(_mm_and_si128(spu__xl(a), spu__xl(b)), _mm_set1_epi32(-1))); }
-+static inline u128 spu_nor(u128 a, u128 b)  { return spu__xs(_mm_xor_si128(_mm_or_si128(spu__xl(a), spu__xl(b)), _mm_set1_epi32(-1))); }
-+static inline u128 spu_andc(u128 a, u128 b) { return spu__xs(_mm_andnot_si128(spu__xl(b), spu__xl(a))); }
-+static inline u128 spu_orc(u128 a, u128 b)  { return spu__xs(_mm_or_si128(spu__xl(a), _mm_xor_si128(spu__xl(b), _mm_set1_epi32(-1)))); }
-+#else
-+static inline u128 spu_nand(u128 a, u128 b) { return spu_nand_ref(a, b); }
-+static inline u128 spu_nor(u128 a, u128 b)  { return spu_nor_ref(a, b); }
-+static inline u128 spu_andc(u128 a, u128 b) { return spu_andc_ref(a, b); }
-+static inline u128 spu_orc(u128 a, u128 b)  { return spu_orc_ref(a, b); }
-+#endif
- static inline u128 spu_andi_ref(u128 a, int32_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]&(uint32_t)imm; return r; }
- #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
- static inline u128 spu_andi(u128 a, int32_t imm) {
-@@ -464,21 +477,25 @@
- #if defined(__SSE4_1__)
- #include <smmintrin.h>
- /* pshufb version: one of the hottest SPU ops (~11% of GH3's FMOD mixer task
-- * as the byte loop). SPU byte P lives at host byte SPU_W(P), i.e. the bytes
-- * of each 32-bit word reversed, so swap into SPU order, select, swap back. */
-+ * as the byte loop, ~15% of GT5's sound job). SPU byte P lives at host byte
-+ * SPU_W(P) = P ^ 3 (the bytes of each 32-bit word reversed). The result byte
-+ * at host position h is SPU byte h ^ 3, and its selector is control SPU byte
-+ * h ^ 3, i.e. host byte h: so the selection runs in host order as it is, with
-+ * the selected SPU index turned into a host index (^ 3). The first version
-+ * swapped a, b, c into SPU order and the result back: four shuffles more. */
- static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
--    const __m128i sw = _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12);
-     __m128i A, B, C; memcpy(&A, &a, 16); memcpy(&B, &b, 16); memcpy(&C, &c, 16);
--    A = _mm_shuffle_epi8(A, sw); B = _mm_shuffle_epi8(B, sw); C = _mm_shuffle_epi8(C, sw);
--    const __m128i idx = _mm_and_si128(C, _mm_set1_epi8(0x0F));
--    const __m128i fromb = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8(0x10)), _mm_set1_epi8(0x10));
--    __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx), fromb);
--    /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
--    const __m128i m80 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0x80)), _mm_set1_epi8((char)0x80));
--    const __m128i mC0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xC0)), _mm_set1_epi8((char)0xC0));
--    const __m128i mE0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xE0)), _mm_set1_epi8((char)0xE0));
--    const __m128i special = _mm_blendv_epi8(mC0, _mm_set1_epi8((char)0x80), mE0);
--    r = _mm_shuffle_epi8(_mm_blendv_epi8(r, special, m80), sw);
-+    /* pshufb reads bits 0-3 of the index (^ 3: the host byte) and bit 7, which gives 0: so a
-+     * special selector (0x80 and up) selects 0 from both, and its value can be ORed in. */
-+    const __m128i idx = _mm_xor_si128(C, _mm_set1_epi8(3));
-+    __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx),
-+                                _mm_slli_epi16(C, 3));                 /* selector bit 4: from b */
-+    /* Special selectors by their high nibble: 8-B (10x) -> 0x00, C-D (110) -> 0xFF, E-F (111)
-+     * -> 0x80; 0-7 are ordinary selectors and OR in nothing. One lookup where the previous
-+     * form took three compares and two more blends. */
-+    const __m128i lut = _mm_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-+                                      (char)0xFF, (char)0xFF, (char)0x80, (char)0x80);
-+    r = _mm_or_si128(r, _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(C, 4), _mm_set1_epi8(0x0F))));
-     u128 out; memcpy(&out, &r, 16); return out;
- }
- #elif defined(__ARM_NEON)
-@@ -552,13 +569,25 @@
- #endif
- 
- /* ---- shift / rotate immediate (word lanes) ---- */
--static inline u128 spu_shli(u128 a, int sh)  { u128 r; sh&=0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); return r; }
--static inline u128 spu_shlhi(u128 a, int sh) { u128 r; sh&=0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); return r; }
-+static inline u128 spu_shli_ref(u128 a, int sh)  { u128 r; sh&=0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); return r; }
-+static inline u128 spu_shlhi_ref(u128 a, int sh) { u128 r; sh&=0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); return r; }
- static inline u128 spu_roti_ref(u128 a, int sh)  { u128 r; sh&=31; for(int i=0;i<4;i++) r._u32[i]= sh ? ((a._u32[i]<<sh)|(a._u32[i]>>(32-sh))) : a._u32[i]; return r; }
- static inline u128 spu_rothi_ref(u128 a, int sh) { u128 r; sh&=15; for(int i=0;i<8;i++) r._u16[i]=(uint16_t)((a._u16[i]<<sh)|(a._u16[i]>>(16-sh))); return r; }
--static inline u128 spu_rotmi(u128 a, int i7)  { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]>>sh); return r; }
-+static inline u128 spu_rotmi_ref(u128 a, int i7)  { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]>>sh); return r; }
- static inline u128 spu_rotmai_ref(u128 a, int i7) { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._s32[i]=(sh>31)?(a._s32[i]>>31):(a._s32[i]>>sh); return r; }
--static inline u128 spu_rotmhi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
-+static inline u128 spu_rotmhi_ref(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
-+/* psll/psrl give 0 for a count past the lane width, as these instructions do. */
-+#if SPU_X86
-+static inline u128 spu_shli(u128 a, int sh)   { return spu__xs(_mm_sll_epi32(spu__xl(a), _mm_cvtsi32_si128(sh & 0x3F))); }
-+static inline u128 spu_shlhi(u128 a, int sh)  { return spu__xs(_mm_sll_epi16(spu__xl(a), _mm_cvtsi32_si128(sh & 0x1F))); }
-+static inline u128 spu_rotmi(u128 a, int i7)  { return spu__xs(_mm_srl_epi32(spu__xl(a), _mm_cvtsi32_si128((0 - i7) & 0x3F))); }
-+static inline u128 spu_rotmhi(u128 a, int i7) { return spu__xs(_mm_srl_epi16(spu__xl(a), _mm_cvtsi32_si128((0 - i7) & 0x1F))); }
-+#else
-+static inline u128 spu_shli(u128 a, int sh)   { return spu_shli_ref(a, sh); }
-+static inline u128 spu_shlhi(u128 a, int sh)  { return spu_shlhi_ref(a, sh); }
-+static inline u128 spu_rotmi(u128 a, int i7)  { return spu_rotmi_ref(a, i7); }
-+static inline u128 spu_rotmhi(u128 a, int i7) { return spu_rotmhi_ref(a, i7); }
-+#endif
- static inline u128 spu_shlqbyi_ref(u128 a, int sh) { u128 r=spu_zero(); sh&=0x1F; for(int i=0;i<16;i++){ int s=i+sh; if(s<16) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
- #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
- static inline u128 spu_shlqbyi(u128 a, int sh) {
-@@ -588,14 +617,31 @@
-  * word1<<32, but SPU's MS half is word0<<32 | word1), so native shifts on them
-  * corrupt any bits crossing a 32-bit boundary. Assemble the logical hi/lo halves
-  * with _u32[0] as most-significant, shift, then disassemble. */
--static inline u128 spu_shlqbii(u128 a, int sh) { sh&=7; if(!sh) return a;
-+static inline u128 spu_shlqbii_ref(u128 a, int sh) { sh&=7; if(!sh) return a;
-     uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
-     uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh);
-     u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
--static inline u128 spu_rotqbii(u128 a, int sh) { sh&=7; if(!sh) return a;
-+static inline u128 spu_rotqbii_ref(u128 a, int sh) { sh&=7; if(!sh) return a;
-     uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
-     uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh)|(hi>>(64-sh));
-     u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
-+/* Word i takes the bits shifted out of its neighbour: word i+1 (word 0 for a rotate) is the
-+ * lane above in host order. A count of 32 for the neighbour gives 0, so a shift of 0 is a copy. */
-+#if SPU_X86
-+static inline u128 spu_shlqbii(u128 a, int sh) {
-+    const __m128i A = spu__xl(a);
-+    return spu__xs(_mm_or_si128(_mm_sll_epi32(A, _mm_cvtsi32_si128(sh & 7)),
-+                                _mm_srl_epi32(_mm_srli_si128(A, 4), _mm_cvtsi32_si128(32 - (sh & 7)))));
-+}
-+static inline u128 spu_rotqbii(u128 a, int sh) {
-+    const __m128i A = spu__xl(a);
-+    return spu__xs(_mm_or_si128(_mm_sll_epi32(A, _mm_cvtsi32_si128(sh & 7)),
-+                                _mm_srl_epi32(_mm_shuffle_epi32(A, 0x39), _mm_cvtsi32_si128(32 - (sh & 7)))));
-+}
-+#else
-+static inline u128 spu_shlqbii(u128 a, int sh) { return spu_shlqbii_ref(a, sh); }
-+static inline u128 spu_rotqbii(u128 a, int sh) { return spu_rotqbii_ref(a, sh); }
-+#endif
- 
- /* ---- SPU floating point --------------------------------------------------------------
-  * Written from the Cell BE SPU ISA v1.2 (section 9 and the instruction pages).
-@@ -1041,6 +1087,7 @@
-  * product of two 24-bit significands is exact in double, so a compiler contracting a multiply
-  * and an add into an FMA cannot change any rounding here. */
- #include <immintrin.h>
-+#define SPU_MXCSR_RZFZ 0xE040u   /* FTZ (bit 15), RC = 0b11 round toward zero (bits 13-14), DAZ (bit 6) */
- #define SPU__X8_INLINE static inline __attribute__((always_inline))
- #define SPU__X8_SLOW   static __attribute__((noinline, cold, unused))
- SPU__X8_INLINE __m128i spu__x8_bexp(__m128i x) { return _mm_srli_epi32(_mm_slli_epi32(x, 1), 24); }
-@@ -1105,9 +1152,70 @@
-     ok = _mm_and_si128(ok, pre);
-     return spu__x8_all4(ok) ? spu__x8_st(r) : spu__x8_fa_fix(spu__x8_st(r), ok, a, b, negb);
- }
--SPU__X8_INLINE u128 spu_fa(u128 a, u128 b) { return spu__x8_fa(a, b, 0); }
--SPU__X8_INLINE u128 spu_fs(u128 a, u128 b) { return spu__x8_fa(a, b, 0x80000000u); }
-+/* SPU_FLOAT_RZ: as on arm64, SPU code may run with MXCSR at round toward zero with flush-to-zero
-+ * and denormals-are-zero (spu_float_mode_enter, spu_channels.c). The host's single-precision ops
-+ * then truncate like the SPU and treat a denormal as zero, so all that is left of the exact forms
-+ * is the range check and the +0 rule: one native op instead of a round trip through f64x4. The
-+ * exception flags in MXCSR are sticky, so only the mode bits are compared. Generated code built
-+ * with SPU_X86_RZ_ALWAYS skips the check, which was 9% of a job's time: it only ever runs inside
-+ * spu_run_with_halt, where the mode is set. */
-+#ifdef SPU_X86_RZ_ALWAYS
-+SPU__X8_INLINE int spu__x8_rz(void) { return 1; }
-+#else
-+SPU__X8_INLINE int spu__x8_rz(void) { return (_mm_getcsr() & SPU_MXCSR_RZFZ) == SPU_MXCSR_RZFZ; }
-+#endif
-+SPU__X8_INLINE __m128 spu__x8_f(__m128i x) { return _mm_castsi128_ps(x); }
-+/* A zero result is +0. With flush-to-zero a result has no denormals left, so only the sign of a
-+ * zero can be wrong. */
-+SPU__X8_INLINE __m128i spu__x8_flush(__m128i r) {
-+    const __m128i sign = _mm_set1_epi32((int)0x80000000u);
-+    return _mm_andnot_si128(_mm_and_si128(_mm_cmpeq_epi32(r, sign), sign), r);
-+}
-+/* magnitude below FLT_MAX (Inf and NaN fail) */
-+SPU__X8_INLINE __m128i spu__x8_inrange(__m128 r) {
-+    const __m128 m = _mm_and_ps(r, _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF)));
-+    return _mm_castps_si128(_mm_cmp_ps(m, _mm_castsi128_ps(_mm_set1_epi32(0x7F7FFFFF)), _CMP_LT_OQ));
-+}
-+/* SPU_X86_FAST_FLOAT, for one job at a time: the native result as it stands, without the exact
-+ * SPU range and signed-zero handling. For a job whose numbers are sound samples, where neither is
-+ * audible and the job is short of real time. Never for anything that feeds game logic. */
-+SPU__X8_INLINE u128 spu__x8_rz_fa(u128 a, u128 b, uint32_t negb) {
-+    const __m128i x = spu__x8_ld(a), y = _mm_xor_si128(spu__x8_ld(b), _mm_set1_epi32((int)negb));
-+    const __m128 t = _mm_add_ps(spu__x8_f(x), spu__x8_f(y));
-+#ifdef SPU_X86_FAST_FLOAT
-+    return spu__x8_st(_mm_castps_si128(t));
-+#else
-+    const __m128i ok = spu__x8_inrange(t), r = spu__x8_flush(_mm_castps_si128(t));
-+    return spu__x8_all4(ok) ? spu__x8_st(r) : spu__x8_fa_fix(spu__x8_st(r), ok, a, b, negb);
-+#endif
-+}
-+/* Zero and denormal operands need no test: denormals-are-zero makes them zero, and the flush above
-+ * settles the sign. The one case native arithmetic gets wrong, zero times what the SPU reads as a
-+ * large number and the host as Inf or NaN, comes out NaN and fails the range check. */
-+SPU__X8_INLINE u128 spu__x8_rz_fm(u128 a, u128 b) {
-+    const __m128 t = _mm_mul_ps(spu__x8_f(spu__x8_ld(a)), spu__x8_f(spu__x8_ld(b)));
-+#ifdef SPU_X86_FAST_FLOAT
-+    return spu__x8_st(_mm_castps_si128(t));
-+#else
-+    const __m128i ok = spu__x8_inrange(t), r = spu__x8_flush(_mm_castps_si128(t));
-+    return spu__x8_all4(ok) ? spu__x8_st(r) : spu__x8_fm_fix(spu__x8_st(r), ok, a, b);
-+#endif
-+}
-+SPU__X8_INLINE u128 spu__x8_rz_fma(u128 a, u128 b, u128 c, uint32_t negp, uint32_t negc) {
-+    const __m128i x = _mm_xor_si128(spu__x8_ld(a), _mm_set1_epi32((int)negp));
-+    const __m128i z = _mm_xor_si128(spu__x8_ld(c), _mm_set1_epi32((int)negc));
-+    const __m128 t = _mm_fmadd_ps(spu__x8_f(x), spu__x8_f(spu__x8_ld(b)), spu__x8_f(z));
-+#ifdef SPU_X86_FAST_FLOAT
-+    return spu__x8_st(_mm_castps_si128(t));
-+#else
-+    const __m128i ok = spu__x8_inrange(t), r = spu__x8_flush(_mm_castps_si128(t));
-+    return spu__x8_all4(ok) ? spu__x8_st(r) : spu__x8_fma_fix(spu__x8_st(r), ok, a, b, c, negp, negc);
-+#endif
-+}
-+SPU__X8_INLINE u128 spu_fa(u128 a, u128 b) { return spu__x8_rz() ? spu__x8_rz_fa(a, b, 0) : spu__x8_fa(a, b, 0); }
-+SPU__X8_INLINE u128 spu_fs(u128 a, u128 b) { return spu__x8_rz() ? spu__x8_rz_fa(a, b, 0x80000000u) : spu__x8_fa(a, b, 0x80000000u); }
- SPU__X8_INLINE u128 spu_fm(u128 a, u128 b) {
-+    if (spu__x8_rz()) return spu__x8_rz_fm(a, b);
-     const __m128i x = spu__x8_ld(a), y = spu__x8_ld(b);
-     __m128i ok, zm;
-     const __m128i r = spu__x8_trunc0(_mm256_mul_pd(spu__x8_wide(x), spu__x8_wide(y)), &ok, &zm, NULL);
-@@ -1126,9 +1234,88 @@
-     ok = _mm_and_si128(ok, _mm_and_si128(_mm_and_si128(spu__x8_plain0(x), spu__x8_plain0(y)), spu__x8_plain0(z)));
-     return spu__x8_all4(ok) ? spu__x8_st(r) : spu__x8_fma_fix(spu__x8_st(r), ok, a, b, c, negp, negc);
- }
--SPU__X8_INLINE u128 spu_fma(u128 a, u128 b, u128 c)  { return spu__x8_fma(a, b, c, 0, 0); }            /* a*b + c */
--SPU__X8_INLINE u128 spu_fms(u128 a, u128 b, u128 c)  { return spu__x8_fma(a, b, c, 0, 0x80000000u); }  /* a*b - c */
--SPU__X8_INLINE u128 spu_fnms(u128 a, u128 b, u128 c) { return spu__x8_fma(a, b, c, 0x80000000u, 0); }  /* c - a*b */
-+#define SPU__X8_FMA(a, b, c, np, nc) (spu__x8_rz() ? spu__x8_rz_fma(a, b, c, np, nc) : spu__x8_fma(a, b, c, np, nc))
-+SPU__X8_INLINE u128 spu_fma(u128 a, u128 b, u128 c)  { return SPU__X8_FMA(a, b, c, 0, 0); }            /* a*b + c */
-+SPU__X8_INLINE u128 spu_fms(u128 a, u128 b, u128 c)  { return SPU__X8_FMA(a, b, c, 0, 0x80000000u); }  /* a*b - c */
-+SPU__X8_INLINE u128 spu_fnms(u128 a, u128 b, u128 c) { return SPU__X8_FMA(a, b, c, 0x80000000u, 0); }  /* c - a*b */
-+/* Lazy -0 flush (spu_lifter.py --lazy-flush). spu_fa/fs/fm/fma/fms/fnms above end with "a zero
-+ * result is +0" (spu__x8_flush: compare, and, andnot), three operations in series on every float
-+ * chain. The _lz forms return the same value and, through *ru, its "twin": the host result before
-+ * that fix. A twin differs from its value only in lanes that are -0 where the value is +0. The
-+ * lifter hands a float operation the twins of its operands (au, bu, cu) when it has them, so a
-+ * chain of float operations runs on unfixed values and the fix is off the chain; everything
-+ * else (stores, compares, shuffles, the context) sees the value.
-+ *
-+ * Exact, under round toward zero + FTZ + DAZ (the only mode this path runs in): replacing +0 by
-+ * -0 in an operand of a host add, multiply or fused multiply-add changes the result only when
-+ * the result is a zero, and then only its sign: a zero operand of either sign adds nothing to a
-+ * nonzero sum, a product with it is a zero, and Inf/NaN results (0 * Inf, anything with an
-+ * exponent-255 operand) stay Inf/NaN with it. So the twin result t' and the result t the old
-+ * helper computes from the fixed operands are equal or both zeros: flush(t') == flush(t), and
-+ * "in range" (magnitude below FLT_MAX, ordered) is the same for both. A lane out of range is
-+ * redone by the exact routine from the VALUES a, b, c, as before; the twin of such a result is
-+ * the result itself. Not used under SPU_X86_FAST_FLOAT (no fix there: value and twin are the
-+ * host result) nor outside the round-toward-zero mode. */
-+#define SPU_HAVE_LZ 1
-+#ifdef SPU_X86_FAST_FLOAT
-+SPU__X8_INLINE u128 spu__x8_lz_fa(u128 a, u128 b, u128 au, u128 bu, uint32_t negb, u128* ru) {
-+    (void)au; (void)bu;
-+    const u128 e = spu__x8_rz() ? spu__x8_rz_fa(a, b, negb) : spu__x8_fa(a, b, negb);
-+    *ru = e; return e;
-+}
-+SPU__X8_INLINE u128 spu_fm_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) {
-+    (void)au; (void)bu;
-+    const u128 e = spu_fm(a, b);
-+    *ru = e; return e;
-+}
-+SPU__X8_INLINE u128 spu__x8_lz_fma(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, uint32_t negp, uint32_t negc, u128* ru) {
-+    (void)au; (void)bu; (void)cu;
-+    const u128 e = SPU__X8_FMA(a, b, c, negp, negc);
-+    *ru = e; return e;
-+}
-+#else
-+SPU__X8_INLINE u128 spu__x8_lz_fa(u128 a, u128 b, u128 au, u128 bu, uint32_t negb, u128* ru) {
-+    if (spu__x8_rz()) {
-+        const __m128i x = spu__x8_ld(au), y = _mm_xor_si128(spu__x8_ld(bu), _mm_set1_epi32((int)negb));
-+        const __m128 t = _mm_add_ps(spu__x8_f(x), spu__x8_f(y));
-+        const __m128i ok = spu__x8_inrange(t), r = spu__x8_flush(_mm_castps_si128(t));
-+        if (spu__x8_all4(ok)) { *ru = spu__x8_st(_mm_castps_si128(t)); return spu__x8_st(r); }
-+        const u128 e = spu__x8_fa_fix(spu__x8_st(r), ok, a, b, negb);
-+        *ru = e; return e;
-+    }
-+    const u128 e = spu__x8_fa(a, b, negb);
-+    *ru = e; return e;
-+}
-+SPU__X8_INLINE u128 spu_fm_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) {
-+    if (spu__x8_rz()) {
-+        const __m128 t = _mm_mul_ps(spu__x8_f(spu__x8_ld(au)), spu__x8_f(spu__x8_ld(bu)));
-+        const __m128i ok = spu__x8_inrange(t), r = spu__x8_flush(_mm_castps_si128(t));
-+        if (spu__x8_all4(ok)) { *ru = spu__x8_st(_mm_castps_si128(t)); return spu__x8_st(r); }
-+        const u128 e = spu__x8_fm_fix(spu__x8_st(r), ok, a, b);
-+        *ru = e; return e;
-+    }
-+    const u128 e = spu_fm(a, b);
-+    *ru = e; return e;
-+}
-+SPU__X8_INLINE u128 spu__x8_lz_fma(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, uint32_t negp, uint32_t negc, u128* ru) {
-+    if (spu__x8_rz()) {
-+        const __m128i x = _mm_xor_si128(spu__x8_ld(au), _mm_set1_epi32((int)negp));
-+        const __m128i z = _mm_xor_si128(spu__x8_ld(cu), _mm_set1_epi32((int)negc));
-+        const __m128 t = _mm_fmadd_ps(spu__x8_f(x), spu__x8_f(spu__x8_ld(bu)), spu__x8_f(z));
-+        const __m128i ok = spu__x8_inrange(t), r = spu__x8_flush(_mm_castps_si128(t));
-+        if (spu__x8_all4(ok)) { *ru = spu__x8_st(_mm_castps_si128(t)); return spu__x8_st(r); }
-+        const u128 e = spu__x8_fma_fix(spu__x8_st(r), ok, a, b, c, negp, negc);
-+        *ru = e; return e;
-+    }
-+    const u128 e = spu__x8_fma(a, b, c, negp, negc);
-+    *ru = e; return e;
-+}
-+#endif
-+SPU__X8_INLINE u128 spu_fa_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) { return spu__x8_lz_fa(a, b, au, bu, 0, ru); }
-+SPU__X8_INLINE u128 spu_fs_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) { return spu__x8_lz_fa(a, b, au, bu, 0x80000000u, ru); }
-+SPU__X8_INLINE u128 spu_fma_lz(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, u128* ru)  { return spu__x8_lz_fma(a, b, c, au, bu, cu, 0, 0, ru); }
-+SPU__X8_INLINE u128 spu_fms_lz(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, u128* ru)  { return spu__x8_lz_fma(a, b, c, au, bu, cu, 0, 0x80000000u, ru); }
-+SPU__X8_INLINE u128 spu_fnms_lz(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, u128* ru) { return spu__x8_lz_fma(a, b, c, au, bu, cu, 0x80000000u, 0, ru); }
- #else
- static inline u128 spu_fa(u128 a, u128 b) { return spu__fa_s(a, b); }
- static inline u128 spu_fs(u128 a, u128 b) { return spu__fs_s(a, b); }
-@@ -1173,11 +1360,50 @@
- #define SPU__SSE_CMP(name, cmp, key) static inline u128 name(u128 a, u128 b) { \
-     __m128i A, B; memcpy(&A, &a, 16); memcpy(&B, &b, 16); \
-     const __m128i r = cmp(key(A), key(B)); u128 out; memcpy(&out, &r, 16); return out; }
--SPU__SSE_CMP(spu_fceq,  _mm_cmpeq_epi32, spu__sse_key)
--SPU__SSE_CMP(spu_fcgt,  _mm_cmpgt_epi32, spu__sse_key)
--SPU__SSE_CMP(spu_fcmeq, _mm_cmpeq_epi32, spu__sse_mag)
--SPU__SSE_CMP(spu_fcmgt, _mm_cmpgt_epi32, spu__sse_mag)
-+SPU__SSE_CMP(spu__key_fceq,  _mm_cmpeq_epi32, spu__sse_key)
-+SPU__SSE_CMP(spu__key_fcgt,  _mm_cmpgt_epi32, spu__sse_key)
-+SPU__SSE_CMP(spu__key_fcmeq, _mm_cmpeq_epi32, spu__sse_mag)
-+SPU__SSE_CMP(spu__key_fcmgt, _mm_cmpgt_epi32, spu__sse_mag)
- #undef SPU__SSE_CMP
-+#ifdef SPU_X86_RZ_ALWAYS
-+/* Generated code built with SPU_X86_RZ_ALWAYS runs with denormals-are-zero in MXCSR (see
-+ * spu__x8_rz below), and there the host's own compares already are the SPU's, but for one case:
-+ * a word with exponent 255 and a fraction is a large number to the SPU and a NaN to the host.
-+ *  - Equal: the host says so (zeros and denormals all equal, like the SPU's zeros), or the bits
-+ *    are the same (the only way two of those large numbers are equal; an OR, since the host never
-+ *    calls two different SPU numbers equal). Three instructions for the fifteen of the key form.
-+ *  - Greater: the host's compare when it sees no NaN in either vector, the key form when it does.
-+ * tests/test_spu_fcmp_rz.c checks all four against the _ref loops. */
-+static inline __m128i spu__cmp_ld(u128 a) { __m128i v; memcpy(&v, &a, 16); return v; }
-+static inline u128 spu__cmp_st(__m128i v) { u128 r; memcpy(&r, &v, 16); return r; }
-+static inline u128 spu_fceq(u128 a, u128 b) {
-+    const __m128i x = spu__cmp_ld(a), y = spu__cmp_ld(b);
-+    return spu__cmp_st(_mm_or_si128(_mm_castps_si128(_mm_cmpeq_ps(_mm_castsi128_ps(x), _mm_castsi128_ps(y))),
-+                                    _mm_cmpeq_epi32(x, y)));
-+}
-+static inline u128 spu_fcmeq(u128 a, u128 b) {
-+    const __m128i m = _mm_set1_epi32(0x7FFFFFFF);
-+    const __m128i x = _mm_and_si128(spu__cmp_ld(a), m), y = _mm_and_si128(spu__cmp_ld(b), m);
-+    return spu__cmp_st(_mm_or_si128(_mm_castps_si128(_mm_cmpeq_ps(_mm_castsi128_ps(x), _mm_castsi128_ps(y))),
-+                                    _mm_cmpeq_epi32(x, y)));
-+}
-+static inline u128 spu_fcgt(u128 a, u128 b) {
-+    const __m128 x = _mm_castsi128_ps(spu__cmp_ld(a)), y = _mm_castsi128_ps(spu__cmp_ld(b));
-+    if (__builtin_expect(_mm_movemask_ps(_mm_cmpunord_ps(x, y)) != 0, 0)) return spu__key_fcgt(a, b);
-+    return spu__cmp_st(_mm_castps_si128(_mm_cmpgt_ps(x, y)));
-+}
-+static inline u128 spu_fcmgt(u128 a, u128 b) {
-+    const __m128 m = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
-+    const __m128 x = _mm_and_ps(_mm_castsi128_ps(spu__cmp_ld(a)), m), y = _mm_and_ps(_mm_castsi128_ps(spu__cmp_ld(b)), m);
-+    if (__builtin_expect(_mm_movemask_ps(_mm_cmpunord_ps(x, y)) != 0, 0)) return spu__key_fcmgt(a, b);
-+    return spu__cmp_st(_mm_castps_si128(_mm_cmpgt_ps(x, y)));
-+}
-+#else
-+static inline u128 spu_fceq(u128 a, u128 b)  { return spu__key_fceq(a, b); }
-+static inline u128 spu_fcgt(u128 a, u128 b)  { return spu__key_fcgt(a, b); }
-+static inline u128 spu_fcmeq(u128 a, u128 b) { return spu__key_fcmeq(a, b); }
-+static inline u128 spu_fcmgt(u128 a, u128 b) { return spu__key_fcmgt(a, b); }
-+#endif
- #else
- static inline u128 spu_fceq(u128 a, u128 b)  { return spu_fceq_ref(a, b); }
- static inline u128 spu_fcgt(u128 a, u128 b)  { return spu_fcgt_ref(a, b); }
-@@ -1369,6 +1595,34 @@
-     if (__builtin_expect(m == 0, 1)) return f##_h_(a, b, c); \
-     spu__fpcr_put(0); __asm__ volatile("" : "+m"(a), "+m"(b), "+m"(c)); u128 r = f##_h_(a, b, c); \
-     __asm__ volatile("" : "+m"(r)); spu__fpcr_put(m); return r; }
-+#elif (defined(__x86_64__) || defined(_M_X64)) && (defined(SPU_X86_FAST_DOUBLE) || defined(SPU_X86_FAST_FLOAT))
-+/* SPU_X86_FAST_DOUBLE (one sound job at a time, and implied by SPU_X86_FAST_FLOAT): double
-+ * precision under the thread's mode as it stands -- round toward zero, denormals flushed --
-+ * instead of switching MXCSR to round to nearest and back around every op. The two MXCSR writes
-+ * cost 13-20 ns, ten times the op, and GT5's EQ module does three double ops per pass of an FFT
-+ * loop. The result is within one double ulp (frds: one single ulp) of round to nearest, and no
-+ * NaN or infinity can come of it that round to nearest would not give. For audio modules whose
-+ * doubles are filter coefficients and phase steps. */
-+#define SPU__DP_RN1(f) static inline u128 f(u128 a) { return f##_h_(a); }
-+#define SPU__DP_RN2(f) static inline u128 f(u128 a, u128 b) { return f##_h_(a, b); }
-+#define SPU__DP_RN3(f) static inline u128 f(u128 a, u128 b, u128 c) { return f##_h_(a, b, c); }
-+#elif defined(__x86_64__) || defined(_M_X64)
-+/* The same with MXCSR. Every translation unit needs this, not only the AVX2 ones: the mode
-+ * belongs to the thread, and an interpreted instruction runs under it as well. */
-+#include <xmmintrin.h>
-+#define SPU__DP_MODE_BITS 0xE040u
-+#define SPU__DP_RN1(f) static inline u128 f(u128 a) { const unsigned m = _mm_getcsr(); \
-+    if (__builtin_expect(!(m & SPU__DP_MODE_BITS), 1)) return f##_h_(a); \
-+    _mm_setcsr(m & ~SPU__DP_MODE_BITS); __asm__ volatile("" : "+m"(a)); u128 r = f##_h_(a); \
-+    __asm__ volatile("" : "+m"(r)); _mm_setcsr(m); return r; }
-+#define SPU__DP_RN2(f) static inline u128 f(u128 a, u128 b) { const unsigned m = _mm_getcsr(); \
-+    if (__builtin_expect(!(m & SPU__DP_MODE_BITS), 1)) return f##_h_(a, b); \
-+    _mm_setcsr(m & ~SPU__DP_MODE_BITS); __asm__ volatile("" : "+m"(a), "+m"(b)); u128 r = f##_h_(a, b); \
-+    __asm__ volatile("" : "+m"(r)); _mm_setcsr(m); return r; }
-+#define SPU__DP_RN3(f) static inline u128 f(u128 a, u128 b, u128 c) { const unsigned m = _mm_getcsr(); \
-+    if (__builtin_expect(!(m & SPU__DP_MODE_BITS), 1)) return f##_h_(a, b, c); \
-+    _mm_setcsr(m & ~SPU__DP_MODE_BITS); __asm__ volatile("" : "+m"(a), "+m"(b), "+m"(c)); u128 r = f##_h_(a, b, c); \
-+    __asm__ volatile("" : "+m"(r)); _mm_setcsr(m); return r; }
- #else
- #define SPU__DP_RN1(f) static inline u128 f(u128 a) { return f##_h_(a); }
- #define SPU__DP_RN2(f) static inline u128 f(u128 a, u128 b) { return f##_h_(a, b); }
-@@ -1765,31 +2019,60 @@
-     u128 r; r._u32[0] = 0x10111213u; r._u32[1] = 0x14151617u; r._u32[2] = 0x18191A1Bu; r._u32[3] = 0x1C1D1E1Fu;
-     return r;
- }
--static inline u128 spu_cbd_pos(int pos) {
-+static inline u128 spu_cbd_pos_ref(int pos) {
-     u128 r = spu__ctl_base();
-     r._u8[SPU_W(pos & 0xF)] = 0x03;                 /* a's preferred byte = SPU byte 3 */
-     return r;
- }
--static inline u128 spu_chd_pos(int pos) {
-+static inline u128 spu_chd_pos_ref(int pos) {
-     u128 r = spu__ctl_base();
-     /* SPU bytes p, p+1 (p even) are one host halfword: 0x02 at SPU p, 0x03 at p+1. */
-     r._u16[(((pos & 0xF) & ~1) >> 1) ^ 1] = 0x0203u;
-     return r;
- }
--static inline u128 spu_cwd_pos(int pos) {
-+static inline u128 spu_cwd_pos_ref(int pos) {
-     u128 r = spu__ctl_base();
-     r._u32[((pos & 0xF) & ~3) >> 2] = 0x00010203u;   /* a SPU bytes 0..3 (preferred word) */
-     return r;
- }
--static inline u128 spu_cdd_pos(int pos) {
-+static inline u128 spu_cdd_pos_ref(int pos) {
-     u128 r = spu__ctl_base();
-     const int w = ((pos & 0xF) & ~7) >> 2;            /* a SPU bytes 0..7 (preferred dword) */
-     r._u32[w] = 0x00010203u; r._u32[w + 1] = 0x04050607u;
-     return r;
- }
-+/* The forms above write one lane of a 16-byte value at a computed index, through memory: a
-+ * narrow store and a wide load of the same bytes, which the CPU cannot forward (a stall of
-+ * a dozen cycles each, and cbd/chd/cwd + shufb + stqd is how the SPU stores a scalar). */
-+#if SPU_X86
-+SPU__XI __m128i spu__xctl_base(void) { return _mm_setr_epi32(0x10111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F); }
-+static inline u128 spu_cbd_pos(int pos) {
-+    const __m128i m = _mm_cmpeq_epi8(_mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
-+                                     _mm_set1_epi8((char)((pos & 0xF) ^ 3)));
-+    return spu__xs(_mm_blendv_epi8(spu__xctl_base(), _mm_set1_epi8(0x03), m));
-+}
-+static inline u128 spu_chd_pos(int pos) {
-+    const __m128i m = _mm_cmpeq_epi16(_mm_setr_epi16(0, 1, 2, 3, 4, 5, 6, 7),
-+                                      _mm_set1_epi16((short)((((pos & 0xF) & ~1) >> 1) ^ 1)));
-+    return spu__xs(_mm_blendv_epi8(spu__xctl_base(), _mm_set1_epi16(0x0203), m));
-+}
-+static inline u128 spu_cwd_pos(int pos) {
-+    const __m128i m = _mm_cmpeq_epi32(_mm_setr_epi32(0, 1, 2, 3), _mm_set1_epi32((pos >> 2) & 3));
-+    return spu__xs(_mm_blendv_epi8(spu__xctl_base(), _mm_set1_epi32(0x00010203), m));
-+}
-+static inline u128 spu_cdd_pos(int pos) {
-+    const __m128i m = _mm_cmpeq_epi64(_mm_set_epi64x(1, 0), _mm_set1_epi64x((pos >> 3) & 1));
-+    return spu__xs(_mm_blendv_epi8(spu__xctl_base(), _mm_set1_epi64x(0x0405060700010203ll), m));
-+}
-+#else
-+static inline u128 spu_cbd_pos(int pos) { return spu_cbd_pos_ref(pos); }
-+static inline u128 spu_chd_pos(int pos) { return spu_chd_pos_ref(pos); }
-+static inline u128 spu_cwd_pos(int pos) { return spu_cwd_pos_ref(pos); }
-+static inline u128 spu_cdd_pos(int pos) { return spu_cdd_pos_ref(pos); }
-+#endif
- static inline u128 spu_cbd(u128 a, int i7){ return spu_cbd_pos((int)a._u32[0]+i7); }
- static inline u128 spu_chd(u128 a, int i7){ return spu_chd_pos((int)a._u32[0]+i7); }
--static inline u128 spu_cwd_ref(u128 a, int i7){ return spu_cwd_pos((int)a._u32[0]+i7); }
-+static inline u128 spu_cwd_ref(u128 a, int i7){ return spu_cwd_pos_ref((int)a._u32[0]+i7); }
- #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
- static inline u128 spu_cwd(u128 a, int i7) {
-     static const uint32_t base[4] = {0x10111213u, 0x14151617u, 0x18191A1Bu, 0x1C1D1E1Fu}, lane[4] = {0, 1, 2, 3};
-@@ -1805,6 +2088,37 @@
- static inline u128 spu_cwd(u128 a, int i7) { return spu_cwd_ref(a, i7); }
- #endif
- static inline u128 spu_cdd(u128 a, int i7){ return spu_cdd_pos((int)a._u32[0]+i7); }
-+/* What shufb(a, b, c) gives when c came from cbd/chd/cwd/cdd (or the x forms) at address pos: b with
-+ * one byte / halfword / word / doubleword replaced by a's preferred one, the lane chosen as in the
-+ * generators above. The lifter emits these for such a shufb in the same block (spu_lifter.py, its
-+ * insert peephole), keeping the generator's address in a local: one compare and blend, where shufb
-+ * re-derived the lane from the control bytes. Storing a scalar is cwd + lqd + shufb + stqd on the SPU. */
-+#if SPU_X86
-+static inline u128 spu_insb(u128 b, u128 a, uint32_t pos) {
-+    const __m128i m = _mm_cmpeq_epi8(_mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
-+                                     _mm_set1_epi8((char)((pos & 0xF) ^ 3)));
-+    return spu__xs(_mm_blendv_epi8(spu__xl(b), _mm_shuffle_epi8(spu__xl(a), _mm_setzero_si128()), m));
-+}
-+static inline u128 spu_insh(u128 b, u128 a, uint32_t pos) {
-+    const __m128i m = _mm_cmpeq_epi16(_mm_setr_epi16(0, 1, 2, 3, 4, 5, 6, 7), _mm_set1_epi16((short)(((pos & 0xF) >> 1) ^ 1)));
-+    return spu__xs(_mm_blendv_epi8(spu__xl(b), _mm_shuffle_epi8(spu__xl(a), _mm_set1_epi16(0x0100)), m));
-+}
-+static inline u128 spu_insw(u128 b, u128 a, uint32_t pos) {
-+    const __m128i m = _mm_cmpeq_epi32(_mm_setr_epi32(0, 1, 2, 3), _mm_set1_epi32((int)((pos >> 2) & 3)));
-+    return spu__xs(_mm_blendv_epi8(spu__xl(b), _mm_shuffle_epi32(spu__xl(a), 0), m));
-+}
-+static inline u128 spu_insd(u128 b, u128 a, uint32_t pos) {
-+    const __m128i m = _mm_cmpeq_epi64(_mm_set_epi64x(1, 0), _mm_set1_epi64x((long long)((pos >> 3) & 1)));
-+    return spu__xs(_mm_blendv_epi8(spu__xl(b), _mm_unpacklo_epi64(spu__xl(a), spu__xl(a)), m));
-+}
-+#else
-+static inline u128 spu_insb(u128 b, u128 a, uint32_t pos) { b._u8[(pos & 0xF) ^ 3] = a._u8[0]; return b; }
-+static inline u128 spu_insh(u128 b, u128 a, uint32_t pos) { b._u16[((pos & 0xF) >> 1) ^ 1] = a._u16[0]; return b; }
-+static inline u128 spu_insw(u128 b, u128 a, uint32_t pos) { b._u32[(pos >> 2) & 3] = a._u32[0]; return b; }
-+static inline u128 spu_insd(u128 b, u128 a, uint32_t pos) {
-+    const unsigned d = (pos >> 3) & 1; b._u32[2 * d] = a._u32[0]; b._u32[2 * d + 1] = a._u32[1]; return b;
-+}
-+#endif
- static inline u128 spu_cbx(u128 a, u128 b){ return spu_cbd_pos((int)(a._u32[0]+b._u32[0])); }
- static inline u128 spu_chx(u128 a, u128 b){ return spu_chd_pos((int)(a._u32[0]+b._u32[0])); }
- static inline u128 spu_cwx(u128 a, u128 b){ return spu_cwd_pos((int)(a._u32[0]+b._u32[0])); }
-@@ -1844,10 +2158,20 @@
- #else
- static inline u128 spu_rotqmbybi(u128 a, u128 b) { return spu_rotqmbybi_ref(a, b); }
- #endif
--static inline u128 spu_rotqmbii(u128 a, int i7)  { int sh=(0-i7)&7; if(!sh) return a;
-+static inline u128 spu_rotqmbii_ref(u128 a, int i7)  { int sh=(0-i7)&7; if(!sh) return a;
-     uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
-     uint64_t nlo=(lo>>sh)|(hi<<(64-sh)), nhi=(hi>>sh);
-     u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
-+#if SPU_X86
-+static inline u128 spu_rotqmbii(u128 a, int i7) {
-+    const __m128i A = spu__xl(a);
-+    const int sh = (0 - i7) & 7;
-+    return spu__xs(_mm_or_si128(_mm_srl_epi32(A, _mm_cvtsi32_si128(sh)),
-+                                _mm_sll_epi32(_mm_slli_si128(A, 4), _mm_cvtsi32_si128(32 - sh))));
-+}
-+#else
-+static inline u128 spu_rotqmbii(u128 a, int i7) { return spu_rotqmbii_ref(a, i7); }
-+#endif
- static inline u128 spu_rotqmbyi_ref(u128 a, int i7)  { int sh=(0-i7)&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i-sh; if(s>=0) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
- #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
- static inline u128 spu_rotqmbyi(u128 a, int i7) {
-@@ -1887,6 +2211,69 @@
- static inline u128 spu_ilh(uint16_t imm) { return spu_splat_u16(imm); }
- static inline u128 spu_ilhu(uint16_t imm){ return spu_splat_u32((uint32_t)imm << 16); }
- static inline u128 spu_iohl(u128 a, uint16_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]|(uint32_t)imm; return r; }
-+
-+/* ---- what spu_lifter.py's newer passes emit ---- */
-+/* The lazy -0 flush forms where the exact float path is not the x86 one above: value == twin. */
-+#ifndef SPU_HAVE_LZ
-+static inline u128 spu_fa_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) { (void)au; (void)bu; const u128 e = spu_fa(a, b); *ru = e; return e; }
-+static inline u128 spu_fs_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) { (void)au; (void)bu; const u128 e = spu_fs(a, b); *ru = e; return e; }
-+static inline u128 spu_fm_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) { (void)au; (void)bu; const u128 e = spu_fm(a, b); *ru = e; return e; }
-+static inline u128 spu_fma_lz(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, u128* ru)  { (void)au; (void)bu; (void)cu; const u128 e = spu_fma(a, b, c); *ru = e; return e; }
-+static inline u128 spu_fms_lz(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, u128* ru)  { (void)au; (void)bu; (void)cu; const u128 e = spu_fms(a, b, c); *ru = e; return e; }
-+static inline u128 spu_fnms_lz(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, u128* ru) { (void)au; (void)bu; (void)cu; const u128 e = spu_fnms(a, b, c); *ru = e; return e; }
-+#endif
-+/* spu_w0 / spu_h0 (--pref-extract): the preferred word / halfword of a register, read from the
-+ * whole register. Lifted code used to write rN._u32[0]: a 4-byte read of a 16-byte local, which
-+ * made the compiler keep such a register as two values (word 0 as a scalar, words 1-3 as a
-+ * vector) and rebuild the vector with shuffle + insert for every whole-register operation: a
-+ * loop pointer advanced by `ai` then went insert -> add -> extract, six cycles a pass. Read as
-+ * one extract from the whole value the register stays one vector (and the compiler is free to
-+ * keep a scalar copy of the word beside it).
-+ * spu_k4: a 128-bit literal, words in SPU order (a = the preferred word).
-+ * spu_keq: the register holds exactly that literal.
-+ * spu_opq: the value, unknown to the compiler from here on. The lifter wraps every value that it
-+ * made a literal (a folded local-store constant, a guarded register constant, anything computed
-+ * from one) where it enters a float operation or leaves for memory: the compiler folds constant
-+ * float arithmetic in round-to-nearest and without denormals-are-zero, the SPU truncates
-+ * (x * 1.0 is not x for a denormal x, and a folded product can be one ulp off). */
-+#if SPU_X86
-+SPU__XI uint32_t spu_w0(u128 a) { return (uint32_t)_mm_cvtsi128_si32(spu__xl(a)); }
-+SPU__XI uint16_t spu_h0(u128 a) { return (uint16_t)_mm_cvtsi128_si32(spu__xl(a)); }
-+SPU__XI u128 spu_k4(uint32_t a, uint32_t b, uint32_t c, uint32_t d) { return spu__xs(_mm_setr_epi32((int)a, (int)b, (int)c, (int)d)); }
-+SPU__XI int spu_keq(u128 v, uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
-+    const __m128i x = _mm_xor_si128(spu__xl(v), _mm_setr_epi32((int)a, (int)b, (int)c, (int)d));
-+    return _mm_testz_si128(x, x);
-+}
-+SPU__XI u128 spu_opq(u128 v) { __m128i x = spu__xl(v); __asm__("" : "+x"(x)); return spu__xs(x); }
-+#else
-+static inline uint32_t spu_w0(u128 a) { return a._u32[0]; }
-+static inline uint16_t spu_h0(u128 a) { return a._u16[0]; }
-+static inline u128 spu_k4(uint32_t a, uint32_t b, uint32_t c, uint32_t d) { u128 r; r._u32[0] = a; r._u32[1] = b; r._u32[2] = c; r._u32[3] = d; return r; }
-+static inline int spu_keq(u128 v, uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
-+    return v._u32[0] == a && v._u32[1] == b && v._u32[2] == c && v._u32[3] == d;
-+}
-+#if defined(__GNUC__) || defined(__clang__)
-+static inline u128 spu_opq(u128 v) { __asm__ volatile("" : "+m"(v)); return v; }
-+#else
-+static inline u128 spu_opq(u128 v) { volatile u128 t = v; return t; }
-+#endif
-+#endif
-+/* SPU_MEM_BARRIER: no instructions; tells the compiler that any memory may have been read and
-+ * written here, so it cannot carry a value it stored to the context (a constant, say) across
-+ * this point into a later load. The lifter puts it at the entry of, and after the calls in,
-+ * functions that hold its own literals (see finish_function in spu_lifter.py). */
-+#if defined(__GNUC__) || defined(__clang__)
-+#  define SPU_MEM_BARRIER() __asm__ volatile("" ::: "memory")
-+#else
-+#  define SPU_MEM_BARRIER() ((void)0)
-+#endif
-+#ifndef SPU_UNLIKELY
-+#  if defined(__GNUC__) || defined(__clang__)
-+#    define SPU_UNLIKELY(x) __builtin_expect(!!(x), 0)
-+#  else
-+#    define SPU_UNLIKELY(x) (x)
-+#  endif
-+#endif
- 
- #ifdef __cplusplus
- }
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
@@ -36868,3 +35939,1066 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
              return CELL_OK;
          }
      }
+diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
+--- a/runtime/spu/spu_helpers.h
++++ b/runtime/spu/spu_helpers.h
+@@ -313,10 +313,23 @@
+ #else
+ static inline u128 spu_xor(u128 a, u128 b) { return spu_xor_ref(a, b); }
+ #endif
+-static inline u128 spu_nand(u128 a, u128 b){ u128 r; r._u64[0]=~(a._u64[0]&b._u64[0]); r._u64[1]=~(a._u64[1]&b._u64[1]); return r; }
+-static inline u128 spu_nor(u128 a, u128 b) { u128 r; r._u64[0]=~(a._u64[0]|b._u64[0]); r._u64[1]=~(a._u64[1]|b._u64[1]); return r; }
+-static inline u128 spu_andc(u128 a, u128 b){ u128 r; r._u64[0]=a._u64[0]&~b._u64[0]; r._u64[1]=a._u64[1]&~b._u64[1]; return r; }
+-static inline u128 spu_orc(u128 a, u128 b) { u128 r; r._u64[0]=a._u64[0]|~b._u64[0]; r._u64[1]=a._u64[1]|~b._u64[1]; return r; }
++static inline u128 spu_nand_ref(u128 a, u128 b){ u128 r; r._u64[0]=~(a._u64[0]&b._u64[0]); r._u64[1]=~(a._u64[1]&b._u64[1]); return r; }
++static inline u128 spu_nor_ref(u128 a, u128 b) { u128 r; r._u64[0]=~(a._u64[0]|b._u64[0]); r._u64[1]=~(a._u64[1]|b._u64[1]); return r; }
++static inline u128 spu_andc_ref(u128 a, u128 b){ u128 r; r._u64[0]=a._u64[0]&~b._u64[0]; r._u64[1]=a._u64[1]&~b._u64[1]; return r; }
++static inline u128 spu_orc_ref(u128 a, u128 b) { u128 r; r._u64[0]=a._u64[0]|~b._u64[0]; r._u64[1]=a._u64[1]|~b._u64[1]; return r; }
++/* The 64-bit halves above made clang split a register into scalar pieces wherever one of
++ * these met a vector op (an andc of two compares cost about ten moves between register files). */
++#if SPU_X86
++static inline u128 spu_nand(u128 a, u128 b) { return spu__xs(_mm_xor_si128(_mm_and_si128(spu__xl(a), spu__xl(b)), _mm_set1_epi32(-1))); }
++static inline u128 spu_nor(u128 a, u128 b)  { return spu__xs(_mm_xor_si128(_mm_or_si128(spu__xl(a), spu__xl(b)), _mm_set1_epi32(-1))); }
++static inline u128 spu_andc(u128 a, u128 b) { return spu__xs(_mm_andnot_si128(spu__xl(b), spu__xl(a))); }
++static inline u128 spu_orc(u128 a, u128 b)  { return spu__xs(_mm_or_si128(spu__xl(a), _mm_xor_si128(spu__xl(b), _mm_set1_epi32(-1)))); }
++#else
++static inline u128 spu_nand(u128 a, u128 b) { return spu_nand_ref(a, b); }
++static inline u128 spu_nor(u128 a, u128 b)  { return spu_nor_ref(a, b); }
++static inline u128 spu_andc(u128 a, u128 b) { return spu_andc_ref(a, b); }
++static inline u128 spu_orc(u128 a, u128 b)  { return spu_orc_ref(a, b); }
++#endif
+ static inline u128 spu_andi_ref(u128 a, int32_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]&(uint32_t)imm; return r; }
+ #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
+ static inline u128 spu_andi(u128 a, int32_t imm) {
+@@ -464,21 +477,25 @@
+ #if defined(__SSE4_1__)
+ #include <smmintrin.h>
+ /* pshufb version: one of the hottest SPU ops (~11% of GH3's FMOD mixer task
+- * as the byte loop). SPU byte P lives at host byte SPU_W(P), i.e. the bytes
+- * of each 32-bit word reversed, so swap into SPU order, select, swap back. */
++ * as the byte loop, ~15% of GT5's sound job). SPU byte P lives at host byte
++ * SPU_W(P) = P ^ 3 (the bytes of each 32-bit word reversed). The result byte
++ * at host position h is SPU byte h ^ 3, and its selector is control SPU byte
++ * h ^ 3, i.e. host byte h: so the selection runs in host order as it is, with
++ * the selected SPU index turned into a host index (^ 3). The first version
++ * swapped a, b, c into SPU order and the result back: four shuffles more. */
+ static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
+-    const __m128i sw = _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12);
+     __m128i A, B, C; memcpy(&A, &a, 16); memcpy(&B, &b, 16); memcpy(&C, &c, 16);
+-    A = _mm_shuffle_epi8(A, sw); B = _mm_shuffle_epi8(B, sw); C = _mm_shuffle_epi8(C, sw);
+-    const __m128i idx = _mm_and_si128(C, _mm_set1_epi8(0x0F));
+-    const __m128i fromb = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8(0x10)), _mm_set1_epi8(0x10));
+-    __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx), fromb);
+-    /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
+-    const __m128i m80 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0x80)), _mm_set1_epi8((char)0x80));
+-    const __m128i mC0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xC0)), _mm_set1_epi8((char)0xC0));
+-    const __m128i mE0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xE0)), _mm_set1_epi8((char)0xE0));
+-    const __m128i special = _mm_blendv_epi8(mC0, _mm_set1_epi8((char)0x80), mE0);
+-    r = _mm_shuffle_epi8(_mm_blendv_epi8(r, special, m80), sw);
++    /* pshufb reads bits 0-3 of the index (^ 3: the host byte) and bit 7, which gives 0: so a
++     * special selector (0x80 and up) selects 0 from both, and its value can be ORed in. */
++    const __m128i idx = _mm_xor_si128(C, _mm_set1_epi8(3));
++    __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx),
++                                _mm_slli_epi16(C, 3));                 /* selector bit 4: from b */
++    /* Special selectors by their high nibble: 8-B (10x) -> 0x00, C-D (110) -> 0xFF, E-F (111)
++     * -> 0x80; 0-7 are ordinary selectors and OR in nothing. One lookup where the previous
++     * form took three compares and two more blends. */
++    const __m128i lut = _mm_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
++                                      (char)0xFF, (char)0xFF, (char)0x80, (char)0x80);
++    r = _mm_or_si128(r, _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(C, 4), _mm_set1_epi8(0x0F))));
+     u128 out; memcpy(&out, &r, 16); return out;
+ }
+ #elif defined(__ARM_NEON)
+@@ -552,13 +569,25 @@
+ #endif
+ 
+ /* ---- shift / rotate immediate (word lanes) ---- */
+-static inline u128 spu_shli(u128 a, int sh)  { u128 r; sh&=0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); return r; }
+-static inline u128 spu_shlhi(u128 a, int sh) { u128 r; sh&=0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); return r; }
++static inline u128 spu_shli_ref(u128 a, int sh)  { u128 r; sh&=0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); return r; }
++static inline u128 spu_shlhi_ref(u128 a, int sh) { u128 r; sh&=0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); return r; }
+ static inline u128 spu_roti_ref(u128 a, int sh)  { u128 r; sh&=31; for(int i=0;i<4;i++) r._u32[i]= sh ? ((a._u32[i]<<sh)|(a._u32[i]>>(32-sh))) : a._u32[i]; return r; }
+ static inline u128 spu_rothi_ref(u128 a, int sh) { u128 r; sh&=15; for(int i=0;i<8;i++) r._u16[i]=(uint16_t)((a._u16[i]<<sh)|(a._u16[i]>>(16-sh))); return r; }
+-static inline u128 spu_rotmi(u128 a, int i7)  { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]>>sh); return r; }
++static inline u128 spu_rotmi_ref(u128 a, int i7)  { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]>>sh); return r; }
+ static inline u128 spu_rotmai_ref(u128 a, int i7) { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._s32[i]=(sh>31)?(a._s32[i]>>31):(a._s32[i]>>sh); return r; }
+-static inline u128 spu_rotmhi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
++static inline u128 spu_rotmhi_ref(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
++/* psll/psrl give 0 for a count past the lane width, as these instructions do. */
++#if SPU_X86
++static inline u128 spu_shli(u128 a, int sh)   { return spu__xs(_mm_sll_epi32(spu__xl(a), _mm_cvtsi32_si128(sh & 0x3F))); }
++static inline u128 spu_shlhi(u128 a, int sh)  { return spu__xs(_mm_sll_epi16(spu__xl(a), _mm_cvtsi32_si128(sh & 0x1F))); }
++static inline u128 spu_rotmi(u128 a, int i7)  { return spu__xs(_mm_srl_epi32(spu__xl(a), _mm_cvtsi32_si128((0 - i7) & 0x3F))); }
++static inline u128 spu_rotmhi(u128 a, int i7) { return spu__xs(_mm_srl_epi16(spu__xl(a), _mm_cvtsi32_si128((0 - i7) & 0x1F))); }
++#else
++static inline u128 spu_shli(u128 a, int sh)   { return spu_shli_ref(a, sh); }
++static inline u128 spu_shlhi(u128 a, int sh)  { return spu_shlhi_ref(a, sh); }
++static inline u128 spu_rotmi(u128 a, int i7)  { return spu_rotmi_ref(a, i7); }
++static inline u128 spu_rotmhi(u128 a, int i7) { return spu_rotmhi_ref(a, i7); }
++#endif
+ static inline u128 spu_shlqbyi_ref(u128 a, int sh) { u128 r=spu_zero(); sh&=0x1F; for(int i=0;i<16;i++){ int s=i+sh; if(s<16) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
+ #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
+ static inline u128 spu_shlqbyi(u128 a, int sh) {
+@@ -588,14 +617,31 @@
+  * word1<<32, but SPU's MS half is word0<<32 | word1), so native shifts on them
+  * corrupt any bits crossing a 32-bit boundary. Assemble the logical hi/lo halves
+  * with _u32[0] as most-significant, shift, then disassemble. */
+-static inline u128 spu_shlqbii(u128 a, int sh) { sh&=7; if(!sh) return a;
++static inline u128 spu_shlqbii_ref(u128 a, int sh) { sh&=7; if(!sh) return a;
+     uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
+     uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh);
+     u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
+-static inline u128 spu_rotqbii(u128 a, int sh) { sh&=7; if(!sh) return a;
++static inline u128 spu_rotqbii_ref(u128 a, int sh) { sh&=7; if(!sh) return a;
+     uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
+     uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh)|(hi>>(64-sh));
+     u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
++/* Word i takes the bits shifted out of its neighbour: word i+1 (word 0 for a rotate) is the
++ * lane above in host order. A count of 32 for the neighbour gives 0, so a shift of 0 is a copy. */
++#if SPU_X86
++static inline u128 spu_shlqbii(u128 a, int sh) {
++    const __m128i A = spu__xl(a);
++    return spu__xs(_mm_or_si128(_mm_sll_epi32(A, _mm_cvtsi32_si128(sh & 7)),
++                                _mm_srl_epi32(_mm_srli_si128(A, 4), _mm_cvtsi32_si128(32 - (sh & 7)))));
++}
++static inline u128 spu_rotqbii(u128 a, int sh) {
++    const __m128i A = spu__xl(a);
++    return spu__xs(_mm_or_si128(_mm_sll_epi32(A, _mm_cvtsi32_si128(sh & 7)),
++                                _mm_srl_epi32(_mm_shuffle_epi32(A, 0x39), _mm_cvtsi32_si128(32 - (sh & 7)))));
++}
++#else
++static inline u128 spu_shlqbii(u128 a, int sh) { return spu_shlqbii_ref(a, sh); }
++static inline u128 spu_rotqbii(u128 a, int sh) { return spu_rotqbii_ref(a, sh); }
++#endif
+ 
+ /* ---- SPU floating point --------------------------------------------------------------
+  * Written from the Cell BE SPU ISA v1.2 (section 9 and the instruction pages).
+@@ -1041,6 +1087,7 @@
+  * product of two 24-bit significands is exact in double, so a compiler contracting a multiply
+  * and an add into an FMA cannot change any rounding here. */
+ #include <immintrin.h>
++#define SPU_MXCSR_RZFZ 0xE040u   /* FTZ (bit 15), RC = 0b11 round toward zero (bits 13-14), DAZ (bit 6) */
+ #define SPU__X8_INLINE static inline __attribute__((always_inline))
+ #define SPU__X8_SLOW   static __attribute__((noinline, cold, unused))
+ SPU__X8_INLINE __m128i spu__x8_bexp(__m128i x) { return _mm_srli_epi32(_mm_slli_epi32(x, 1), 24); }
+@@ -1105,9 +1152,194 @@
+     ok = _mm_and_si128(ok, pre);
+     return spu__x8_all4(ok) ? spu__x8_st(r) : spu__x8_fa_fix(spu__x8_st(r), ok, a, b, negb);
+ }
+-SPU__X8_INLINE u128 spu_fa(u128 a, u128 b) { return spu__x8_fa(a, b, 0); }
+-SPU__X8_INLINE u128 spu_fs(u128 a, u128 b) { return spu__x8_fa(a, b, 0x80000000u); }
++/* SPU_FLOAT_RZ: as on arm64, SPU code may run with MXCSR at round toward zero with flush-to-zero
++ * and denormals-are-zero (spu_float_mode_enter, spu_channels.c). The host's single-precision ops
++ * then truncate like the SPU and treat a denormal as zero, so all that is left of the exact forms
++ * is the range check and the +0 rule: one native op instead of a round trip through f64x4. The
++ * exception flags in MXCSR are sticky, so only the mode bits are compared. Generated code built
++ * with SPU_X86_RZ_ALWAYS skips the check, which was 9% of a job's time: it only ever runs inside
++ * spu_run_with_halt, where the mode is set. */
++#ifdef SPU_X86_RZ_ALWAYS
++SPU__X8_INLINE int spu__x8_rz(void) { return 1; }
++#else
++SPU__X8_INLINE int spu__x8_rz(void) { return (_mm_getcsr() & SPU_MXCSR_RZFZ) == SPU_MXCSR_RZFZ; }
++#endif
++SPU__X8_INLINE __m128 spu__x8_f(__m128i x) { return _mm_castsi128_ps(x); }
++/* A zero result is +0. With flush-to-zero a result has no denormals left, so only the sign of a
++ * zero can be wrong. */
++SPU__X8_INLINE __m128i spu__x8_flush(__m128i r) {
++    const __m128i sign = _mm_set1_epi32((int)0x80000000u);
++    return _mm_andnot_si128(_mm_and_si128(_mm_cmpeq_epi32(r, sign), sign), r);
++}
++/* magnitude below FLT_MAX (Inf and NaN fail) */
++SPU__X8_INLINE __m128i spu__x8_inrange(__m128 r) {
++    const __m128 m = _mm_and_ps(r, _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF)));
++    return _mm_castps_si128(_mm_cmp_ps(m, _mm_castsi128_ps(_mm_set1_epi32(0x7F7FFFFF)), _CMP_LT_OQ));
++}
++/* Lanes outside the host float range on the round-toward-zero paths below, redone in double
++ * precision without a branch per lane (spu__x8_*_fixv). Game data has vectors whose last lane is
++ * not a float at all, so those paths can leave the host range on every call; the lane-by-lane
++ * routines above (spu__x8_*_fix) were 3.8% of an SPU worker's time. Each operand is widened to a
++ * double the SPU way, the operation is done once in double precision, and the result is narrowed
++ * the SPU way:
++ *  - widen: biased exponent 0 is +0.0; anything else is the double with the same sign, the same
++ *    power of two and the 23 fraction bits on top, so biased exponent 255 is one more binade
++ *    (cvtps2pd would read it as Inf/NaN). Every nonzero operand is a normal double in
++ *    [2^-126, 2^129).
++ *  - the operation, under MXCSR round toward zero: a sum is truncated at 53 bits; a product of
++ *    two 24-bit significands is exact; x*y + z is the exact product plus z truncated once at 53
++ *    bits (fused or not: the product is exact either way). A nonzero result is a multiple of
++ *    2^-298 below 2^259, a normal double, so flush-to-zero and denormals-are-zero never act, and
++ *    an exact zero sum is +0 in this rounding mode.
++ *  - narrow: the top 24 significand bits are kept. Truncating the exact value v at 53 bits gives
++ *    the largest 53-bit number t with |t| <= |v|; the largest 24-bit number not above |v| is
++ *    itself a 53-bit number, so it is <= |t| <= |v| and in the same binade: truncating t at 24
++ *    bits gives the same number as truncating v at 24 bits. A magnitude from 2^129 up saturates
++ *    to Smax, one below 2^-126 (zero included) is +0.
++ * So a lane computed here is the exact SPU result (what spu__fa_lane / spu__fm_lane /
++ * spu__fma_lane give) whether or not it was in the host range. Only for the round-toward-zero
++ * mode: under round to nearest the 53-bit rounding is not a truncation.
++ * The same code at two widths. When the lanes out of range are all in one half of the vector
++ * (the usual case: the last lane), that half alone is redone, as two doubles in 128-bit
++ * registers, and the other half keeps the host result; otherwise all four lanes are redone as
++ * four doubles. Redoing one half is cheaper on cores that split 256-bit operations in two (Intel
++ * E-cores: about a third less) and costs the same elsewhere.
++ * Arguments, in registers: the operands as the host operation took them (sign changes of
++ * fs/fms/fnms applied; for the _lz forms the twins: a twin differs from its value only by the
++ * sign of a zero, which the widening drops), the host result (-0 already +0) and its in-range
++ * mask.
++ * SPU_X86_FIX_SCALAR=1 keeps the lane-by-lane routines on those paths, for comparison. */
++#if !defined(SPU_X86_FIX_SCALAR) || !(SPU_X86_FIX_SCALAR + 0)
++#define SPU__X8_FIXV 1
++#if defined(_MSC_VER) || (defined(_WIN32) && defined(__clang__))
++#define SPU__X8_VCALL __vectorcall      /* __m128i in and out in registers on Windows too */
++#else
++#define SPU__X8_VCALL
++#endif
++#define SPU__X8_FIXV_FN static __attribute__((noinline, unused)) __m128i SPU__X8_VCALL
++#define SPU__X8_SF_MASK 0x8FFFFFFFE0000000ull   /* sign, 8 exponent bits at 52, 23 fraction bits at 29 */
++#define SPU__X8_SF_NZ   0x001FFFFFFFFFFFFFll    /* 2*u above this: biased exponent != 0 */
++#define SPU__X8_SF_BIAS (896ll << 52)           /* 1023 - 127 */
++#define SPU__X8_SF_ABS  0x7FFFFFFFFFFFFFFFll
++#define SPU__X8_SF_SMAX 0x47FFFFFFE0000000ll    /* Smax = (2 - 2^-23) * 2^128 as a double */
++#define SPU__X8_SF_SMIN 0x3810000000000000ll    /* Smin = 2^-126 as a double */
++/* Four lanes. Widen: the words sign-extended and moved up 29 bits (sign at bit 63; bits 60-62
++ * are copies of it, masked off), the exponent rebiased, SPU zeros cleared. */
++SPU__X8_INLINE __m256d spu__x8_sf_wide4(__m128i x) {
++    const __m256i u = _mm256_and_si256(_mm256_slli_epi64(_mm256_cvtepi32_epi64(x), 29), _mm256_set1_epi64x((long long)SPU__X8_SF_MASK));
++    const __m256i nz = _mm256_cmpgt_epi64(_mm256_add_epi64(u, u), _mm256_set1_epi64x(SPU__X8_SF_NZ));
++    return _mm256_castsi256_pd(_mm256_and_si256(_mm256_add_epi64(u, _mm256_set1_epi64x(SPU__X8_SF_BIAS)), nz));
++}
++/* Narrow: the magnitude clamped to Smax, moved down 29 bits and rebiased is the 31 low bits of
++ * the single; the sign goes on top; a magnitude below Smin (zero included) gives +0. */
++SPU__X8_INLINE __m128i spu__x8_sf_narrow4(__m256d d) {
++    const __m256d a = _mm256_min_pd(_mm256_and_pd(d, _mm256_castsi256_pd(_mm256_set1_epi64x(SPU__X8_SF_ABS))),
++                                    _mm256_castsi256_pd(_mm256_set1_epi64x(SPU__X8_SF_SMAX)));
++    const __m256i keep = _mm256_castpd_si256(_mm256_cmp_pd(a, _mm256_castsi256_pd(_mm256_set1_epi64x(SPU__X8_SF_SMIN)), _CMP_GE_OQ));
++    const __m256i w = _mm256_sub_epi64(_mm256_srli_epi64(_mm256_castpd_si256(a), 29), _mm256_set1_epi64x(896ll << 23));
++    const __m256i sg = _mm256_and_si256(_mm256_srli_epi64(_mm256_castpd_si256(d), 32), _mm256_set1_epi64x(0x80000000ll));
++    return spu__x8_narrow(_mm256_and_si256(_mm256_or_si256(w, sg), keep));
++}
++/* Two lanes, 128 bits wide: words 0 and 1 of x widened; two doubles narrowed into words 0 and 1. */
++SPU__X8_INLINE __m128d spu__x8_sf_wide2(__m128i x) {
++    const __m128i u = _mm_and_si128(_mm_slli_epi64(_mm_cvtepi32_epi64(x), 29), _mm_set1_epi64x((long long)SPU__X8_SF_MASK));
++    const __m128i nz = _mm_cmpgt_epi64(_mm_add_epi64(u, u), _mm_set1_epi64x(SPU__X8_SF_NZ));
++    return _mm_castsi128_pd(_mm_and_si128(_mm_add_epi64(u, _mm_set1_epi64x(SPU__X8_SF_BIAS)), nz));
++}
++SPU__X8_INLINE __m128i spu__x8_sf_narrow2(__m128d d) {
++    const __m128d a = _mm_min_pd(_mm_and_pd(d, _mm_castsi128_pd(_mm_set1_epi64x(SPU__X8_SF_ABS))),
++                                 _mm_castsi128_pd(_mm_set1_epi64x(SPU__X8_SF_SMAX)));
++    const __m128i keep = _mm_castpd_si128(_mm_cmp_pd(a, _mm_castsi128_pd(_mm_set1_epi64x(SPU__X8_SF_SMIN)), _CMP_GE_OQ));
++    const __m128i w = _mm_sub_epi64(_mm_srli_epi64(_mm_castpd_si128(a), 29), _mm_set1_epi64x(896ll << 23));
++    const __m128i sg = _mm_and_si128(_mm_srli_epi64(_mm_castpd_si128(d), 32), _mm_set1_epi64x(0x80000000ll));
++    return _mm_shuffle_epi32(_mm_and_si128(_mm_or_si128(w, sg), keep), _MM_SHUFFLE(3, 3, 2, 0));
++}
++/* _d4: all four lanes. _d2: words 0 and 1 of each operand; the two results in words 0 and 1. */
++SPU__X8_INLINE __m128i spu__x8_fa_d4(__m128i x, __m128i y) { return spu__x8_sf_narrow4(_mm256_add_pd(spu__x8_sf_wide4(x), spu__x8_sf_wide4(y))); }
++SPU__X8_INLINE __m128i spu__x8_fa_d2(__m128i x, __m128i y) { return spu__x8_sf_narrow2(_mm_add_pd(spu__x8_sf_wide2(x), spu__x8_sf_wide2(y))); }
++SPU__X8_INLINE __m128i spu__x8_fm_d4(__m128i x, __m128i y) { return spu__x8_sf_narrow4(_mm256_mul_pd(spu__x8_sf_wide4(x), spu__x8_sf_wide4(y))); }
++SPU__X8_INLINE __m128i spu__x8_fm_d2(__m128i x, __m128i y) { return spu__x8_sf_narrow2(_mm_mul_pd(spu__x8_sf_wide2(x), spu__x8_sf_wide2(y))); }
++SPU__X8_INLINE __m128i spu__x8_fma_d4(__m128i x, __m128i y, __m128i z) {
++    return spu__x8_sf_narrow4(_mm256_fmadd_pd(spu__x8_sf_wide4(x), spu__x8_sf_wide4(y), spu__x8_sf_wide4(z)));
++}
++SPU__X8_INLINE __m128i spu__x8_fma_d2(__m128i x, __m128i y, __m128i z) {
++    return spu__x8_sf_narrow2(_mm_fmadd_pd(spu__x8_sf_wide2(x), spu__x8_sf_wide2(y), spu__x8_sf_wide2(z)));
++}
++SPU__X8_INLINE __m128i spu__x8_hi2(__m128i x) { return _mm_unpackhi_epi64(x, x); }   /* words 2 and 3 down to 0 and 1 */
++/* r: the host result with -0 made +0; ok: its in-range mask (not all four words set). Words 0-1
++ * in range: redo words 2-3; words 2-3 in range: redo words 0-1; else redo all four. */
++SPU__X8_FIXV_FN spu__x8_fa_fixv(__m128i x, __m128i y, __m128i r, __m128i ok) {
++    const int good = _mm_movemask_ps(_mm_castsi128_ps(ok));
++    if ((good & 3) == 3) return _mm_unpacklo_epi64(r, spu__x8_fa_d2(spu__x8_hi2(x), spu__x8_hi2(y)));
++    if ((good & 12) == 12) return _mm_blend_epi32(r, spu__x8_fa_d2(x, y), 3);
++    return spu__x8_fa_d4(x, y);
++}
++SPU__X8_FIXV_FN spu__x8_fm_fixv(__m128i x, __m128i y, __m128i r, __m128i ok) {
++    const int good = _mm_movemask_ps(_mm_castsi128_ps(ok));
++    if ((good & 3) == 3) return _mm_unpacklo_epi64(r, spu__x8_fm_d2(spu__x8_hi2(x), spu__x8_hi2(y)));
++    if ((good & 12) == 12) return _mm_blend_epi32(r, spu__x8_fm_d2(x, y), 3);
++    return spu__x8_fm_d4(x, y);
++}
++SPU__X8_FIXV_FN spu__x8_fma_fixv(__m128i x, __m128i y, __m128i z, __m128i r, __m128i ok) {
++    const int good = _mm_movemask_ps(_mm_castsi128_ps(ok));
++    if ((good & 3) == 3) return _mm_unpacklo_epi64(r, spu__x8_fma_d2(spu__x8_hi2(x), spu__x8_hi2(y), spu__x8_hi2(z)));
++    if ((good & 12) == 12) return _mm_blend_epi32(r, spu__x8_fma_d2(x, y, z), 3);
++    return spu__x8_fma_d4(x, y, z);
++}
++/* The round-toward-zero paths' "every lane in range" test and what they do otherwise. The vector
++ * routines are not marked cold (in game data they run often), so the branch is laid out by this
++ * hint instead: the in-range case falls through, as it does next to a cold call. */
++#define SPU__X8_ALL4(ok) __builtin_expect(spu__x8_all4(ok), 1)
++#define SPU__X8_RZ_FA_FIX(x, y, r, ok, a, b, negb)              spu__x8_st(spu__x8_fa_fixv(x, y, r, ok))
++#define SPU__X8_RZ_FM_FIX(x, y, r, ok, a, b)                    spu__x8_st(spu__x8_fm_fixv(x, y, r, ok))
++#define SPU__X8_RZ_FMA_FIX(x, y, z, r, ok, a, b, c, negp, negc) spu__x8_st(spu__x8_fma_fixv(x, y, z, r, ok))
++#else
++#define SPU__X8_ALL4(ok) spu__x8_all4(ok)
++#define SPU__X8_RZ_FA_FIX(x, y, r, ok, a, b, negb)              spu__x8_fa_fix(spu__x8_st(r), ok, a, b, negb)
++#define SPU__X8_RZ_FM_FIX(x, y, r, ok, a, b)                    spu__x8_fm_fix(spu__x8_st(r), ok, a, b)
++#define SPU__X8_RZ_FMA_FIX(x, y, z, r, ok, a, b, c, negp, negc) spu__x8_fma_fix(spu__x8_st(r), ok, a, b, c, negp, negc)
++#endif
++/* SPU_X86_FAST_FLOAT, for one job at a time: the native result as it stands, without the exact
++ * SPU range and signed-zero handling. For a job whose numbers are sound samples, where neither is
++ * audible and the job is short of real time. Never for anything that feeds game logic. */
++SPU__X8_INLINE u128 spu__x8_rz_fa(u128 a, u128 b, uint32_t negb) {
++    const __m128i x = spu__x8_ld(a), y = _mm_xor_si128(spu__x8_ld(b), _mm_set1_epi32((int)negb));
++    const __m128 t = _mm_add_ps(spu__x8_f(x), spu__x8_f(y));
++#ifdef SPU_X86_FAST_FLOAT
++    return spu__x8_st(_mm_castps_si128(t));
++#else
++    const __m128i ok = spu__x8_inrange(t), r = spu__x8_flush(_mm_castps_si128(t));
++    return SPU__X8_ALL4(ok) ? spu__x8_st(r) : SPU__X8_RZ_FA_FIX(x, y, r, ok, a, b, negb);
++#endif
++}
++/* Zero and denormal operands need no test: denormals-are-zero makes them zero, and the flush above
++ * settles the sign. The one case native arithmetic gets wrong, zero times what the SPU reads as a
++ * large number and the host as Inf or NaN, comes out NaN and fails the range check. */
++SPU__X8_INLINE u128 spu__x8_rz_fm(u128 a, u128 b) {
++    const __m128i x = spu__x8_ld(a), y = spu__x8_ld(b);
++    const __m128 t = _mm_mul_ps(spu__x8_f(x), spu__x8_f(y));
++#ifdef SPU_X86_FAST_FLOAT
++    return spu__x8_st(_mm_castps_si128(t));
++#else
++    const __m128i ok = spu__x8_inrange(t), r = spu__x8_flush(_mm_castps_si128(t));
++    return SPU__X8_ALL4(ok) ? spu__x8_st(r) : SPU__X8_RZ_FM_FIX(x, y, r, ok, a, b);
++#endif
++}
++SPU__X8_INLINE u128 spu__x8_rz_fma(u128 a, u128 b, u128 c, uint32_t negp, uint32_t negc) {
++    const __m128i x = _mm_xor_si128(spu__x8_ld(a), _mm_set1_epi32((int)negp)), y = spu__x8_ld(b);
++    const __m128i z = _mm_xor_si128(spu__x8_ld(c), _mm_set1_epi32((int)negc));
++    const __m128 t = _mm_fmadd_ps(spu__x8_f(x), spu__x8_f(y), spu__x8_f(z));
++#ifdef SPU_X86_FAST_FLOAT
++    return spu__x8_st(_mm_castps_si128(t));
++#else
++    const __m128i ok = spu__x8_inrange(t), r = spu__x8_flush(_mm_castps_si128(t));
++    return SPU__X8_ALL4(ok) ? spu__x8_st(r) : SPU__X8_RZ_FMA_FIX(x, y, z, r, ok, a, b, c, negp, negc);
++#endif
++}
++SPU__X8_INLINE u128 spu_fa(u128 a, u128 b) { return spu__x8_rz() ? spu__x8_rz_fa(a, b, 0) : spu__x8_fa(a, b, 0); }
++SPU__X8_INLINE u128 spu_fs(u128 a, u128 b) { return spu__x8_rz() ? spu__x8_rz_fa(a, b, 0x80000000u) : spu__x8_fa(a, b, 0x80000000u); }
+ SPU__X8_INLINE u128 spu_fm(u128 a, u128 b) {
++    if (spu__x8_rz()) return spu__x8_rz_fm(a, b);
+     const __m128i x = spu__x8_ld(a), y = spu__x8_ld(b);
+     __m128i ok, zm;
+     const __m128i r = spu__x8_trunc0(_mm256_mul_pd(spu__x8_wide(x), spu__x8_wide(y)), &ok, &zm, NULL);
+@@ -1126,9 +1358,93 @@
+     ok = _mm_and_si128(ok, _mm_and_si128(_mm_and_si128(spu__x8_plain0(x), spu__x8_plain0(y)), spu__x8_plain0(z)));
+     return spu__x8_all4(ok) ? spu__x8_st(r) : spu__x8_fma_fix(spu__x8_st(r), ok, a, b, c, negp, negc);
+ }
+-SPU__X8_INLINE u128 spu_fma(u128 a, u128 b, u128 c)  { return spu__x8_fma(a, b, c, 0, 0); }            /* a*b + c */
+-SPU__X8_INLINE u128 spu_fms(u128 a, u128 b, u128 c)  { return spu__x8_fma(a, b, c, 0, 0x80000000u); }  /* a*b - c */
+-SPU__X8_INLINE u128 spu_fnms(u128 a, u128 b, u128 c) { return spu__x8_fma(a, b, c, 0x80000000u, 0); }  /* c - a*b */
++#define SPU__X8_FMA(a, b, c, np, nc) (spu__x8_rz() ? spu__x8_rz_fma(a, b, c, np, nc) : spu__x8_fma(a, b, c, np, nc))
++SPU__X8_INLINE u128 spu_fma(u128 a, u128 b, u128 c)  { return SPU__X8_FMA(a, b, c, 0, 0); }            /* a*b + c */
++SPU__X8_INLINE u128 spu_fms(u128 a, u128 b, u128 c)  { return SPU__X8_FMA(a, b, c, 0, 0x80000000u); }  /* a*b - c */
++SPU__X8_INLINE u128 spu_fnms(u128 a, u128 b, u128 c) { return SPU__X8_FMA(a, b, c, 0x80000000u, 0); }  /* c - a*b */
++/* Lazy -0 flush (spu_lifter.py --lazy-flush). spu_fa/fs/fm/fma/fms/fnms above end with "a zero
++ * result is +0" (spu__x8_flush: compare, and, andnot), three operations in series on every float
++ * chain. The _lz forms return the same value and, through *ru, its "twin": the host result before
++ * that fix. A twin differs from its value only in lanes that are -0 where the value is +0. The
++ * lifter hands a float operation the twins of its operands (au, bu, cu) when it has them, so a
++ * chain of float operations runs on unfixed values and the fix is off the chain; everything
++ * else (stores, compares, shuffles, the context) sees the value.
++ *
++ * Exact, under round toward zero + FTZ + DAZ (the only mode this path runs in): replacing +0 by
++ * -0 in an operand of a host add, multiply or fused multiply-add changes the result only when
++ * the result is a zero, and then only its sign: a zero operand of either sign adds nothing to a
++ * nonzero sum, a product with it is a zero, and Inf/NaN results (0 * Inf, anything with an
++ * exponent-255 operand) stay Inf/NaN with it. So the twin result t' and the result t the old
++ * helper computes from the fixed operands are equal or both zeros: flush(t') == flush(t), and
++ * "in range" (magnitude below FLT_MAX, ordered) is the same for both. A lane out of range is
++ * redone by the exact routine from the VALUES a, b, c, as before; the twin of such a result is
++ * the result itself. Not used under SPU_X86_FAST_FLOAT (no fix there: value and twin are the
++ * host result) nor outside the round-toward-zero mode. */
++#define SPU_HAVE_LZ 1
++/* 17 Nov 2026: the twins are OFF unless SPU_LZ_TWINS is defined. With them, cars lost body panels in
++ * the game (premium cars in car select and in races, v0.1.92 to v0.1.95): somewhere the lifter hands an
++ * operation a twin that is no longer the twin of its value. Until that is found the _lz forms compute
++ * from the values and return the value as its own twin, which is what the helpers did before. */
++#if defined(SPU_X86_FAST_FLOAT) || !defined(SPU_LZ_TWINS)
++SPU__X8_INLINE u128 spu__x8_lz_fa(u128 a, u128 b, u128 au, u128 bu, uint32_t negb, u128* ru) {
++    (void)au; (void)bu;
++    const u128 e = spu__x8_rz() ? spu__x8_rz_fa(a, b, negb) : spu__x8_fa(a, b, negb);
++    *ru = e; return e;
++}
++SPU__X8_INLINE u128 spu_fm_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) {
++    (void)au; (void)bu;
++    const u128 e = spu_fm(a, b);
++    *ru = e; return e;
++}
++SPU__X8_INLINE u128 spu__x8_lz_fma(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, uint32_t negp, uint32_t negc, u128* ru) {
++    (void)au; (void)bu; (void)cu;
++    const u128 e = SPU__X8_FMA(a, b, c, negp, negc);
++    *ru = e; return e;
++}
++#else
++SPU__X8_INLINE u128 spu__x8_lz_fa(u128 a, u128 b, u128 au, u128 bu, uint32_t negb, u128* ru) {
++    if (spu__x8_rz()) {
++        const __m128i x = spu__x8_ld(au), y = _mm_xor_si128(spu__x8_ld(bu), _mm_set1_epi32((int)negb));
++        const __m128 t = _mm_add_ps(spu__x8_f(x), spu__x8_f(y));
++        const __m128i ok = spu__x8_inrange(t), r = spu__x8_flush(_mm_castps_si128(t));
++        if (SPU__X8_ALL4(ok)) { *ru = spu__x8_st(_mm_castps_si128(t)); return spu__x8_st(r); }
++        const u128 e = SPU__X8_RZ_FA_FIX(x, y, r, ok, a, b, negb);
++        *ru = e; return e;
++    }
++    const u128 e = spu__x8_fa(a, b, negb);
++    *ru = e; return e;
++}
++SPU__X8_INLINE u128 spu_fm_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) {
++    if (spu__x8_rz()) {
++        const __m128i x = spu__x8_ld(au), y = spu__x8_ld(bu);
++        const __m128 t = _mm_mul_ps(spu__x8_f(x), spu__x8_f(y));
++        const __m128i ok = spu__x8_inrange(t), r = spu__x8_flush(_mm_castps_si128(t));
++        if (SPU__X8_ALL4(ok)) { *ru = spu__x8_st(_mm_castps_si128(t)); return spu__x8_st(r); }
++        const u128 e = SPU__X8_RZ_FM_FIX(x, y, r, ok, a, b);
++        *ru = e; return e;
++    }
++    const u128 e = spu_fm(a, b);
++    *ru = e; return e;
++}
++SPU__X8_INLINE u128 spu__x8_lz_fma(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, uint32_t negp, uint32_t negc, u128* ru) {
++    if (spu__x8_rz()) {
++        const __m128i x = _mm_xor_si128(spu__x8_ld(au), _mm_set1_epi32((int)negp)), y = spu__x8_ld(bu);
++        const __m128i z = _mm_xor_si128(spu__x8_ld(cu), _mm_set1_epi32((int)negc));
++        const __m128 t = _mm_fmadd_ps(spu__x8_f(x), spu__x8_f(y), spu__x8_f(z));
++        const __m128i ok = spu__x8_inrange(t), r = spu__x8_flush(_mm_castps_si128(t));
++        if (SPU__X8_ALL4(ok)) { *ru = spu__x8_st(_mm_castps_si128(t)); return spu__x8_st(r); }
++        const u128 e = SPU__X8_RZ_FMA_FIX(x, y, z, r, ok, a, b, c, negp, negc);
++        *ru = e; return e;
++    }
++    const u128 e = spu__x8_fma(a, b, c, negp, negc);
++    *ru = e; return e;
++}
++#endif
++SPU__X8_INLINE u128 spu_fa_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) { return spu__x8_lz_fa(a, b, au, bu, 0, ru); }
++SPU__X8_INLINE u128 spu_fs_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) { return spu__x8_lz_fa(a, b, au, bu, 0x80000000u, ru); }
++SPU__X8_INLINE u128 spu_fma_lz(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, u128* ru)  { return spu__x8_lz_fma(a, b, c, au, bu, cu, 0, 0, ru); }
++SPU__X8_INLINE u128 spu_fms_lz(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, u128* ru)  { return spu__x8_lz_fma(a, b, c, au, bu, cu, 0, 0x80000000u, ru); }
++SPU__X8_INLINE u128 spu_fnms_lz(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, u128* ru) { return spu__x8_lz_fma(a, b, c, au, bu, cu, 0x80000000u, 0, ru); }
+ #else
+ static inline u128 spu_fa(u128 a, u128 b) { return spu__fa_s(a, b); }
+ static inline u128 spu_fs(u128 a, u128 b) { return spu__fs_s(a, b); }
+@@ -1173,11 +1489,50 @@
+ #define SPU__SSE_CMP(name, cmp, key) static inline u128 name(u128 a, u128 b) { \
+     __m128i A, B; memcpy(&A, &a, 16); memcpy(&B, &b, 16); \
+     const __m128i r = cmp(key(A), key(B)); u128 out; memcpy(&out, &r, 16); return out; }
+-SPU__SSE_CMP(spu_fceq,  _mm_cmpeq_epi32, spu__sse_key)
+-SPU__SSE_CMP(spu_fcgt,  _mm_cmpgt_epi32, spu__sse_key)
+-SPU__SSE_CMP(spu_fcmeq, _mm_cmpeq_epi32, spu__sse_mag)
+-SPU__SSE_CMP(spu_fcmgt, _mm_cmpgt_epi32, spu__sse_mag)
++SPU__SSE_CMP(spu__key_fceq,  _mm_cmpeq_epi32, spu__sse_key)
++SPU__SSE_CMP(spu__key_fcgt,  _mm_cmpgt_epi32, spu__sse_key)
++SPU__SSE_CMP(spu__key_fcmeq, _mm_cmpeq_epi32, spu__sse_mag)
++SPU__SSE_CMP(spu__key_fcmgt, _mm_cmpgt_epi32, spu__sse_mag)
+ #undef SPU__SSE_CMP
++#ifdef SPU_X86_RZ_ALWAYS
++/* Generated code built with SPU_X86_RZ_ALWAYS runs with denormals-are-zero in MXCSR (see
++ * spu__x8_rz below), and there the host's own compares already are the SPU's, but for one case:
++ * a word with exponent 255 and a fraction is a large number to the SPU and a NaN to the host.
++ *  - Equal: the host says so (zeros and denormals all equal, like the SPU's zeros), or the bits
++ *    are the same (the only way two of those large numbers are equal; an OR, since the host never
++ *    calls two different SPU numbers equal). Three instructions for the fifteen of the key form.
++ *  - Greater: the host's compare when it sees no NaN in either vector, the key form when it does.
++ * tests/test_spu_fcmp_rz.c checks all four against the _ref loops. */
++static inline __m128i spu__cmp_ld(u128 a) { __m128i v; memcpy(&v, &a, 16); return v; }
++static inline u128 spu__cmp_st(__m128i v) { u128 r; memcpy(&r, &v, 16); return r; }
++static inline u128 spu_fceq(u128 a, u128 b) {
++    const __m128i x = spu__cmp_ld(a), y = spu__cmp_ld(b);
++    return spu__cmp_st(_mm_or_si128(_mm_castps_si128(_mm_cmpeq_ps(_mm_castsi128_ps(x), _mm_castsi128_ps(y))),
++                                    _mm_cmpeq_epi32(x, y)));
++}
++static inline u128 spu_fcmeq(u128 a, u128 b) {
++    const __m128i m = _mm_set1_epi32(0x7FFFFFFF);
++    const __m128i x = _mm_and_si128(spu__cmp_ld(a), m), y = _mm_and_si128(spu__cmp_ld(b), m);
++    return spu__cmp_st(_mm_or_si128(_mm_castps_si128(_mm_cmpeq_ps(_mm_castsi128_ps(x), _mm_castsi128_ps(y))),
++                                    _mm_cmpeq_epi32(x, y)));
++}
++static inline u128 spu_fcgt(u128 a, u128 b) {
++    const __m128 x = _mm_castsi128_ps(spu__cmp_ld(a)), y = _mm_castsi128_ps(spu__cmp_ld(b));
++    if (__builtin_expect(_mm_movemask_ps(_mm_cmpunord_ps(x, y)) != 0, 0)) return spu__key_fcgt(a, b);
++    return spu__cmp_st(_mm_castps_si128(_mm_cmpgt_ps(x, y)));
++}
++static inline u128 spu_fcmgt(u128 a, u128 b) {
++    const __m128 m = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
++    const __m128 x = _mm_and_ps(_mm_castsi128_ps(spu__cmp_ld(a)), m), y = _mm_and_ps(_mm_castsi128_ps(spu__cmp_ld(b)), m);
++    if (__builtin_expect(_mm_movemask_ps(_mm_cmpunord_ps(x, y)) != 0, 0)) return spu__key_fcmgt(a, b);
++    return spu__cmp_st(_mm_castps_si128(_mm_cmpgt_ps(x, y)));
++}
++#else
++static inline u128 spu_fceq(u128 a, u128 b)  { return spu__key_fceq(a, b); }
++static inline u128 spu_fcgt(u128 a, u128 b)  { return spu__key_fcgt(a, b); }
++static inline u128 spu_fcmeq(u128 a, u128 b) { return spu__key_fcmeq(a, b); }
++static inline u128 spu_fcmgt(u128 a, u128 b) { return spu__key_fcmgt(a, b); }
++#endif
+ #else
+ static inline u128 spu_fceq(u128 a, u128 b)  { return spu_fceq_ref(a, b); }
+ static inline u128 spu_fcgt(u128 a, u128 b)  { return spu_fcgt_ref(a, b); }
+@@ -1369,6 +1724,34 @@
+     if (__builtin_expect(m == 0, 1)) return f##_h_(a, b, c); \
+     spu__fpcr_put(0); __asm__ volatile("" : "+m"(a), "+m"(b), "+m"(c)); u128 r = f##_h_(a, b, c); \
+     __asm__ volatile("" : "+m"(r)); spu__fpcr_put(m); return r; }
++#elif (defined(__x86_64__) || defined(_M_X64)) && (defined(SPU_X86_FAST_DOUBLE) || defined(SPU_X86_FAST_FLOAT))
++/* SPU_X86_FAST_DOUBLE (one sound job at a time, and implied by SPU_X86_FAST_FLOAT): double
++ * precision under the thread's mode as it stands -- round toward zero, denormals flushed --
++ * instead of switching MXCSR to round to nearest and back around every op. The two MXCSR writes
++ * cost 13-20 ns, ten times the op, and GT5's EQ module does three double ops per pass of an FFT
++ * loop. The result is within one double ulp (frds: one single ulp) of round to nearest, and no
++ * NaN or infinity can come of it that round to nearest would not give. For audio modules whose
++ * doubles are filter coefficients and phase steps. */
++#define SPU__DP_RN1(f) static inline u128 f(u128 a) { return f##_h_(a); }
++#define SPU__DP_RN2(f) static inline u128 f(u128 a, u128 b) { return f##_h_(a, b); }
++#define SPU__DP_RN3(f) static inline u128 f(u128 a, u128 b, u128 c) { return f##_h_(a, b, c); }
++#elif defined(__x86_64__) || defined(_M_X64)
++/* The same with MXCSR. Every translation unit needs this, not only the AVX2 ones: the mode
++ * belongs to the thread, and an interpreted instruction runs under it as well. */
++#include <xmmintrin.h>
++#define SPU__DP_MODE_BITS 0xE040u
++#define SPU__DP_RN1(f) static inline u128 f(u128 a) { const unsigned m = _mm_getcsr(); \
++    if (__builtin_expect(!(m & SPU__DP_MODE_BITS), 1)) return f##_h_(a); \
++    _mm_setcsr(m & ~SPU__DP_MODE_BITS); __asm__ volatile("" : "+m"(a)); u128 r = f##_h_(a); \
++    __asm__ volatile("" : "+m"(r)); _mm_setcsr(m); return r; }
++#define SPU__DP_RN2(f) static inline u128 f(u128 a, u128 b) { const unsigned m = _mm_getcsr(); \
++    if (__builtin_expect(!(m & SPU__DP_MODE_BITS), 1)) return f##_h_(a, b); \
++    _mm_setcsr(m & ~SPU__DP_MODE_BITS); __asm__ volatile("" : "+m"(a), "+m"(b)); u128 r = f##_h_(a, b); \
++    __asm__ volatile("" : "+m"(r)); _mm_setcsr(m); return r; }
++#define SPU__DP_RN3(f) static inline u128 f(u128 a, u128 b, u128 c) { const unsigned m = _mm_getcsr(); \
++    if (__builtin_expect(!(m & SPU__DP_MODE_BITS), 1)) return f##_h_(a, b, c); \
++    _mm_setcsr(m & ~SPU__DP_MODE_BITS); __asm__ volatile("" : "+m"(a), "+m"(b), "+m"(c)); u128 r = f##_h_(a, b, c); \
++    __asm__ volatile("" : "+m"(r)); _mm_setcsr(m); return r; }
+ #else
+ #define SPU__DP_RN1(f) static inline u128 f(u128 a) { return f##_h_(a); }
+ #define SPU__DP_RN2(f) static inline u128 f(u128 a, u128 b) { return f##_h_(a, b); }
+@@ -1765,31 +2148,60 @@
+     u128 r; r._u32[0] = 0x10111213u; r._u32[1] = 0x14151617u; r._u32[2] = 0x18191A1Bu; r._u32[3] = 0x1C1D1E1Fu;
+     return r;
+ }
+-static inline u128 spu_cbd_pos(int pos) {
++static inline u128 spu_cbd_pos_ref(int pos) {
+     u128 r = spu__ctl_base();
+     r._u8[SPU_W(pos & 0xF)] = 0x03;                 /* a's preferred byte = SPU byte 3 */
+     return r;
+ }
+-static inline u128 spu_chd_pos(int pos) {
++static inline u128 spu_chd_pos_ref(int pos) {
+     u128 r = spu__ctl_base();
+     /* SPU bytes p, p+1 (p even) are one host halfword: 0x02 at SPU p, 0x03 at p+1. */
+     r._u16[(((pos & 0xF) & ~1) >> 1) ^ 1] = 0x0203u;
+     return r;
+ }
+-static inline u128 spu_cwd_pos(int pos) {
++static inline u128 spu_cwd_pos_ref(int pos) {
+     u128 r = spu__ctl_base();
+     r._u32[((pos & 0xF) & ~3) >> 2] = 0x00010203u;   /* a SPU bytes 0..3 (preferred word) */
+     return r;
+ }
+-static inline u128 spu_cdd_pos(int pos) {
++static inline u128 spu_cdd_pos_ref(int pos) {
+     u128 r = spu__ctl_base();
+     const int w = ((pos & 0xF) & ~7) >> 2;            /* a SPU bytes 0..7 (preferred dword) */
+     r._u32[w] = 0x00010203u; r._u32[w + 1] = 0x04050607u;
+     return r;
+ }
++/* The forms above write one lane of a 16-byte value at a computed index, through memory: a
++ * narrow store and a wide load of the same bytes, which the CPU cannot forward (a stall of
++ * a dozen cycles each, and cbd/chd/cwd + shufb + stqd is how the SPU stores a scalar). */
++#if SPU_X86
++SPU__XI __m128i spu__xctl_base(void) { return _mm_setr_epi32(0x10111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F); }
++static inline u128 spu_cbd_pos(int pos) {
++    const __m128i m = _mm_cmpeq_epi8(_mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
++                                     _mm_set1_epi8((char)((pos & 0xF) ^ 3)));
++    return spu__xs(_mm_blendv_epi8(spu__xctl_base(), _mm_set1_epi8(0x03), m));
++}
++static inline u128 spu_chd_pos(int pos) {
++    const __m128i m = _mm_cmpeq_epi16(_mm_setr_epi16(0, 1, 2, 3, 4, 5, 6, 7),
++                                      _mm_set1_epi16((short)((((pos & 0xF) & ~1) >> 1) ^ 1)));
++    return spu__xs(_mm_blendv_epi8(spu__xctl_base(), _mm_set1_epi16(0x0203), m));
++}
++static inline u128 spu_cwd_pos(int pos) {
++    const __m128i m = _mm_cmpeq_epi32(_mm_setr_epi32(0, 1, 2, 3), _mm_set1_epi32((pos >> 2) & 3));
++    return spu__xs(_mm_blendv_epi8(spu__xctl_base(), _mm_set1_epi32(0x00010203), m));
++}
++static inline u128 spu_cdd_pos(int pos) {
++    const __m128i m = _mm_cmpeq_epi64(_mm_set_epi64x(1, 0), _mm_set1_epi64x((pos >> 3) & 1));
++    return spu__xs(_mm_blendv_epi8(spu__xctl_base(), _mm_set1_epi64x(0x0405060700010203ll), m));
++}
++#else
++static inline u128 spu_cbd_pos(int pos) { return spu_cbd_pos_ref(pos); }
++static inline u128 spu_chd_pos(int pos) { return spu_chd_pos_ref(pos); }
++static inline u128 spu_cwd_pos(int pos) { return spu_cwd_pos_ref(pos); }
++static inline u128 spu_cdd_pos(int pos) { return spu_cdd_pos_ref(pos); }
++#endif
+ static inline u128 spu_cbd(u128 a, int i7){ return spu_cbd_pos((int)a._u32[0]+i7); }
+ static inline u128 spu_chd(u128 a, int i7){ return spu_chd_pos((int)a._u32[0]+i7); }
+-static inline u128 spu_cwd_ref(u128 a, int i7){ return spu_cwd_pos((int)a._u32[0]+i7); }
++static inline u128 spu_cwd_ref(u128 a, int i7){ return spu_cwd_pos_ref((int)a._u32[0]+i7); }
+ #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
+ static inline u128 spu_cwd(u128 a, int i7) {
+     static const uint32_t base[4] = {0x10111213u, 0x14151617u, 0x18191A1Bu, 0x1C1D1E1Fu}, lane[4] = {0, 1, 2, 3};
+@@ -1805,6 +2217,37 @@
+ static inline u128 spu_cwd(u128 a, int i7) { return spu_cwd_ref(a, i7); }
+ #endif
+ static inline u128 spu_cdd(u128 a, int i7){ return spu_cdd_pos((int)a._u32[0]+i7); }
++/* What shufb(a, b, c) gives when c came from cbd/chd/cwd/cdd (or the x forms) at address pos: b with
++ * one byte / halfword / word / doubleword replaced by a's preferred one, the lane chosen as in the
++ * generators above. The lifter emits these for such a shufb in the same block (spu_lifter.py, its
++ * insert peephole), keeping the generator's address in a local: one compare and blend, where shufb
++ * re-derived the lane from the control bytes. Storing a scalar is cwd + lqd + shufb + stqd on the SPU. */
++#if SPU_X86
++static inline u128 spu_insb(u128 b, u128 a, uint32_t pos) {
++    const __m128i m = _mm_cmpeq_epi8(_mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
++                                     _mm_set1_epi8((char)((pos & 0xF) ^ 3)));
++    return spu__xs(_mm_blendv_epi8(spu__xl(b), _mm_shuffle_epi8(spu__xl(a), _mm_setzero_si128()), m));
++}
++static inline u128 spu_insh(u128 b, u128 a, uint32_t pos) {
++    const __m128i m = _mm_cmpeq_epi16(_mm_setr_epi16(0, 1, 2, 3, 4, 5, 6, 7), _mm_set1_epi16((short)(((pos & 0xF) >> 1) ^ 1)));
++    return spu__xs(_mm_blendv_epi8(spu__xl(b), _mm_shuffle_epi8(spu__xl(a), _mm_set1_epi16(0x0100)), m));
++}
++static inline u128 spu_insw(u128 b, u128 a, uint32_t pos) {
++    const __m128i m = _mm_cmpeq_epi32(_mm_setr_epi32(0, 1, 2, 3), _mm_set1_epi32((int)((pos >> 2) & 3)));
++    return spu__xs(_mm_blendv_epi8(spu__xl(b), _mm_shuffle_epi32(spu__xl(a), 0), m));
++}
++static inline u128 spu_insd(u128 b, u128 a, uint32_t pos) {
++    const __m128i m = _mm_cmpeq_epi64(_mm_set_epi64x(1, 0), _mm_set1_epi64x((long long)((pos >> 3) & 1)));
++    return spu__xs(_mm_blendv_epi8(spu__xl(b), _mm_unpacklo_epi64(spu__xl(a), spu__xl(a)), m));
++}
++#else
++static inline u128 spu_insb(u128 b, u128 a, uint32_t pos) { b._u8[(pos & 0xF) ^ 3] = a._u8[0]; return b; }
++static inline u128 spu_insh(u128 b, u128 a, uint32_t pos) { b._u16[((pos & 0xF) >> 1) ^ 1] = a._u16[0]; return b; }
++static inline u128 spu_insw(u128 b, u128 a, uint32_t pos) { b._u32[(pos >> 2) & 3] = a._u32[0]; return b; }
++static inline u128 spu_insd(u128 b, u128 a, uint32_t pos) {
++    const unsigned d = (pos >> 3) & 1; b._u32[2 * d] = a._u32[0]; b._u32[2 * d + 1] = a._u32[1]; return b;
++}
++#endif
+ static inline u128 spu_cbx(u128 a, u128 b){ return spu_cbd_pos((int)(a._u32[0]+b._u32[0])); }
+ static inline u128 spu_chx(u128 a, u128 b){ return spu_chd_pos((int)(a._u32[0]+b._u32[0])); }
+ static inline u128 spu_cwx(u128 a, u128 b){ return spu_cwd_pos((int)(a._u32[0]+b._u32[0])); }
+@@ -1844,10 +2287,20 @@
+ #else
+ static inline u128 spu_rotqmbybi(u128 a, u128 b) { return spu_rotqmbybi_ref(a, b); }
+ #endif
+-static inline u128 spu_rotqmbii(u128 a, int i7)  { int sh=(0-i7)&7; if(!sh) return a;
++static inline u128 spu_rotqmbii_ref(u128 a, int i7)  { int sh=(0-i7)&7; if(!sh) return a;
+     uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
+     uint64_t nlo=(lo>>sh)|(hi<<(64-sh)), nhi=(hi>>sh);
+     u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
++#if SPU_X86
++static inline u128 spu_rotqmbii(u128 a, int i7) {
++    const __m128i A = spu__xl(a);
++    const int sh = (0 - i7) & 7;
++    return spu__xs(_mm_or_si128(_mm_srl_epi32(A, _mm_cvtsi32_si128(sh)),
++                                _mm_sll_epi32(_mm_slli_si128(A, 4), _mm_cvtsi32_si128(32 - sh))));
++}
++#else
++static inline u128 spu_rotqmbii(u128 a, int i7) { return spu_rotqmbii_ref(a, i7); }
++#endif
+ static inline u128 spu_rotqmbyi_ref(u128 a, int i7)  { int sh=(0-i7)&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i-sh; if(s>=0) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
+ #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
+ static inline u128 spu_rotqmbyi(u128 a, int i7) {
+@@ -1887,6 +2340,69 @@
+ static inline u128 spu_ilh(uint16_t imm) { return spu_splat_u16(imm); }
+ static inline u128 spu_ilhu(uint16_t imm){ return spu_splat_u32((uint32_t)imm << 16); }
+ static inline u128 spu_iohl(u128 a, uint16_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]|(uint32_t)imm; return r; }
++
++/* ---- what spu_lifter.py's newer passes emit ---- */
++/* The lazy -0 flush forms where the exact float path is not the x86 one above: value == twin. */
++#ifndef SPU_HAVE_LZ
++static inline u128 spu_fa_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) { (void)au; (void)bu; const u128 e = spu_fa(a, b); *ru = e; return e; }
++static inline u128 spu_fs_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) { (void)au; (void)bu; const u128 e = spu_fs(a, b); *ru = e; return e; }
++static inline u128 spu_fm_lz(u128 a, u128 b, u128 au, u128 bu, u128* ru) { (void)au; (void)bu; const u128 e = spu_fm(a, b); *ru = e; return e; }
++static inline u128 spu_fma_lz(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, u128* ru)  { (void)au; (void)bu; (void)cu; const u128 e = spu_fma(a, b, c); *ru = e; return e; }
++static inline u128 spu_fms_lz(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, u128* ru)  { (void)au; (void)bu; (void)cu; const u128 e = spu_fms(a, b, c); *ru = e; return e; }
++static inline u128 spu_fnms_lz(u128 a, u128 b, u128 c, u128 au, u128 bu, u128 cu, u128* ru) { (void)au; (void)bu; (void)cu; const u128 e = spu_fnms(a, b, c); *ru = e; return e; }
++#endif
++/* spu_w0 / spu_h0 (--pref-extract): the preferred word / halfword of a register, read from the
++ * whole register. Lifted code used to write rN._u32[0]: a 4-byte read of a 16-byte local, which
++ * made the compiler keep such a register as two values (word 0 as a scalar, words 1-3 as a
++ * vector) and rebuild the vector with shuffle + insert for every whole-register operation: a
++ * loop pointer advanced by `ai` then went insert -> add -> extract, six cycles a pass. Read as
++ * one extract from the whole value the register stays one vector (and the compiler is free to
++ * keep a scalar copy of the word beside it).
++ * spu_k4: a 128-bit literal, words in SPU order (a = the preferred word).
++ * spu_keq: the register holds exactly that literal.
++ * spu_opq: the value, unknown to the compiler from here on. The lifter wraps every value that it
++ * made a literal (a folded local-store constant, a guarded register constant, anything computed
++ * from one) where it enters a float operation or leaves for memory: the compiler folds constant
++ * float arithmetic in round-to-nearest and without denormals-are-zero, the SPU truncates
++ * (x * 1.0 is not x for a denormal x, and a folded product can be one ulp off). */
++#if SPU_X86
++SPU__XI uint32_t spu_w0(u128 a) { return (uint32_t)_mm_cvtsi128_si32(spu__xl(a)); }
++SPU__XI uint16_t spu_h0(u128 a) { return (uint16_t)_mm_cvtsi128_si32(spu__xl(a)); }
++SPU__XI u128 spu_k4(uint32_t a, uint32_t b, uint32_t c, uint32_t d) { return spu__xs(_mm_setr_epi32((int)a, (int)b, (int)c, (int)d)); }
++SPU__XI int spu_keq(u128 v, uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
++    const __m128i x = _mm_xor_si128(spu__xl(v), _mm_setr_epi32((int)a, (int)b, (int)c, (int)d));
++    return _mm_testz_si128(x, x);
++}
++SPU__XI u128 spu_opq(u128 v) { __m128i x = spu__xl(v); __asm__("" : "+x"(x)); return spu__xs(x); }
++#else
++static inline uint32_t spu_w0(u128 a) { return a._u32[0]; }
++static inline uint16_t spu_h0(u128 a) { return a._u16[0]; }
++static inline u128 spu_k4(uint32_t a, uint32_t b, uint32_t c, uint32_t d) { u128 r; r._u32[0] = a; r._u32[1] = b; r._u32[2] = c; r._u32[3] = d; return r; }
++static inline int spu_keq(u128 v, uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
++    return v._u32[0] == a && v._u32[1] == b && v._u32[2] == c && v._u32[3] == d;
++}
++#if defined(__GNUC__) || defined(__clang__)
++static inline u128 spu_opq(u128 v) { __asm__ volatile("" : "+m"(v)); return v; }
++#else
++static inline u128 spu_opq(u128 v) { volatile u128 t = v; return t; }
++#endif
++#endif
++/* SPU_MEM_BARRIER: no instructions; tells the compiler that any memory may have been read and
++ * written here, so it cannot carry a value it stored to the context (a constant, say) across
++ * this point into a later load. The lifter puts it at the entry of, and after the calls in,
++ * functions that hold its own literals (see finish_function in spu_lifter.py). */
++#if defined(__GNUC__) || defined(__clang__)
++#  define SPU_MEM_BARRIER() __asm__ volatile("" ::: "memory")
++#else
++#  define SPU_MEM_BARRIER() ((void)0)
++#endif
++#ifndef SPU_UNLIKELY
++#  if defined(__GNUC__) || defined(__clang__)
++#    define SPU_UNLIKELY(x) __builtin_expect(!!(x), 0)
++#  else
++#    define SPU_UNLIKELY(x) (x)
++#  endif
++#endif
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread.c
+--- a/runtime/syscalls/sys_ppu_thread.c
++++ b/runtime/syscalls/sys_ppu_thread.c
+@@ -2,6 +2,11 @@
+  * ps3recomp - PPU thread management syscalls (implementation)
+  */
+ 
++/* sched_getaffinity / CPU_COUNT (ppu_small_host) are declared only under _GNU_SOURCE, which has to be
++ * set before the first system header. */
++#if defined(__linux__) && !defined(_GNU_SOURCE)
++#  define _GNU_SOURCE
++#endif
+ #include <setjmp.h>
+ 
+ /* sys_ppu_thread_exit never returns on hardware. Returning CELL_OK to the
+@@ -26,11 +31,17 @@
+ #include "ps3emu/ps3_tprof.h"            /* PS3_TPROF: in-process thread samples */
+ #include <string.h>
+ #include <stdio.h>
++#include <time.h>
+ #include <stdlib.h>   /* getenv (else return value truncated to int on x64) */
+ #include "ps3emu/log_first.h"
+ #include "ps3emu/thread_name.h"
+ #ifndef _WIN32
+ #include <errno.h>
++#include <unistd.h>         /* sysconf: ppu_small_host */
++#include <sys/resource.h>   /* getrusage: ps3_ab_frame */
++#if defined(__linux__)
++#include <sched.h>          /* sched_getaffinity: ppu_small_host */
++#endif
+ #endif
+ 
+ /* Host stack reserved per guest thread, for pthread_attr_setstacksize. The
+@@ -180,6 +191,12 @@
+ {
+     ppu_thread_info* info = (ppu_thread_info*)param;
+     ps3_thread_name("ppu %s", info->name);
++    /* A title's audio thread feeds a device clock. */
++    if (strstr(info->name, "audio")) ps3_thread_on_fast_cores();
++    /* PS3_PPU_FAST_ALL=1: every game thread prefers the fast cores. The main loop is on the
++     * critical path as much as the RSX thread, and was left to land on an E-core. */
++    else { static int all = -1; if (all < 0) all = getenv("PS3_PPU_FAST_ALL") ? 1 : 0;
++           if (all) ps3_thread_on_fast_cores(); }
+ 
+ #ifdef _WIN32
+     /* Reserve stack for the STACK_OVERFLOW handler, same as main() does for the
+@@ -436,8 +453,14 @@
+     int slot = find_free_slot();
+     if (slot < 0) {
+         table_unlock();
++        { static int n = 0; if (PS3_LOG_FIRST(n, 4))
++            fprintf(stderr, "[ppu-thread] table full (%d slots): create returns EAGAIN\n", PPU_THREAD_MAX); }
+         return (int64_t)(int32_t)CELL_EAGAIN;
+     }
++    /* Each new high in steps of 16, so a run shows whether threads are leaking. */
++    { static int high = 0; int used = 1;
++      for (int i = 0; i < PPU_THREAD_MAX; i++) used += g_ppu_threads[i].state != PPU_THREAD_STATE_FREE;
++      if (used >= high + 16) { high = used; fprintf(stderr, "[ppu-thread] %d slots in use\n", used); } }
+ 
+     ppu_thread_info* t = &g_ppu_threads[slot];
+     memset(t, 0, sizeof(*t));
+@@ -660,6 +683,10 @@
+     uint64_t tid          = LV2_ARG_U64(ctx, 0);
+     uint32_t status_addr  = LV2_ARG_PTR(ctx, 1);
+     { static int n=0; if(PS3_LOG_FIRST(n, 30)) fprintf(stderr,"[WAIT] ppu_thread_join(tid=%llu)\n", (unsigned long long)tid); }
++    /* PS3_JOIN_BT=1: who is joining. A title tearing down reads as a hang here. */
++    { static int bt = -1; if (bt < 0) bt = getenv("PS3_JOIN_BT") ? 1 : 0;
++      if (bt) { extern void ppu_dump_guest_stack(ppu_context*, const char*);
++                ppu_dump_guest_stack(ctx, "join"); } }
+     ppu_thread_note_block(ctx->thread_id);   /* PS3_PRIO_START */
+ 
+     table_lock();
+@@ -788,6 +815,255 @@
+ static unsigned long g_cdl_hits;
+ static uint32_t g_yield_ctr;
+ static uint32_t g_cdl_v0, g_cdl_s0, g_cdl_s1, g_cdl_s6;
++
++/* A guest wait loop that yields (GT5 waits for SPU results like this) spins at 100% of a core on a
++ * small CPU: SwitchToThread hands over only to a thread queued on the same processor, and there is
++ * usually none. On a laptop that is power the other game threads lose. So when a thread has yielded 16
++ * times in a row, less than 50 us apart, it naps 50 us on a high-resolution timer instead, while the
++ * process may use 12 logical CPUs or fewer (the count is checked again every second, so an affinity
++ * change counts). PS3_YIELD_NAP=0 never naps, =1 always may. Hookshot (Switch 2 recomp) measured +9%
++ * frame rate and 14% less CPU per frame at 4 threads with the same change.
++ * Round 9 (15 Nov 2026) widened "small" from 8 to 12 logical CPUs, the 6-core/12-thread CPUs many players
++ * have (Ryzen 5 3600/5600X, i5-10400F): on 6 P-cores with hyper-threading the policy (this nap and the
++ * pollers' sleep below) kept the same game fps (-0.3% +- 2.8%, +0.4% +- 1.7%) at 4.9% and 14.4% less CPU
++ * in two races; on 16 threads it was within noise (fps -1.1% +- 2.5%, CPU -4.0% +- 2.5%), so 16 stays big.
++ * PS3_SMALL_HOST_CPUS=<n> sets the limit; PS3_AB_WHAT=small alternates the whole policy off and on. */
++int ps3_ab_on(const char* what);
++static int ps3_ab_state(void);
++#ifdef _WIN32
++static int ppu_yield_nap_enabled(void)
++{
++    static int forced = -2;
++    if (forced == -2) { const char* e = getenv("PS3_YIELD_NAP"); forced = e ? (atoi(e) != 0) : -1; }
++    if (forced >= 0) return forced;
++    { /* PS3_AB_WHAT=small: whether the key is listed is worked out once, this runs on every yield */
++      static signed char listed = -1;
++      if (listed < 0) listed = (signed char)(ps3_ab_on("small") >= 0);
++      if (listed) { const int ab = ps3_ab_state(); if (ab >= 0) return ab; } }
++    static int small_max = -1;
++    if (small_max < 0) { const char* e = getenv("PS3_SMALL_HOST_CPUS"); small_max = (e && *e) ? atoi(e) : 12; }
++    static volatile long small_host = -1;
++    static volatile long long checked_ms = 0;
++#ifdef _WIN32
++    const long long now = (long long)GetTickCount64();
++    if (small_host < 0 || now - checked_ms > 1000) {
++        DWORD_PTR pm = 0, sm = 0; int n = 0;
++        if (GetProcessAffinityMask(GetCurrentProcess(), &pm, &sm))
++            for (; pm; pm &= pm - 1) n++;
++        small_host = (n > 0 && n <= small_max) ? 1 : 0;
++        checked_ms = now;
++    }
++#endif
++    return (int)small_host;
++}
++#else
++/* POSIX: the same small-host test as Windows (12 logical CPUs or fewer, PS3_SMALL_HOST_CPUS=<n>,
++ * PS3_AB_WHAT=small), for ps3_host_spin_sleep; the yield nap above stays Windows only. The CPUs
++ * counted are the ones this process may run on (sched_getaffinity on Linux, so taskset counts as
++ * Windows' affinity mask does), checked again every second. It was 8 CPUs here until v0.1.65's
++ * Windows measurements moved the line to 12. */
++static __attribute__((unused)) int ppu_small_host(void)   /* no caller since every host sleeps (17 Nov); kept for its test */
++{
++    { /* PS3_AB_WHAT=small: whether the key is listed is worked out once */
++      static signed char listed = -1;
++      if (listed < 0) listed = (signed char)(ps3_ab_on("small") >= 0);
++      if (listed) { const int ab = ps3_ab_state(); if (ab >= 0) return ab; } }
++    static int small_max = -1;
++    if (small_max < 0) { const char* e = getenv("PS3_SMALL_HOST_CPUS"); small_max = (e && *e) ? atoi(e) : 12; }
++    static volatile long small_host = -1;
++    static volatile long long checked_s = 0;
++    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
++    if (small_host < 0 || (long long)ts.tv_sec - checked_s >= 1) {
++        long n = 0;
++#if defined(__linux__)
++        cpu_set_t set;
++        CPU_ZERO(&set);
++        if (sched_getaffinity(0, sizeof set, &set) == 0) n = CPU_COUNT(&set);
++#endif
++        if (n <= 0) n = sysconf(_SC_NPROCESSORS_ONLN);
++        const long was = small_host;
++        small_host = (n > 0 && n <= small_max) ? 1 : 0;
++        checked_s = (long long)ts.tv_sec;
++        static int logs;
++        if (was != small_host && logs < 4) {
++            logs++;
++            fprintf(stderr, "[ppu] %ld logical CPUs for this process: %s (the line is %d, PS3_SMALL_HOST_CPUS)\n",
++                    n, small_host ? "small, waiting threads sleep" : "big, waiting threads spin", small_max);
++        }
++    }
++    return (int)small_host;
++}
++#endif
++
++static void ppu_yield_or_nap(void)
++{
++#ifdef _WIN32
++    static __declspec(thread) unsigned run;
++    static __declspec(thread) LONGLONG last;
++    static __declspec(thread) HANDLE timer;
++    static LONGLONG qpf;
++    LARGE_INTEGER t; QueryPerformanceCounter(&t);
++    if (!qpf) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); qpf = f.QuadPart; }
++    run = (last && (t.QuadPart - last) * 20000 < qpf) ? run + 1 : 0;   /* < 50 us since the last yield */
++    last = t.QuadPart;
++    if (run >= 16 && ppu_yield_nap_enabled()) {
++        if (!timer) timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
++        if (timer) {
++            LARGE_INTEGER due; due.QuadPart = -500;   /* 50 us, relative, in 100 ns units */
++            if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) { WaitForSingleObject(timer, INFINITE); return; }
++        }
++    }
++    SwitchToThread();
++#else
++    sched_yield();
++#endif
++}
++
++/* For the runtime's own polling waits (the SPU repeated-DMA back-off): a 50 us timer nap on a small
++ * host, a plain yield elsewhere. */
++void ps3_host_nap_or_yield(void)
++{
++#ifdef _WIN32
++    static __declspec(thread) HANDLE timer;
++    if (ppu_yield_nap_enabled()) {
++        if (!timer) timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
++        if (timer) {
++            LARGE_INTEGER due; due.QuadPart = -500;
++            if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) { WaitForSingleObject(timer, INFINITE); return; }
++        }
++    }
++    SwitchToThread();
++#else
++    sched_yield();
++#endif
++}
++
++/* Host threads that poll for work (the RSX walker parked on a command-buffer word, the D3D12 record
++ * thread between batches) spin, which on a 4-8 thread CPU takes a core from the game threads doing the
++ * work they wait for, and on a laptop spends the shared power budget. ps3_host_spin_sleep() says whether
++ * such a poller should sleep after a short spin: on a small host as above, or PS3_SPIN_SLEEP=0/1.
++ * ps3_host_sleep_on() then waits for `ev` (may be NULL) or `us` microseconds on a high-resolution
++ * timer, whichever comes first, and returns 1 if `ev` fired. */
++/* PS3_AB_PERIOD=<s> (tests): the switches named in PS3_AB_WHAT (default "spin,slot,pace": the pollers'
++ * sleep below, SPURS_SLOT_WAKE, SPURS_PROBE_PACE) are off for <s> seconds, then on, and so on, so one race
++ * measures both under the same load. ps3_ab_frame(), called once a game frame, logs a line per segment:
++ * "[ab] on|off: N game frames in T s, F a second, C cores busy". ps3_ab_on("spin") is -1 when that
++ * switch is not being alternated, else 0 (off) or 1 (on). */
++static double ab_now_s(void)
++{
++#ifdef _WIN32
++    static LARGE_INTEGER f; if (!f.QuadPart) QueryPerformanceFrequency(&f);
++    LARGE_INTEGER c; QueryPerformanceCounter(&c);
++    return (double)c.QuadPart / (double)f.QuadPart;
++#else
++    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
++    return (double)ts.tv_sec + ts.tv_nsec * 1e-9;
++#endif
++}
++static double s_ab_period = -1.0, s_ab_t0;
++static char s_ab_what[64];
++static int ps3_ab_state(void)
++{
++    if (s_ab_period < 0) {
++        const char* e = getenv("PS3_AB_PERIOD");
++        const char* w = getenv("PS3_AB_WHAT");
++        snprintf(s_ab_what, sizeof s_ab_what, ",%s,", w && *w ? w : "spin,slot,pace");
++        s_ab_period = e ? atof(e) : 0.0;
++    }
++    if (s_ab_period <= 0) return -1;
++    const double now = ab_now_s();
++    if (s_ab_t0 == 0) s_ab_t0 = now;
++    return (int)((long long)((now - s_ab_t0) / s_ab_period) & 1);
++}
++int ps3_ab_on(const char* what)
++{
++    const int st = ps3_ab_state();
++    if (st < 0) return -1;
++    char key[32]; snprintf(key, sizeof key, ",%s,", what);
++    return strstr(s_ab_what, key) ? st : -1;
++}
++void ps3_ab_frame(void)
++{
++    const int st = ps3_ab_state();
++    if (st < 0) return;
++    static double seg_t0, cpu0; static unsigned long long frames; static int seg = -1;
++    const double now = ab_now_s();
++    if (st != seg) {
++        double cpu = 0;
++#ifdef _WIN32
++        { FILETIME a, b, k, u; if (GetProcessTimes(GetCurrentProcess(), &a, &b, &k, &u))
++              cpu = ((double)(((unsigned long long)k.dwHighDateTime << 32) | k.dwLowDateTime) +
++                     (double)(((unsigned long long)u.dwHighDateTime << 32) | u.dwLowDateTime)) * 1e-7; }
++#else
++        { struct rusage ru; if (getrusage(RUSAGE_SELF, &ru) == 0)
++              cpu = (double)ru.ru_utime.tv_sec + ru.ru_utime.tv_usec * 1e-6 +
++                    (double)ru.ru_stime.tv_sec + ru.ru_stime.tv_usec * 1e-6; }
++#endif
++        if (seg >= 0 && now > seg_t0)
++            fprintf(stderr, "[ab] %s: %llu game frames in %.2f s, %.2f a second, %.2f cores busy\n",
++                    seg ? "on" : "off", frames, now - seg_t0, frames / (now - seg_t0), (cpu - cpu0) / (now - seg_t0));
++        seg = st; seg_t0 = now; frames = 0; cpu0 = cpu;
++    }
++    frames++;
++}
++
++int ps3_host_spin_sleep(void)
++{
++#ifdef _WIN32
++    static int forced = -2;
++    if (forced == -2) { const char* e = getenv("PS3_SPIN_SLEEP"); forced = e ? (atoi(e) != 0) : -1; }
++    if (forced >= 0) return forced;
++    { const int ab = ps3_ab_on("spin"); if (ab >= 0) return ab; }
++    static int forced_nap = -2;   /* PS3_YIELD_NAP=1 tests the small-host behaviour on a big one */
++    if (forced_nap == -2) { const char* e = getenv("PS3_YIELD_NAP"); forced_nap = e ? (atoi(e) != 0) : -1; }
++    if (forced_nap >= 0) return forced_nap;
++    /* Every host since 17 Nov 2026, not only small ones. Round 9 left 16+ logical CPUs spinning because the
++     * frame rate was within noise either way; in CPU it is the largest single cost on a big host: the RSX
++     * walker and the record thread kept most of a core each busy doing nothing. Alternated inside one race
++     * on 32 logical CPUs (PS3_AB_WHAT=spin): cores busy -22.2% +-2.8% (3.53 -> 2.96), frame rate +0.7% +-0.3%.
++     * PS3_SPIN_SLEEP=0 spins as before. The yield nap above stays a small-host matter. */
++    return 1;
++#else
++    /* The same switches; PS3_YIELD_NAP only steers this here, the yield nap itself being Windows only. */
++    static int forced = -2;
++    if (forced == -2) { const char* e = getenv("PS3_SPIN_SLEEP"); forced = e ? (atoi(e) != 0) : -1; }
++    if (forced >= 0) return forced;
++    { const int ab = ps3_ab_on("spin"); if (ab >= 0) return ab; }
++    static int forced_nap = -2;
++    if (forced_nap == -2) { const char* e = getenv("PS3_YIELD_NAP"); forced_nap = e ? (atoi(e) != 0) : -1; }
++    if (forced_nap >= 0) return forced_nap;
++    return 1;   /* every host, as on Windows (measured there; PS3_SPIN_SLEEP=0 spins) */
++#endif
++}
++
++int ps3_host_sleep_on(void* ev, unsigned us)
++{
++#ifdef _WIN32
++    static __declspec(thread) HANDLE timer;
++    if (!timer) timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
++    if (timer) {
++        LARGE_INTEGER due; due.QuadPart = -(LONGLONG)us * 10;   /* relative, 100 ns units */
++        if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
++            if (!ev) { WaitForSingleObject(timer, INFINITE); return 0; }
++            HANDLE h[2] = { (HANDLE)ev, timer };
++            const DWORD r = WaitForMultipleObjects(2, h, FALSE, INFINITE);
++            if (r == WAIT_OBJECT_0) { CancelWaitableTimer(timer); return 1; }
++            return 0;
++        }
++    }
++    if (ev) return WaitForSingleObject((HANDLE)ev, 1) == WAIT_OBJECT_0;
++    Sleep(1);
++    return 0;
++#else
++    /* The shim's event wakes a condition variable, so a SetEvent ends this at once; the timeout is
++     * clock_nanosleep-grade (tens of microseconds of timer slack), not the 1 ms of a Win32 wait. */
++    extern DWORD ps3_wait_object_us(HANDLE h, unsigned us);   /* win32_compat.c */
++    if (ev) return ps3_wait_object_us((HANDLE)ev, us) == WAIT_OBJECT_0;
++    { struct timespec ts = { (time_t)(us / 1000000u), (long)(us % 1000000u) * 1000L };
++      nanosleep(&ts, NULL); }
++    return 0;
++#endif
++}
+ 
+ int64_t sys_ppu_thread_yield(ppu_context* ctx)
+ {
+@@ -1182,11 +1458,7 @@
+           }
+       } }
+     (void)ctx;
+-#ifdef _WIN32
+-    SwitchToThread();
+-#else
+-    sched_yield();
+-#endif
++    ppu_yield_or_nap();
+     return CELL_OK;
+ }
+ 
