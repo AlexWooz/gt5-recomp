@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Cut the exact ("slow") blocks of the native 0x8038 out of the lifted source.
+
+native_w01606C00.c runs most cells of the grid on a hand-written fast path. Whatever the fast path
+does not cover (the function's start, the per-row header, an unusual cell, and the last run of every
+basic block, which is what the registers hold when the function returns) runs as the lifted code
+itself. This script copies those statements out of the job's spu_recomp.c, unchanged but for:
+
+  * the interrupt checks at labels are dropped (the native function only runs with interrupts off);
+  * local-store accesses go through LQ / LQC / SQ, which native_w01606C00.c defines per block (a
+    cell can be run "live" or replayed from a log of what it loaded); the lift's store-to-load
+    forwarding (spu_ls_lq_fwd) becomes a plain LQ: the store went to local store first;
+  * jumps out of a block become jumps to the block's end label;
+  * BBM(n) marks the start of basic block n of the per-cell code (for the replay bookkeeping).
+
+The statements are found by the function's labels, not by line numbers, and the shape the native
+code relies on is checked (16 basic blocks per cell in the known order, the registers the per-cell
+code leaves alone). EXPECT_SHA1 pins the lift the blocks were tested against: after a re-lift,
+run the harness again and then update it.
+
+Usage: gen_blocks.py <spu_recomp.c> <out_dir>
+"""
+import hashlib
+import re
+import sys
+
+EXPECT_SHA1 = "7c707417c7e29d223a60ba863d49d508e2f6867d"
+
+FUNC = "SPU_SV void gt5_w01606C00_spu_func_00008038_sv(spu_context* ctx) {"
+LABELS = ["loc_00008120", "loc_000081C8", "loc_00008238", "loc_00008298", "loc_000083C8", "loc_000083D8",
+          "loc_0000860C", "loc_00008800", "loc_000088A0", "loc_0000890C", "loc_0000891C", "loc_00008934",
+          "loc_00008948"]
+
+INTR = re.compile(r"^\s*if \(ctx->int_enable && \(ctx->event_status & ctx->event_mask\)\) \{.*return; \}\s*$")
+SQ = re.compile(r"spu_ls_sq\(ctx, _ls, _wd, (.+?), (r\d+)\); _fa = \((.+?)\) & \(SPU_LS_MASK & ~0xFu\); _fv = (r\d+);")
+LQF = re.compile(r"spu_ls_lq_fwd\(ctx, _ls, _rd, (.+?), _fa, _fv\)")
+LQ = re.compile(r"spu_ls_lq\(ctx, _ls, _rd, (.+?)\);")
+COND = re.compile(r"^\s*if \(.*\) \{.*goto \w+; \}\s*$")
+DECL = re.compile(r"^\s*(u128 |uint32_t |uint8_t\* const |\(void\))")
+CONSTS = {"0x8E60": 0, "0x8E70": 1, "0x8E80": 2}
+
+
+def convert(line, end_labels, const_loads):
+    def sq(m):
+        assert m.group(1) == m.group(3) and m.group(2) == m.group(4), line
+        return "SQ(%s, %s);" % (m.group(1), m.group(2))
+    line = SQ.sub(sq, line)
+    assert "spu_ls_sq" not in line, line
+    line = LQF.sub(lambda m: "LQ(%s)" % m.group(1), line)
+
+    def lq(m):
+        a = m.group(1)
+        if const_loads and a in CONSTS:
+            return "LQC(%d, %s);" % (CONSTS[a], a)
+        return "LQ(%s);" % a
+    line = LQ.sub(lq, line)
+    assert "spu_ls_lq" not in line, line
+    for lab, to in end_labels.items():
+        line = line.replace("goto %s;" % lab, "goto %s;" % to)
+    return line
+
+
+def block(lines, first, last, end_labels, const_loads=False, bbs=False):
+    """Statements of lines[first..last] (0-based, inclusive). Returns (text, number of basic blocks)."""
+    out = []
+    nbb = 0
+    new_bb = True                    # the next statement starts a basic block
+    for n in range(first, last + 1):
+        s = lines[n]
+        if INTR.match(s):
+            continue
+        if re.match(r"^loc_[0-9A-F]{8}:\s*$", s):
+            out.append(s)
+            new_bb = True
+            continue
+        if bbs and new_bb:
+            nbb += 1
+            out.append("        BBM(%d);" % nbb)
+            new_bb = False
+        out.append(convert(s, end_labels, const_loads))
+        if COND.match(s):
+            new_bb = True
+    return "\n".join(out) + "\n", nbb
+
+
+def main():
+    src, outdir = sys.argv[1], sys.argv[2]
+    raw = open(src, "rb").read()
+    h = hashlib.sha1(raw).hexdigest()
+    if h != EXPECT_SHA1:
+        sys.exit("spu_recomp.c changed (sha1 %s): rebuild and re-run the harness against it, then update "
+                 "EXPECT_SHA1 in gen_blocks.py" % h)
+    lines = raw.decode("latin-1").replace("\r\n", "\n").split("\n")
+    start = [i for i, s in enumerate(lines) if s == FUNC]
+    assert len(start) == 1, "0x8038 not found exactly once"
+    start = start[0]
+    end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+    lab = {}
+    seen = [s[:-1] for s in lines[start:end] if re.match(r"^loc_[0-9A-F]{8}:$", s)]
+    assert seen == LABELS, "labels of 0x8038 changed: %s" % seen
+    for i in range(start, end):
+        if lines[i][:-1] in LABELS and lines[i].endswith(":"):
+            lab[lines[i][:-1]] = i
+    first = next(i for i in range(start + 1, end) if lines[i].strip() and not DECL.match(lines[i]))
+    assert lines[first].lstrip().startswith("r14 = ctx->gpr[14];") or lines[first].lstrip().startswith("r17 = ctx->gpr[17];"), lines[first]
+
+    head = "/* Generated by gen_blocks.py from the lifted 0x8038 (%s) -- do not edit. */\n"
+    # 0x8038 .. the first pass of loc_00008238 (start, the row-pointer loop, the block at 0x81C8).
+    # The jump to 0x8948 (no rows) cannot be taken: the native function is not entered with r33 = 0.
+    with open(outdir + "/blk_prologue.inc", "w", newline="\n") as f:
+        f.write(head % "its start up to 0x8238")
+        f.write(block(lines, first, lab["loc_00008238"] - 1, {"loc_00008948": "blk_unreachable"})[0])
+    # loc_00008238 .. loc_00008298: the per-row header. The jump to 0x8934 (no columns) cannot be taken.
+    with open(outdir + "/blk_header.inc", "w", newline="\n") as f:
+        f.write(head % "0x8238 up to 0x8298")
+        f.write(block(lines, lab["loc_00008238"] + 1, lab["loc_00008298"] - 1, {"loc_00008934": "blk_unreachable"})[0])
+    # loc_00008298 .. loc_0000891C: one cell.
+    text, nbb = block(lines, lab["loc_00008298"] + 1, lab["loc_0000891C"] - 1, {"loc_0000891C": "cell_end"},
+                      const_loads=True, bbs=True)
+    assert nbb == 16, "the per-cell code has %d basic blocks, not 16" % nbb
+    # the order native_w01606C00.c numbers them in: where each label's block falls
+    order = re.findall(r"(loc_[0-9A-F]{8}):\n        BBM\((\d+)\);", text)
+    assert order == [("loc_000083C8", "4"), ("loc_000083D8", "5"), ("loc_0000860C", "7"), ("loc_00008800", "10"),
+                     ("loc_000088A0", "13"), ("loc_0000890C", "16")], order
+    for i, a in ((0, "0x8E60"), (1, "0x8E70"), (2, "0x8E80")):
+        assert text.count("LQC(%d, %s);" % (i, a)) == 1, a
+    with open(outdir + "/blk_cell.inc", "w", newline="\n") as f:
+        f.write(head % "0x8298 up to 0x891C")
+        f.write(text)
+
+    # Which registers the per-cell code assigns: native_w01606C00.c relies on the rest staying put.
+    assigned = set()
+    for n in range(lab["loc_00008298"] + 1, lab["loc_0000891C"]):
+        s = lines[n]
+        if INTR.match(s):
+            continue
+        for m in re.finditer(r"\b(r\d+) = (?!ctx->gpr\[\d+\];)", s):
+            assigned.add(int(m.group(1)[1:]))
+    keep = {1, 34, 43, 44, 45, 46, 51, 52, 53, 55, 56, 57, 58, 59, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70,
+            71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 126}
+    bad = sorted(assigned & keep)
+    assert not bad, "per-cell code assigns registers assumed invariant: %s" % bad
+    print("per-cell code assigns: " + " ".join("r%d" % r for r in sorted(assigned)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

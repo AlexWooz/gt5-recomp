@@ -9,6 +9,35 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.93**
+
+🧱 **Native code for the busiest geometry functions, and a cheaper path from SPU code to the runtime**
+- Five functions of the two geometry jobs that run on the SPU workers every frame now run as PC code:
+  the grid pass (`w01606C00` 0x8038, about 4 times faster measured alone on a 16x128 grid), its fill loop
+  (0x5BA8, 2 to 7 times) and the pack pass after it (0x7DC8, 3.8 times); in `w0163C080`, 0x66A8 (2 times)
+  and 0x6418 (1.4 times). Each was run 3 million times against the translated function with every register
+  and the whole local store compared, and with one bit flipped on purpose to see the check catch it.
+- In the game, with both versions run side by side on every call: 152 million calls in a race, no
+  difference. `GT5_NATIVE_GEO=0` runs the translated code, `=2` runs both and logs any difference
+  (`[native-geo]`).
+- The grid pass keeps the parts its fast path does not cover as the translated statements themselves. Those
+  are cut out of your own copy's translation when the game is built (`src/native/gen_*.py`), so no game
+  code is in the repository. `natives.txt` can now say which translation a native function was written
+  for (`lift-sha1`): with any other (another release of the game), that job simply stays translated.
+- Runtime, on by default: the hook every SPU write to graphics memory goes through kept one shared ring
+  that all workers wrote (110-130 ns a call with 7 threads; now a ring per thread, about 8 ns); writes to
+  the DMA channels and status reads take a short path (a 128-byte PUT: 60 to 26 ns). The old paths stay
+  in the build and were checked against the new ones (`GCM_PUT_HOOK=old|check`, `SPU_CH_FASTPATH=0`,
+  `SPU_DMA_FASTPATH=0`, `SPU_MFC_CTX_CACHE=0`).
+- Measured against v0.1.92 on 8 slow cores, three pairs of races run back to back (before the pack pass
+  was added): the SPU workers use 3.6% less CPU (2.8%, 4.9%, 3.1%), the whole game 1.5%. Both builds hold
+  57 frames a second there. Smaller than the functions' own numbers: a fresh profile shows the workers
+  now spend a quarter of their time going to sleep and being woken, and that is the next thing.
+- In the build but off until raced: `SPURS_WAKE_FILTER=1`, `SPURS_NATIVE_WORK=1` and `SPU_SN_ONCE=1`
+  (fewer wake-ups of the job scheduler, a native look at a job list before running its manager, one
+  interrupt per stall instead of two).
+- No re-lift: the update rebuilds the SPU jobs and the runtime.
+
 🏷️ Released as **v0.1.92**
 
 🧱 **The SPU translator writes faster code, and the reverb and the EQ's FFT are native**

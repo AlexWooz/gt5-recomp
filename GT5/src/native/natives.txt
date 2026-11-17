@@ -22,3 +22,20 @@ jEB79FDFC 00003D80 - native_jEB79FDFC.c hooked
 jEB79FDFC 00004008 - native_jEB79FDFC.c hooked
 jEB79FDFC 00004158 - native_jEB79FDFC.c hooked
 jEB79FDFC 000043C0 - native_jEB79FDFC.c hooked
+# The geometry jobs: w01606C00 0x8038 (the grid pass, whole function), its fill loop 0x5BA8 and the pack
+# pass 0x7DC8; w0163C080 0x66A8 and 0x6418. GT5_NATIVE_GEO=0/1/2. 0x8038 runs the statements its fast path leaves out as the
+# lifted code itself, cut from this copy's own lift at build time (generate).
+w01606C00 lift-sha1 7c707417c7e29d223a60ba863d49d508e2f6867d
+w01606C00 generate gen_w01606C00_blocks.py
+w01606C00 generate gen_w01606C00_7DC8.py
+w01606C00 00008038 - native_w01606C00.c hooked
+w01606C00 00005BA8 - native_w01606C00.c hooked
+w01606C00 00007DC8 - native_w01606C00.c hooked
+w0163C080 lift-sha1 4eec7fd483e7685e00714acca8dc425a8169c3fc
+w0163C080 000066A8 - native_w0163C080.c hooked
+w0163C080 00006418 - native_w0163C080.c hooked
+# Each image's native functions were written against exactly this lifted file (lift-sha1): with any
+# other, the image is left as lifted code.
+jD58063CD lift-sha1 f0ac19ba3adbcde465340abe99842c50a2d626d5
+jFE031AF6 lift-sha1 c014e1140fe057d2f348db0367c20101df5007b9
+jEB79FDFC lift-sha1 cd58e0fe94573792191b805ba1149e810d959531
