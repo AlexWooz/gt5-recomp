@@ -136,6 +136,17 @@ namespace Gt5Launcher
             { "res.help", new[] { "The TV mode the game is told it's on, like on a PS3. 1080p: races drawn at 1728x972 with a sharp 1920x1080 HUD. 720p: races at 1152x648, for slow graphics chips.", "游戏所认为的电视模式（同 PS3）。1080p：比赛以 1728x972 绘制，界面为 1920x1080。720p：比赛以 1152x648 绘制，适合较慢的显卡。" } },
             { "res.1080", new[] { "1080p (sharper)", "1080p（更清晰）" } },
             { "res.720", new[] { "720p (faster on slow graphics)", "720p（较慢显卡更流畅）" } },
+            { "aa", new[] { "Anti-aliasing (NVIDIA DLSS)", "抗锯齿（NVIDIA DLSS）" } },
+            { "aa.off", new[] { "Off (as the game draws)", "关（游戏原样）" } },
+            { "aa.dlaa", new[] { "DLAA (smoothest edges)", "DLAA（边缘最平滑）" } },
+            { "aa.q", new[] { "DLSS Quality", "DLSS 质量" } },
+            { "aa.b", new[] { "DLSS Balanced", "DLSS 平衡" } },
+            { "aa.p", new[] { "DLSS Performance", "DLSS 性能" } },
+            { "aa.help", new[] { "Smooths jagged edges in races with NVIDIA's DLSS (RTX graphics cards). DLAA draws the 3D picture at full size and cleans it; the DLSS modes draw it smaller and rebuild it, for slower cards. Menus are left as they are. Can be changed while playing (F1). DirectX 12 only.", "在比赛中用 NVIDIA 的 DLSS 平滑锯齿边缘（需要 RTX 显卡）。DLAA 以完整尺寸绘制 3D 画面并加以处理；DLSS 各模式以较小尺寸绘制后重建，适合较慢的显卡。菜单保持原样。可在游戏中按 F1 随时更改。仅限 DirectX 12。" } },
+            { "dlss.add", new[] { "NVIDIA DLSS isn't on this PC's game yet. Add it now?\n\nDLSS is NVIDIA's software, not part of this project. This fetches NVIDIA's DLSS SDK (about 150 MB) from NVIDIA's own GitHub page, shows you NVIDIA's licence to accept, and builds a small plug-in next to gt5.exe: about a minute, in a window that shows the progress. It needs an NVIDIA RTX graphics card. The game works the same without it.", "这台电脑的游戏里还没有 NVIDIA DLSS。现在添加吗？\n\nDLSS 是 NVIDIA 的软件，不属于本项目。这会从 NVIDIA 自己的 GitHub 页面下载 DLSS SDK（约 150 MB），显示 NVIDIA 的许可协议供你确认，并在 gt5.exe 旁边编译一个小插件：大约一分钟，进度会显示在一个窗口中。需要 NVIDIA RTX 显卡。不添加也不影响游戏。" } },
+            { "dlss.adding", new[] { "Adding NVIDIA DLSS (see the other window)...", "正在添加 NVIDIA DLSS（见另一个窗口）……" } },
+            { "dlss.added", new[] { "NVIDIA DLSS is ready: the next Play uses it.", "NVIDIA DLSS 已就绪：下次开始游戏时使用。" } },
+            { "dlss.failed", new[] { "NVIDIA DLSS wasn't added (the other window said why), so anti-aliasing is off again.", "未能添加 NVIDIA DLSS（原因见另一个窗口），抗锯齿已改回关闭。" } },
             { "rres", new[] { "Render resolution", "渲染分辨率" } },
             { "rres.same", new[] { "Same as the game draws", "与游戏绘制的相同" } },
             { "rres.help", new[] { "The height the picture is really drawn at, whatever the game's own mode above is: 1440p, 4K or 5K make everything sharper and smooth jagged edges, and cost graphics-card time. On a smaller screen the bigger picture is scaled down to it, which smooths edges further. Can also be changed while playing, in the game's menu (F1). DirectX 12 only.", "画面实际绘制的高度，与上面的游戏模式无关：1440p、4K 或 5K 更清晰、锯齿更少，但更占用显卡。屏幕较小时会缩小显示，边缘更平滑。也可以在游戏中按 F1 打开菜单随时更改。仅限 DirectX 12。" } },
@@ -353,7 +364,7 @@ namespace Gt5Launcher
             new[] { "GT5_LAUNCH_WINDOW", "windowed" }, new[] { "GT5_LAUNCHER_LANG", "" },
             new[] { "GT5_LAUNCHER_HIDE", "1" }, new[] { "GT5_LAUNCHER_AUTOCHECK", "1" },
             new[] { "GT5_SPEED", "" }, new[] { "PS3_SKIP_INTRO", "1" }, new[] { "LD_WATCH_DRAW", "" },
-            new[] { "LD_FRAMEGEN", "" }, new[] { "LD_FRAMEGEN_MULT", "" }, new[] { "LD_RES_TARGET", "" }, new[] { "GT5_RENDERER", "" }, new[] { "PS3_TEX_DUMP", "" },
+            new[] { "LD_FRAMEGEN", "" }, new[] { "LD_FRAMEGEN_MULT", "" }, new[] { "LD_RES_TARGET", "" }, new[] { "LD_AA", "" }, new[] { "GT5_RENDERER", "" }, new[] { "PS3_TEX_DUMP", "" },
             new[] { "PS3_MOUSE_STEER", "" }, new[] { "PS3_MOUSE_STEER_SENS", "" }, new[] { "PS3_MOUSE_STEER_CENTER", "" },
             new[] { "PS3_KEYS", "" },
             new[] { "PS3_COCKPIT_FOV", "" }, new[] { "PS3_COCKPIT_SEAT", "" }, new[] { "PS3_COCKPIT_HEIGHT", "" },
@@ -1277,6 +1288,9 @@ namespace Gt5Launcher
                 // Vulkan picked but not built into gt5.exe yet: offer the one-time build, or go back to DirectX 12.
                 if (key == "GT5_RENDERER" && ((Choice)cb.SelectedItem).Value == "vulkan" && !VulkanBuilt() && !AddVulkan(cb))
                 { cb.SelectedIndex = 0; return; }
+                // A DLSS mode picked but the plug-in isn't next to gt5.exe yet: offer to add it, or go back to Off.
+                if (key == "LD_AA" && ((Choice)cb.SelectedItem).Value != "" && !DlssBuilt() && !AddDlss(cb))
+                { cb.SelectedIndex = 0; return; }
                 S.Set(key, ((Choice)cb.SelectedItem).Value); SaveQuiet();
                 if (key == "GT5_LAUNCHER_LANG")   // the launcher's own language: redraw everything in it
                     BeginInvoke((MethodInvoker)delegate { T.Zh = S.Get(key) == "zh"; string pg = page; Build(); ShowPage(pg); if (latestTag != "") CheckForUpdates(false); });
@@ -1384,6 +1398,7 @@ namespace Gt5Launcher
             y = AddCombo(p, "renderer", "renderer.help", "GT5_RENDERER", new[] { new Choice("", T.Get("renderer.dx12")), new Choice("vulkan", T.Get("renderer.vk")) }, y);
             y = AddCombo(p, "res", "res.help", "PS3_VIDEO_MODE", new[] { new Choice("1080", T.Get("res.1080")), new Choice("720", T.Get("res.720")) }, y);
             y = AddCombo(p, "rres", "rres.help", "LD_RES_TARGET", new[] { new Choice("", T.Get("rres.same")), new Choice("1080", "1080p"), new Choice("1440", "1440p"), new Choice("2160", "4K (2160p)"), new Choice("2880", "5K (2880p)") }, y);
+            y = AddCombo(p, "aa", "aa.help", "LD_AA", new[] { new Choice("", T.Get("aa.off")), new Choice("dlaa", T.Get("aa.dlaa")), new Choice("dlss_q", T.Get("aa.q")), new Choice("dlss_b", T.Get("aa.b")), new Choice("dlss_p", T.Get("aa.p")) }, y);
             y = AddCombo(p, "speed", "speed.help", "GT5_SPEED", new[] { new Choice("", T.Get("speed.full")), new Choice("30", T.Get("speed.30")) }, y);
             y = AddCombo(p, "shape", "shape.help", "PS3_ASPECT", new[] { new Choice("auto", T.Get("shape.auto")), new Choice("16:9", "16:9"), new Choice("21:9", "21:9"), new Choice("32:9", "32:9") }, y);
             y = AddCombo(p, "window", "window.help", "GT5_LAUNCH_WINDOW", new[] { new Choice("windowed", T.Get("window.windowed")), new Choice("max", T.Get("window.max")), new Choice("borderless", T.Get("window.borderless")) }, y);
@@ -1848,6 +1863,46 @@ namespace Gt5Launcher
                         running = false; playButton.Enabled = true; cb.Enabled = true;
                         if (VulkanBuilt()) status.Text = T.Get("vk.added");
                         else { status.Text = T.Get("vk.failed"); cb.SelectedIndex = 0; }
+                    });
+                }
+                catch { }
+            });
+            th.IsBackground = true; th.Start();
+            return true;
+        }
+
+        // build\gt5_upscale_dlss.dll next to gt5.exe: scripts\add_dlss.ps1 built the DLSS plug-in there.
+        bool DlssBuilt() { return File.Exists(Path.Combine(Path.GetDirectoryName(P.Exe), "gt5_upscale_dlss.dll")); }
+
+        // Runs scripts\add_dlss.ps1 in its own window (it shows NVIDIA's licence and asks). True when it
+        // started; the combo goes back to Off by itself if the plug-in isn't there when it ends.
+        bool AddDlss(ComboBox cb)
+        {
+            string script = Path.Combine(P.Gt5, "scripts", "add_dlss.ps1");
+            if (!File.Exists(script) || !File.Exists(P.Exe)) { MessageBox.Show(this, T.Get("notbuilt"), "GT5"); return false; }
+            if (GameRunning() || running) { MessageBox.Show(this, T.Get("upd.running"), "GT5"); return false; }
+            if (MessageBox.Show(this, T.Get("dlss.add"), "GT5", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
+            Process pr;
+            try
+            {
+                var psi = new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"");
+                psi.WorkingDirectory = P.Gt5; psi.UseShellExecute = true;
+                pr = Process.Start(psi);
+            }
+            catch (Exception e) { MessageBox.Show(this, e.Message, "GT5"); return false; }
+            running = true;   // no Play while the plug-in is put next to gt5.exe
+            playButton.Enabled = false; cb.Enabled = false;
+            status.Text = T.Get("dlss.adding");
+            var th = new Thread(delegate ()
+            {
+                try { pr.WaitForExit(); } catch { }
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        running = false; playButton.Enabled = true; cb.Enabled = true;
+                        if (DlssBuilt()) status.Text = T.Get("dlss.added");
+                        else { status.Text = T.Get("dlss.failed"); cb.SelectedIndex = 0; }
                     });
                 }
                 catch { }

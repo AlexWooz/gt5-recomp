@@ -157,10 +157,64 @@ const char* fg_label(int i, void*)
 }
 bool fg_ok(int, void*) { return true; }
 
-void badge(const gt5_setting_def* d, bool unavailable)
+// A row that only means something while another setting has a certain value is shown greyed out, with
+// its value and the reason, and can't be changed: the DLSS model with no DLSS mode picked, the window's
+// size outside window mode, mouse steering's numbers with mouse steering off. Returns the reason, or
+// nullptr when the row is in use.
+const char* row_idle_reason(const char* key)
+{
+    char v[64];
+    if (!strcmp(key, "LD_DLSS_PRESET")) {
+        gt5_setting_stored("LD_AA", v, sizeof v);
+        if (_strnicmp(v, "dlaa", 4) && _strnicmp(v, "dlss", 4))
+            return T("pick DLAA or a DLSS mode above first", "请先在上方选择 DLAA 或 DLSS 模式");
+    } else if (!strcmp(key, "LD_DLSS_SCALE")) {
+        gt5_setting_stored("LD_AA", v, sizeof v);
+        if (_stricmp(v, "dlss_c"))
+            return T("only for \"DLSS: custom scale\" above", "仅用于上方的“DLSS：自定义比例”");
+    } else if (!strcmp(key, "LD_FG_METHOD")) {
+        gt5_setting_stored("LD_FRAMEGEN", v, sizeof v);
+        if (!v[0] && gt5_setting_int("LD_FRAMEGEN_MULT", 1) < 2)
+            return T("turn frame generation on above first", "请先在上方开启帧生成");
+    } else if (!strcmp(key, "PS3_WINDOW_SIZE")) {
+        gt5_setting_stored("GT5_LAUNCH_WINDOW", v, sizeof v);
+        if (v[0] && _stricmp(v, "windowed"))
+            return T("only in window mode", "仅在窗口模式下有效");
+    } else if (!strcmp(key, "PS3_MOUSE_STEER_SENS") || !strcmp(key, "PS3_MOUSE_STEER_CENTER")) {
+        if (!gt5_setting_bool("PS3_MOUSE_STEER", 0))
+            return T("turn \"Steer with the mouse\" on first", "请先开启“用鼠标转向”");
+    } else if (!strcmp(key, "PS3_WHEEL_RANGE") || !strcmp(key, "PS3_WHEEL_FFB") || !strcmp(key, "PS3_WHEEL_FFB_INVERT") ||
+               !strcmp(key, "PS3_WHEEL_BUTTONS")) {
+        gt5_setting_stored("PS3_WHEEL", v, sizeof v);
+        if (!_stricmp(v, "off") || !_stricmp(v, "0") || !_stricmp(v, "no"))
+            return T("the steering wheel is switched off above", "上方已关闭方向盘");
+        if (gt5_setting_bool("PS3_MOUSE_STEER", 0))
+            return T("not used while the mouse steers", "鼠标转向时不使用");
+    }
+    return nullptr;
+}
+
+void badge(const gt5_setting_def* d, bool unavailable, const char* idle)
 {
     ImGui::PushFont(nullptr, base_px() * 0.72f);
-    if (unavailable) ImGui::TextColored(kDim, "%s", T("not in this version yet", "此版本尚不可用"));
+    // The anti-aliasing row says what the renderer says: why DLSS can't be used here (no plug-in, the
+    // graphics card, the driver), or what it is doing right now.
+    gt5_menu_stats aa;
+    const bool aa_row = !strcmp(d->key, "LD_AA") && stats_get(&aa) && aa.aa_state[0];
+    if (unavailable && aa_row) {
+        ImGui::TextColored(kNext, "%s", aa.aa_state);
+        ImGui::TextColored(kDim, "%s", T("add NVIDIA DLSS in the launcher: Display, Anti-aliasing", "请在启动器中添加 NVIDIA DLSS：显示 > 抗锯齿"));
+    }
+    else if (unavailable) ImGui::TextColored(kDim, "%s", T("not in this version yet", "此版本尚不可用"));
+    else if (idle) ImGui::TextColored(kDim, "%s", idle);
+    else if (!strcmp(d->key, "LD_FRAMEGEN") && stats_get(&aa) && aa.fg_state[0])
+        ImGui::TextColored(kLive, "%s", aa.fg_state);   // what is being made and shown right now, or why not
+    else if (aa_row) {
+        char cur[32];
+        gt5_setting_stored("LD_AA", cur, sizeof cur);
+        if (cur[0]) ImGui::TextColored(kLive, "%s", aa.aa_state);   // "DLAA, 2304x972" / "not in this frame (menu or 2D)"
+        else ImGui::TextColored(kLive, "%s", T("applies now", "立即生效"));
+    }
     else if (gt5_setting_pending_restart(d->key)) ImGui::TextColored(kNext, "%s", T("restart the game to apply", "重启游戏后生效"));
     else if (gt5_setting_apply_of(d->key) == GT5_APPLY_LIVE) ImGui::TextColored(kLive, "%s", T("applies now", "立即生效"));
     else ImGui::TextColored(kNext, "%s", T("from the next start", "下次启动生效"));
@@ -177,6 +231,7 @@ void setting_row(const gt5_setting_def* d, const PadEdges& pad)
     ImGui::PushID(d->key);
     const unsigned flags = gt5_setting_flags(d->key);
     const bool unavailable = (flags & GT5_SF_NEEDS_HOST) && !(flags & GT5_SF_ENABLED);
+    const char* idle = unavailable ? nullptr : row_idle_reason(d->key);
     const float full = ImGui::GetContentRegionAvail().x;
     const float label_w = floorf(full * 0.47f), widget_w = full - label_w;
     const ImVec2 at = ImGui::GetCursorPos();
@@ -186,7 +241,7 @@ void setting_row(const gt5_setting_def* d, const PadEdges& pad)
     ImGui::TextUnformatted(label_of(d));
     ImGui::PopTextWrapPos();
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y * 0.9f);
-    badge(d, unavailable);
+    badge(d, unavailable, idle);
     const float label_bottom = ImGui::GetCursorPosY();
 
     ImGui::SetCursorPos(ImVec2(at.x + label_w, at.y));
@@ -202,13 +257,42 @@ void setting_row(const gt5_setting_def* d, const PadEdges& pad)
         ImGui::Button("—##v", ImVec2(widget_w, 0));
         ImGui::PopStyleColor();
         focused = ImGui::IsItemFocused(); hovered = ImGui::IsItemHovered();
+    } else if (idle) {
+        // Not in use right now (row_idle_reason): its value, greyed out, and nothing to change. Still a
+        // place the focus can rest on, so its help can be read.
+        char shown[160];
+        snprintf(shown, sizeof shown, "%s", cur[0] ? cur : T("(not set)", "（未设置）"));
+        if (d->type == GT5_SET_CHOICE) {
+            for (int i = 0; i < d->n_choices; i++)
+                if (!_stricmp(d->choices[i].value, cur)) snprintf(shown, sizeof shown, "%s", choice_label(&d->choices[i]));
+        } else if (d->type == GT5_SET_BOOL) {
+            snprintf(shown, sizeof shown, "%s", !_stricmp(cur, d->on_value ? d->on_value : "1") ? T("On", "开") : T("Off", "关"));
+        } else if (d->type == GT5_SET_INT || d->type == GT5_SET_FLOAT) {
+            snprintf(shown, sizeof shown, d->type == GT5_SET_INT ? "%.0f%s" : "%.1f%s", gt5_setting_float(d->key, d->num_def),
+                     d->unit ? d->unit : "");
+        } else if (!strcmp(d->key, "PS3_WHEEL_BUTTONS")) {
+            snprintf(shown, sizeof shown, "%s", T("Change the wheel's buttons and pedals...", "更改方向盘按钮和踏板..."));
+        }
+        char label[200];
+        snprintf(label, sizeof label, "%s##v", shown);
+        ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+        ImGui::Button(label, ImVec2(widget_w, 0));
+        ImGui::PopStyleColor();
+        focused = ImGui::IsItemFocused(); hovered = ImGui::IsItemHovered();
     } else if (!strcmp(d->key, "LD_FRAMEGEN")) {
+        // A multiplier of 2 or more turns frame generation on by itself (the launcher's Frame rate
+        // multiplier sets only that), so the row shows it as on, and Off clears both settings: with only
+        // LD_FRAMEGEN cleared it stayed on, shown as "Off" (v0.1.99, v0.1.100).
         const int mult = gt5_setting_int("LD_FRAMEGEN_MULT", 1);
-        const int now = !strcmp(cur, "1") ? (mult >= 2 && mult <= 4 ? mult : 1) : 0;
+        const bool multiplied = mult >= 2 && mult <= 4;
+        // LD_FRAMEGEN is 1 (frames made from the picture) or 2 (from the game's motion): the row below,
+        // "Frame generation: how", says which, and this row writes the one that matches.
+        const int now = multiplied ? mult : ((!strcmp(cur, "1") || !strcmp(cur, "2")) ? 1 : 0);
         const int pick = choice_box(fg_label(now, nullptr), 5, now, fg_label, fg_ok, nullptr, &focused, &hovered);
         if (pick >= 0 && pick != now) {
-            gt5_setting_set("LD_FRAMEGEN", pick ? "1" : "");
-            if (pick) { char m[8]; snprintf(m, sizeof m, "%d", pick); gt5_setting_set("LD_FRAMEGEN_MULT", pick >= 2 ? m : ""); }
+            char m[8]; snprintf(m, sizeof m, "%d", pick);
+            gt5_setting_set("LD_FRAMEGEN", pick ? (gt5_setting_is("LD_FG_METHOD", "2") ? "2" : "1") : "");
+            gt5_setting_set("LD_FRAMEGEN_MULT", pick >= 2 ? m : "");
             changed();
         }
     } else if (!strcmp(d->key, "PS3_KEYS")) {
@@ -246,7 +330,18 @@ void setting_row(const gt5_setting_def* d, const PadEdges& pad)
         DefChoices dc = { d };
         const char* preview = now >= 0 ? choice_label(&d->choices[now]) : cur[0] ? cur : T("(not set)", "（未设置）");
         const int pick = choice_box(preview, d->n_choices, now, def_choice_label, def_choice_ok, &dc, &focused, &hovered);
-        if (pick >= 0 && pick != now) { gt5_setting_set(d->key, d->choices[pick].value); changed(); }
+        if (pick >= 0 && pick != now) {
+            gt5_setting_set(d->key, d->choices[pick].value);
+            // The generator is picked by LD_FRAMEGEN's own value (1 or 2): keep it in step while frame
+            // generation is on (also when only the multiplier switched it on).
+            if (!strcmp(d->key, "LD_FG_METHOD")) {
+                char on[8];
+                gt5_setting_stored("LD_FRAMEGEN", on, sizeof on);
+                if (on[0] || gt5_setting_int("LD_FRAMEGEN_MULT", 1) >= 2)
+                    gt5_setting_set("LD_FRAMEGEN", !strcmp(d->choices[pick].value, "2") ? "2" : "1");
+            }
+            changed();
+        }
         break;
     }
     case GT5_SET_INT:

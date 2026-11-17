@@ -9,6 +9,53 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.101**
+
+✨ **NVIDIA DLSS and DLAA, a frame generator that uses the game's real motion, and menu fixes (DirectX 12)**
+- **Anti-aliasing with NVIDIA DLSS** (RTX graphics cards). In the launcher (Display, **Anti-aliasing**) or
+  in the game's menu (F1, Display): **DLAA** draws the 3D picture at full size and cleans its edges;
+  **DLSS Quality / Balanced / Performance / Ultra Performance** draw it smaller and rebuild it, for slower
+  cards; **custom scale** takes any share from 33% to 100% (the "DLSS custom scale" row). A **DLSS
+  model** row picks NVIDIA's model (default, K, M, J, L). All of it can be changed while racing.
+- DLSS is NVIDIA's software and no part of it is in this project. The first time you pick a DLSS mode
+  the launcher offers to add it: it fetches NVIDIA's DLSS SDK (about 150 MB) from NVIDIA's own GitHub
+  page, shows NVIDIA's licence for you to accept, checks that `nvngx_dlss.dll` is signed by NVIDIA, and
+  builds a small plug-in (`gt5_upscale_dlss.dll`, this project's own source in `GT5/src/upscale`) next
+  to `gt5.exe`. `GT5\scripts\add_dlss.ps1` is that step; `-Remove` takes it out again. Without it the
+  game is the same as before and the DLSS choices are greyed out with the reason.
+- How it fits GT5: the renderer finds the moment the 3D scene is finished and the HUD starts, gives
+  DLSS the scene, its depth, a sub-pixel camera shift each frame and real motion vectors for every
+  object (cars, the cockpit interior and the mirror each have their own), and hands the result to the
+  game's own exposure and bloom. It works on races and replays' 3D picture; menus and the car-select
+  screen are left as they are. The output is the size of the picture on screen, so it pairs with
+  **Render resolution** (1440p + DLAA is a good start on a 1440p screen).
+- Measured in races on an RTX 4070 Ti SUPER: DLAA in the 1080p mode cost 1 to 2 frames a second (58.5
+  against 59.8, switched on and off every 10 s in one race); DLAA at a 1440p render resolution 59 fps;
+  DLSS Quality there (2048x864 drawn, 3072x1296 out) 59 fps. Edge roughness on a dumped frame fell from
+  20-26% of edge pixels to 12%.
+- **Frame generation, presentation fixed.** Made frames were spaced as if the game always ran at exactly
+  60 and, with vertical sync off, were still held to a refresh by Windows, which gave an uneven
+  6 / 12 ms pattern on a 165 Hz screen. They are now spaced from the measured frame time, anchored to
+  the last frame shown, and with vertical sync off presented with the tearing-capable flag (even on a
+  variable-refresh screen). In a race with 2x: the game stayed at 59.5-59.9 fps, about 125 shown a
+  second. A stall no longer switches it off for the rest of the run. `LD_FG_PRESENT=0` restores the old way.
+- **Frame generation from the game's own motion** (menu: **Frame generation: how**; `LD_FRAMEGEN=2`).
+  The old generator guesses motion from two finished pictures, HUD included, which warps the HUD and
+  wobbles on fences. The new one uses the same motion vectors and depth DLSS gets and never touches
+  the HUD. It makes frames in races only (menus are shown as drawn). New and still being judged; the
+  old one stays the default.
+- **Menu fixes.** Frame generation "Off" did not turn it off when only the multiplier was set (the row
+  showed Off while it stayed on): fixed. Rows that depend on another setting are greyed out with the
+  reason until they apply (DLSS model and custom scale, "how" for frame generation, window size outside
+  window mode, mouse steering's numbers, the wheel's rows). The anti-aliasing and frame generation rows
+  say what they are doing right now. "Resolution" is now called **PS3 video mode**, apart from Render
+  resolution.
+- **F8: a snapshot for bug reports.** If you see a picture fault, press F8 with the game in front: every
+  picture and depth buffer the renderer holds is written to `GT5\logs\snap_<date>_<time>\` (about a
+  second's pause, some hundred MB). Attach or mention it in a report. `LD_SNAP_KEY=0` turns the key off.
+- Vulkan: none of this yet. No re-lift: the update rebuilds the runtime, the game's own sources and
+  the launcher.
+
 🏷️ Released as **v0.1.100**
 
 🎛️ **In-game menu: cockpit view, mouse steering and force feedback apply while playing**
