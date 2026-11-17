@@ -95,6 +95,13 @@ A game-code mod changes instructions in the game's own code. It lives in a folde
   `"default"` when that isn't set. `logs\play.err` lists each mod as on or off.
 - After adding or changing a mod, run `scripts\relift.ps1` and `scripts\build.cmd gt5` again.
 
+A patch can also name its place by the code around it, for every release at once: put it in a list
+under `"*"` as `{"find": "8089001C 88A90019 7C8407B4", "new": "0x38800002"}`. The first word of that run of
+instruction words is replaced (`"at"` picks another), and the run must turn up exactly once in the EBOOT,
+or the mod is left out for that copy. Two mods may replace the same instruction; with both on, the one
+whose name sorts first wins. `GT5\mods\half-rate` works this way: it makes the game draw 30 frames a
+second at real speed (it steps its simulation twice a frame), for about half the frames' work.
+
 `GT5\mods\unlock-fps` is a working example. It's experimental: GT5's clock counts frames, so with it
 on, races run faster than real time whenever the frame rate goes over 60.
 

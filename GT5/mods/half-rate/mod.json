@@ -1,0 +1,14 @@
+{
+  "name": "half-rate",
+  "description": "The game runs 30 frames a second at its real speed: it waits two screen refreshes per frame and steps its simulation twice, as it did on the PS3 when it couldn't hold 60. About half the frames to work out, so a lot less CPU. Turn Frame generation on (launcher, Display) and the graphics card fills the picture back up to 60.",
+  "default": false,
+  "patches": {
+    "*": [
+      {
+        "find": "8089001C 88A90019 7C8407B4 68A50001 7C802214",
+        "new": "0x38800002",
+        "note": "lwz r4,0x1C(r9) -> li r4,2: the frame pacer waits two refreshes (found by its code, so every release)"
+      }
+    ]
+  }
+}

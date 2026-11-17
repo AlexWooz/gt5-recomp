@@ -9,6 +9,30 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.90**
+
+🎞️ **A 30 frames-a-second game at real speed, filled back up to 60 by the graphics card (new mod: half-rate)**
+- Found while measuring: GT5 does not go into slow motion the moment it drops under 60. As on the PS3, it
+  steps its simulation twice for a frame that took two screen refreshes, so it runs at real speed from 30 to
+  60 frames a second and in slow motion only below 30. (Earlier notes here said its clock counts frames;
+  that is only true below 30.)
+- `GT5\mods\half-rate` (off by default; turn it on in the launcher's mod list or with
+  `GT5_MOD_HALF_RATE=1`): the game's own frame pacer waits two refreshes per frame. The game then draws 30
+  frames a second at real speed, with about half the frames to work out.
+- Frame generation (launcher, Display) now also fills the empty refresh between two such frames
+  (`LD_FRAMEGEN_FILL`, default 1, 0 = as before; until now it only made the frames the Speed setting left
+  undrawn). In the test race: 29 game frames and 28.6 made frames a second, about 58 on screen.
+- Measured on all cores of the i9-14900KF with other programs running, the same build, one race each: mode
+  on, 28.8 game frames a second, the race clock ran 49.2 s in 51 s, 4.2-5.2 cores busy late in the race;
+  mode off, 46-55 frames a second (the graphics card was shared) and 5.4-7.8 cores. So roughly a third less
+  CPU; one race each on a busy PC, not a precise figure.
+- Mods can name their place by the code around it (`"find"`, in a list under `"*"`) instead of an address
+  per release, and two mods may replace the same instruction (unlock-fps and half-rate both set the pacer's
+  wait). half-rate's place is found in the European 1.00, Asian 1.00, Asian 2.01 and European 2.17
+  executables; other releases get it the same way if the code is there. See MODDING.md.
+- Not tested yet: long sessions, replays and menus in this mode; Vulkan (the frame fill is DirectX 12).
+- One re-lift: the update regenerates and rebuilds the game code once more.
+
 🏷️ Released as **v0.1.89**
 
 🧮 **The game's vector and float maths, done the way RPCS3 does it: the main game thread does 17% less work (one re-lift)**

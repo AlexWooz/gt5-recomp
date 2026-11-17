@@ -22,6 +22,15 @@ is switched at start-up by the environment variable GT5_MOD_<NAME> (1 on, 0 off;
 Patches are listed per release because addresses differ between them; a mod with no list for
 this copy's EBOOT is skipped. Every "orig" is checked against the EBOOT before anything is written.
 
+A list under "*" is for every release. Its patches name the place by the code around it instead of
+an address: {"find": "8089001C 88A90019 7C8407B4", "new": "0x38800002"} replaces the first word of that
+run of instruction words, which must turn up exactly once in the EBOOT (otherwise the mod is skipped
+for this copy). "at" picks another word of the run (0 = the first). A list for this copy's own SHA-1
+wins over "*".
+
+Two mods may replace the same instruction (unlock-fps and half-rate both set the frame pacer's wait):
+the lifter builds every version in, and when both are switched on the one whose name sorts first wins.
+
 Writes analysis/insn_patches.json and src/gen/mods.cpp when at least one mod applies; otherwise
 removes them, so a build without mods is exactly a build without this script.
 """
@@ -53,7 +62,18 @@ def eboot_words(path):
             if va <= addr < va + size - 3:
                 return struct.unpack(">I", d[off + addr - va:off + addr - va + 4])[0]
         return None
-    return hashlib.sha1(d).hexdigest().upper(), word
+    def find(words):
+        """Addresses where this run of 32-bit words stands, on a 4-byte boundary."""
+        pat = b"".join(struct.pack(">I", w) for w in words)
+        out = []
+        for va, off, size in segs:
+            i = d.find(pat, off, off + size)
+            while i >= 0:
+                if (i - off) % 4 == 0:
+                    out.append(va + i - off)
+                i = d.find(pat, i + 1, off + size)
+        return out
+    return hashlib.sha1(d).hexdigest().upper(), word, find
 
 
 def main():
@@ -64,7 +84,7 @@ def main():
     ap.add_argument("--cpp-out", default=str(ROOT / "src" / "gen" / "mods.cpp"))
     a = ap.parse_args()
 
-    sha1, word = eboot_words(Path(a.elf))
+    sha1, word, find = eboot_words(Path(a.elf))
     patches, switches, seen, errors = [], [], {}, []
     mod_dirs = sorted(p for p in Path(a.mods).glob("*/mod.json")) if Path(a.mods).is_dir() else []
     for mj in mod_dirs:
@@ -77,10 +97,38 @@ def main():
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
             errors.append(f"{mj}: name {name!r} must be lowercase letters, digits and dashes")
             continue
-        mine = (m.get("patches") or {}).get(sha1)
+        mine = (m.get("patches") or {}).get(sha1) or (m.get("patches") or {}).get("*")
         if not mine:
             print(f"[mods] {name}: no patches for this EBOOT ({sha1[:12]}...), skipped")
             continue
+        # "find" patches: the place by its code. Not found exactly once = this mod has no place here.
+        resolved, lost = [], None
+        for p in mine:
+            if "find" not in p:
+                resolved.append(p)
+                continue
+            try:
+                words = [int(w, 16) for w in str(p["find"]).split()]
+                at = int(p.get("at", 0))
+                if not words or not 0 <= at < len(words):
+                    raise ValueError
+            except ValueError:
+                errors.append(f"{name}: \"find\" is a run of hex instruction words, \"at\" an index into it")
+                lost = "bad"
+                break
+            hits = find(words)
+            if len(hits) != 1:
+                lost = f"its code turns up {len(hits)} times in this EBOOT, not once"
+                break
+            q = dict(p)
+            q["addr"] = f"0x{hits[0] + 4 * at:08X}"
+            q["orig"] = f"0x{words[at]:08X}"
+            resolved.append(q)
+        if lost:
+            if lost != "bad":
+                print(f"[mods] {name}: {lost}, skipped")
+            continue
+        mine = resolved
         ident = name.replace("-", "_")
         guard = f"g_mod_{ident}"
         ok = True
@@ -98,11 +146,11 @@ def main():
             elif have != orig:
                 errors.append(f"{name}: 0x{addr:08X} holds 0x{have:08X}, the mod expects 0x{orig:08X}")
                 ok = False
-            elif addr in seen:
-                errors.append(f"{name}: 0x{addr:08X} is also patched by {seen[addr]}")
+            elif addr in seen and seen[addr][1] != orig:
+                errors.append(f"{name}: 0x{addr:08X} is also patched by {seen[addr][0]}, from another original word")
                 ok = False
             else:
-                seen[addr] = name
+                seen.setdefault(addr, (name, orig))
                 patches.append({"addr": f"0x{addr:08X}", "orig": f"0x{orig:08X}", "new": f"0x{new:08X}",
                                 "guard": guard, "note": f"{name}: {p.get('note', '')}".strip()})
         if ok:
