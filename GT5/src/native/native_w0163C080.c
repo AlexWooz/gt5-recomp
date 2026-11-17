@@ -53,6 +53,13 @@ unsigned long long g_n4_faults;
 #endif
 
 #ifdef NATIVE_STATS
+/* The game's test build (GT5_NATIVE_GEO_DUMP): the registers and local store of a call left to the lifted function. */
+void native_geo_dump(const char* name, const void* gpr, unsigned gpr_bytes, const void* ls, unsigned ls_bytes);
+#  define N4_DUMP(name) native_geo_dump(name, ctx->gpr, (unsigned)sizeof ctx->gpr, ctx->ls, SPU_LS_SIZE)
+#else
+#  define N4_DUMP(name) ((void)0)
+#endif
+#ifdef NATIVE_STATS
 /* [0] calls  [1] calls given to the lifted function  [2] of those: a register or a diagnostic
  * gate was not as expected  [3] of those: a float out of the host's range */
 unsigned long long g_n4_66A8_stat[4];
@@ -154,6 +161,7 @@ static SPU_SV void n4_66A8_sv(spu_context* ctx) {
     }
 lifted:
     N4_STAT(g_n4_66A8_stat, 1); N4_STAT(g_n4_66A8_stat, 3);
+    N4_DUMP("66A8");
     __attribute__((musttail)) return N4_ORIG_SV(000066A8)(ctx);
 }
 
@@ -244,6 +252,7 @@ static SPU_SV void n4_6418_sv(spu_context* ctx) {
     }
 lifted:
     N4_STAT(g_n4_6418_stat, 1); N4_STAT(g_n4_6418_stat, 3);
+    N4_DUMP("6418");
     __attribute__((musttail)) return N4_ORIG_SV(00006418)(ctx);
 }
 

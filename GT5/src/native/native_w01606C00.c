@@ -743,13 +743,26 @@ static NX8_NOINLINE void nx8_fault(State* st) {
 #endif
 
 static SPU_SV void nx8_native_sv(spu_context* ctx) {
-    /* What the native code does not do: interrupts (the lifted code leaves at the next label when
-     * one is pending), the local-store diagnostics, a host float mode other than the SPU one, no
+    /* What the native code does not do: a pending interrupt (the lifted code leaves at the next label when
+     * one is pending; see NATIVE_GEO_IRQ_PENDING), the local-store diagnostics, a host float mode other than the SPU one, no
      * rows or columns, a row or column count that is not a small positive number, a tiny grid. */
     const unsigned csr = _mm_getcsr();
     const uint32_t nrows = ctx->gpr[68]._u32[0];
     const uint32_t ncols = ctx->gpr[85]._u16[0];
-    if (NX8_UNLIKELY(ctx->int_enable != 0 || g_spu_ls_rdiag != 0 || g_spu_ls_wdiag != 0 ||
+#ifdef NATIVE_STATS
+    {   /* why a call is left to the lifted function, in the game (native_geo_switch.c prints it) */
+        extern unsigned long long g_native_geo_why[16];
+        g_native_geo_why[0]++;
+        if (NATIVE_GEO_IRQ_PENDING(ctx)) g_native_geo_why[1]++;
+        else if (g_spu_ls_rdiag != 0 || g_spu_ls_wdiag != 0) g_native_geo_why[2]++;
+        else if ((csr & SPU_MXCSR_RZFZ) != SPU_MXCSR_RZFZ) g_native_geo_why[3]++;
+        else if (nrows - 1u >= 4096u || ctx->gpr[33]._u16[0] == 0 || ncols - 1u >= NX8_MAXCOLS) g_native_geo_why[4]++;
+        else if ((unsigned long long)nrows * ncols < g_native8038_min_cells) g_native_geo_why[5]++;
+        if (nrows - 1u < 4096u && ncols - 1u < 4096u) g_native_geo_why[6] += (unsigned long long)nrows * ncols;
+        if (ctx->int_enable != 0) g_native_geo_why[7]++;
+    }
+#endif
+    if (NX8_UNLIKELY(NATIVE_GEO_IRQ_PENDING(ctx) || g_spu_ls_rdiag != 0 || g_spu_ls_wdiag != 0 ||
                      (csr & SPU_MXCSR_RZFZ) != SPU_MXCSR_RZFZ ||
                      nrows - 1u >= 4096u || ctx->gpr[33]._u16[0] == 0 || ncols - 1u >= NX8_MAXCOLS ||
                      (unsigned long long)nrows * ncols < g_native8038_min_cells)) {
@@ -1176,7 +1189,7 @@ static void nx8_finish(spu_context* ctx, uint32_t pc_lo, uint32_t pc_hi) {
 /* Returns 0 when it did nothing (the caller then runs the lifted function as usual). */
 static NX8_NOINLINE int ngeo_compare_whole(spu_context* ctx, unsigned addr, SPU_SV void (*native)(spu_context*),
                                            SPU_SV void (*orig)(spu_context*), uint32_t pc_lo, uint32_t pc_hi) {
-    if (ctx->int_enable != 0 || g_spu_ls_rdiag != 0 || g_spu_ls_wdiag != 0) return 0;
+    if (NATIVE_GEO_IRQ_PENDING(ctx) || g_spu_ls_rdiag != 0 || g_spu_ls_wdiag != 0) return 0;
     uint8_t* buf = t_nx8_cmp;
     if (!buf) {
         buf = (uint8_t*)malloc(2u * SPU_LS_SIZE + 2u * sizeof ctx->gpr);
@@ -1195,6 +1208,8 @@ static NX8_NOINLINE int ngeo_compare_whole(spu_context* ctx, unsigned addr, SPU_
     g_spu_trampoline_fn = 0;
     orig(ctx); nx8_finish(ctx, pc_lo, pc_hi);                        /* lifted: the result that stays */
     native_geo_compared();
+    /* An event raised while the two ran makes the lifted run leave at a label: not a difference of results. */
+    if (NATIVE_GEO_IRQ_PENDING(ctx)) return 1;
     if (memcmp(g1, ctx->gpr, sizeof ctx->gpr) != 0 || memcmp(ls1, ctx->ls, SPU_LS_SIZE) != 0 || pc1 != ctx->pc ||
         succ1 != g_spu_trampoline_fn) {
         int reg = -1; uint32_t off = 0xFFFFFFFFu;
@@ -1527,7 +1542,7 @@ static inline __attribute__((always_inline)) uint32_t nx7_fast(uint8_t* const ls
 }
 
 #define NX7_FAST_FORWARD do { \
-        if ((_rd | _wd) == 0 && ctx->int_enable == 0) { \
+        if ((_rd | _wd) == 0 && !NATIVE_GEO_IRQ_PENDING(ctx)) { \
             const uint32_t k_ = nx7_fast(_ls, r13, r14, r15, r16, r17, r18, r19, r20, r21, r22, r23, r24, r25); \
             if (k_) { r13 = spu_ai(r13, (int32_t)(32u * k_)); r15 = spu_ai(r15, (int32_t)(2u * k_)); \
                       r16 = spu_ai(r16, (int32_t)(2u * k_)); _fa = 1u; } \

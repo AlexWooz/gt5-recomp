@@ -9,6 +9,31 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.94**
+
+🔧 **The native grid pass and pack pass now really run in the game (a correction to v0.1.93)**
+- v0.1.93 said the grid pass (`w01606C00` 0x8038) and the pack pass (0x7DC8) run as native code. In the
+  game they did not: both stood aside whenever SPU interrupts were enabled, and GT5's worker jobs keep
+  them enabled the whole time (the job manager's handler). A test build that counts what each native
+  function does showed it: 0 of 270,000 calls of the grid pass taken natively in a race. The test harness
+  had only run them with interrupts off, and the side-by-side compare mode skipped the calls it could not
+  take, so neither showed it. The fill loop, 0x66A8 and 0x6418 were not affected by this.
+- Now they run whenever no enabled event is pending when they start (none ever was in the race). An event
+  raised while one runs is taken at the next label of the translated code that follows, a few microseconds
+  later; with none pending the translated function's own checks do nothing, so the results are the same.
+- Counted in a race with this build: the grid pass natively on all 278,000 calls and all 572 million
+  cells (none handed back), the pack pass fast-forwarding 283 million passes. Compared side by side with
+  the translated functions on every call, real data: 150 million calls, no difference.
+- Still handed back most of the time, and next: 0x66A8 (79% of its calls) and 0x6418 (all of them), because
+  the fourth lane of the vectors they work on holds values outside the PC's float range in the real data.
+- Measured against v0.1.93 on 8 slow cores, races run back to back: the SPU workers use about 3% less CPU
+  (pairs: -1%, -5%; one more pair was unusable). So the natives of v0.1.93 and this fix together are a few
+  percent of the workers' time, not the large step the functions' own numbers (4 times faster alone)
+  suggested: those functions are about 8% of what the workers do.
+- `cmake -DGT5_NATIVE_STATS=ON` builds the counting version (`[native-geo-stat]` every 5 seconds), for
+  checking that a native function is really taken before believing a measurement.
+- No re-lift: the update rebuilds two SPU jobs' native files and links.
+
 🏷️ Released as **v0.1.93**
 
 🧱 **Native code for the busiest geometry functions, and a cheaper path from SPU code to the runtime**

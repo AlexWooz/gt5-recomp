@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.94](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.94) | 17 Nov 2026 | Native grid pass and pack pass really run in the game (they stood aside while SPU interrupts were enabled) |
 | [v0.1.93](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.93) | 17 Nov 2026 | Native geometry functions (grid pass, fill, pack pass); per-thread PUT hook and short channel/DMA paths |
 | [v0.1.92](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.92) | 17 Nov 2026 | SPU translator writes faster code (whole registers, lazy +0 rule); native reverb and EQ FFT |
 | [v0.1.91](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.91) | 16 Nov 2026 | First native code in place of translated PS3 code: the sound mixer's inner loops, 44% less time for the mixer job, same output bit for bit |
