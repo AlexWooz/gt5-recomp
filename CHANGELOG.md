@@ -28,8 +28,8 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 - How it is built in: `GT5\src\native` holds the native functions and `natives.txt` lists them; the build
   compiles the mixer from a copy in which those five functions are renamed and the native ones take their
   place (`scripts\spu_native_patch.py`). No re-lift: the update rebuilds the mixer and links.
-- Only the mixer of the disc version and its 2.01 to 2.16 updates' shared image (`jD58063CD`); game update
-  2.17 has its own mixer image and keeps the translated code for now. Windows only for now.
+- Only where the mixer is the disc version's image (`jD58063CD`). A copy whose mixer is another image (game
+  update 2.17 has its own) keeps the translated code for now. Windows only for now.
 
 🏷️ Released as **v0.1.90**
 
