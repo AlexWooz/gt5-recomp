@@ -72,8 +72,9 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
    - **your GT5 game**: the folder of your disc dump (the one with `PS3_GAME` in it) or an `.iso`;
    - **PS3UPDAT.PUP**, Sony's free PS3 system software (the window has a button that opens Sony's page).
 
-That's all. It installs whatever's missing (Git, Python, Microsoft's C++ build tools), downloads this
-code, unlocks your game's executable and the system software with RPCS3 (used only as a tool for that:
+That's all. It installs Git and Python if they're missing, downloads this code and the compiler tools
+(about 1.5 GB, into the install folder: **no Visual Studio is installed or changed**; Microsoft's
+libraries in it come under Microsoft's licence, which the installer shows and asks you to accept), unlocks your game's executable and the system software with RPCS3 (used only as a tool for that:
 the game itself runs natively as `gt5.exe`, not in an emulator), builds the game (about an hour the
 first time) and puts **Gran Turismo 5 (PC)** on your desktop, which opens the [launcher](#launcher).
 Nothing from the game is ever uploaded or shared.
@@ -797,9 +798,9 @@ The Windows build under **Proton** is untried too. Direct3D 12 would go through 
 
 ## 🧰 Requirements
 
-- **Windows:** Windows 10 or 11 (x64) and a Direct3D 12 graphics card. Build with Visual Studio 2022
-  with *Desktop development with C++* and *C++ Clang tools for Windows*, or use the
-  [standalone tools](#no-visual-studio).
+- **Windows:** Windows 10 or 11 (x64) and a Direct3D 12 graphics card. The compiler is the
+  [standalone tools](#no-visual-studio) (what the installer fetches), or a Visual Studio 2022 you already
+  have with *Desktop development with C++*, *C++ Clang tools for Windows* and a Windows SDK.
 - **Linux (experimental):** an x86-64 distribution with FFmpeg 6.1 or newer (such as Ubuntu 24.04
   or Linux Mint 22), and a Vulkan-compatible GPU with a Vulkan driver. Follow the
   [Linux setup](#linux) to install build dependencies and prepare the game.
@@ -811,10 +812,12 @@ The Windows build under **Proton** is untried too. Direct3D 12 would go through 
 
 <a id="no-visual-studio"></a>
 
-### No Visual Studio? (less space on C:)
+### No Visual Studio needed
 
-Visual Studio puts several GB on C:. `get-toolchain.ps1` gets the same compiler tools without it, all in
-one folder you choose, on any drive. In the `gt5-recomp` folder, in PowerShell:
+`GT5-Installer.bat` never installs or changes Visual Studio. When the PC has no Visual Studio with the
+Clang tools and a Windows SDK, it runs `get-toolchain.ps1`, which puts the same compiler tools in the
+install folder (`tools\toolchain`). By hand, the script puts them in one folder you choose, on any drive.
+In the `gt5-recomp` folder, in PowerShell:
 
 ```
 powershell -ExecutionPolicy Bypass -File get-toolchain.ps1

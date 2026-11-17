@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.102](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.102) | 17 Nov 2026 | Installer: no Visual Studio install, compiler tools fetched into the install folder |
 | [v0.1.101](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.101) | 17 Nov 2026 | NVIDIA DLSS / DLAA, frame generation from the game's own motion, menu fixes |
 | [v0.1.100](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.100) | 17 Nov 2026 | In-game menu: cockpit view, mouse steering and force feedback apply while playing |
 | [v0.1.99](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.99) | 17 Nov 2026 | Render resolution up to 5K and a settings menu inside the game (F1) |

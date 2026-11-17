@@ -15,8 +15,11 @@ goto :eof
 # Gran Turismo 5 for PC installer
 #
 # What it does, in the install folder you choose:
-#   1. installs Git, Python and Microsoft's C++ build tools (with Clang) if they're missing (winget)
-#   2. downloads the port's code from GitHub (code only: nothing from the game)
+#   1. installs Git and Python if they're missing (winget)
+#   2. downloads the port's code from GitHub (code only: nothing from the game), and, unless a Visual
+#      Studio with the Clang tools is already on the PC, the compiler tools with get-toolchain.ps1: about
+#      1.5 GB in the install folder's tools\toolchain, no Visual Studio, nothing installed in Windows.
+#      Visual Studio is never installed or changed by this installer.
 #   3. downloads RPCS3, used only as a tool: it holds the keys that unlock your EBOOT.BIN and Sony's
 #      firmware file, which can't be published here. The game itself never runs in RPCS3.
 #   4. installs the PS3 system software from PS3UPDAT.PUP (for the system files the game uses)
@@ -220,7 +223,7 @@ function Show-Installer($game0, $fw0, $dest0) {
     $bdB = New-Button "Browse..." 502 $rd.Y 110
 
     $note = New-Object Windows.Forms.Label; $note.SetBounds((S 22), (S 412), (S 716), (S 44)); $note.ForeColor = [Drawing.Color]::DimGray
-    $note.Text = "Takes about an hour the first time. Anything missing (Git, Python, Microsoft's C++ build tools) is installed for you, and Windows may ask for permission. Nothing from the game is ever uploaded or shared."
+    $note.Text = "Takes about an hour the first time. Git and Python are installed if missing (Windows may ask for permission); the compiler tools (about 1.5 GB) go into the install folder, with no Visual Studio. Nothing from the game is ever uploaded or shared."
     $f.Controls.Add($note)
     $go = New-Button "Install" 520 470 110; $go.Font = $bold; $cancel = New-Button "Cancel" 638 470 100
     $f.AcceptButton = $go; $f.CancelButton = $cancel
@@ -291,9 +294,6 @@ function Find-Python {
     return $false
 }
 $VsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$VsParts = @("Microsoft.VisualStudio.Workload.VCTools", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-             "Microsoft.VisualStudio.Component.VC.Llvm.Clang", "Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset",
-             "Microsoft.VisualStudio.Component.VC.CMake.Project")
 function Find-VsClang {
     # Both clang-cl and vcvars64.bat (the build calls it): a copy an uninstall left behind can keep
     # clang-cl alone, and the build then stopped with "The system cannot find the path specified" (#35).
@@ -314,13 +314,15 @@ function Test-WinSdk {
     }
     return $false
 }
-function Get-VsModifyAdds([string]$path, [bool]$sdk) {
-    # What to add to an installed Visual Studio. The C++ workload is VCTools in the Build Tools and
-    # NativeDesktop in Community, Professional and Enterprise.
-    $wl = if ($path -match 'BuildTools') { "Microsoft.VisualStudio.Workload.VCTools" } else { "Microsoft.VisualStudio.Workload.NativeDesktop" }
-    $parts = @($wl) + @($VsParts | Select-Object -Skip 1)
-    if ($sdk) { $parts += "Microsoft.VisualStudio.Component.Windows11SDK.22621" }
-    return ($parts | ForEach-Object { "--add $_" }) -join " "
+# The compiler tools without Visual Studio, where GT5\scripts\build.cmd looks for them: the folder
+# get-toolchain.ps1 recorded in .gt5\toolchain-path.txt, else "toolchain" next to the install folder.
+function Find-Toolchain([string]$base) {
+    $cands = @()
+    $rec = Join-Path $base ".gt5\toolchain-path.txt"
+    if (Test-Path -LiteralPath $rec) { $cands += [Console]::OutputEncoding.GetString([IO.File]::ReadAllBytes($rec)).Trim() }
+    $cands += Join-Path (Split-Path $base -Parent) "toolchain"
+    foreach ($c in $cands) { if ($c -and (Test-Path -LiteralPath (Join-Path $c "gt5-toolchain.txt"))) { return $c } }
+    return $null
 }
 
 # ---- RPCS3, as an unlocking tool ---------------------------------------------------------------------
@@ -470,7 +472,7 @@ if ($env:GT5_GIT_SAFE -ne "1") {
 }
 
 # ---- 1. Tools --------------------------------------------------------------------------------------
-Step 1 "Tools: Git, Python, Microsoft C++ build tools"
+Step 1 "Tools: Git, Python"
 Update-Path
 if (Get-Command git -ErrorAction SilentlyContinue) { Say "  Git: ok" } else {
     Install-WithWinget "Git.Git" "Git" @("--silent")
@@ -480,25 +482,15 @@ if (Find-Python) { Say "  Python: ok" } else {
     Install-WithWinget "Python.Python.3.11" "Python 3.11" @("--silent")
     if (-not (Find-Python)) { Stop-Install "Python didn't install. Install Python 3.11 from https://www.python.org (tick 'Add python.exe to PATH') and run this again." }
 }
-$vsClang = Find-VsClang
-$sdkOk = Test-WinSdk
-if ($vsClang -and $sdkOk) { Say "  C++ build tools with Clang: ok" } else {
-    $adds = ($VsParts | ForEach-Object { "--add $_" }) -join " "
-    $any = if ($vsClang) { $vsClang } elseif (Test-Path $VsWhere) { & $VsWhere -latest -products * -property installationPath } else { $null }
-    if ($any) {
-        # Visual Studio is there without the Clang tools or without the Windows SDK: add what's missing to it.
-        $what = if ($vsClang) { "the Windows SDK" } elseif ($sdkOk) { "the Clang tools" } else { "the Clang tools and the Windows SDK" }
-        Say "  adding $what to your Visual Studio (Windows may ask for permission; 5-15 minutes)..." "Yellow"
-        $vsSetup = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
-        $modAdds = Get-VsModifyAdds $any (-not $sdkOk)
-        Start-Process -FilePath $vsSetup -ArgumentList "modify --installPath `"$any`" $modAdds --includeRecommended --passive --norestart" -Wait -Verb RunAs
-    } else {
-        Say "  Microsoft's C++ build tools are about 7 GB and take 10-20 minutes." "Yellow"
-        Install-WithWinget "Microsoft.VisualStudio.2022.BuildTools" "Microsoft C++ Build Tools" @("--override", "--wait --passive --norestart $adds --includeRecommended")
-    }
-    if (-not (Find-VsClang)) { Stop-Install "the C++ build tools with Clang aren't installed. In the Visual Studio Installer, add 'Desktop development with C++' and 'C++ Clang tools for Windows', then run this again." }
-    if (-not (Test-WinSdk)) { Stop-Install "the Windows SDK isn't installed, and the build needs its kernel32.lib. In the Visual Studio Installer, choose Modify, tick 'Windows 11 SDK' under Individual components, then run this again." }
-}
+# The compiler: a Visual Studio with the Clang tools and the Windows SDK that is already here is used as it
+# is. Otherwise the tools come from get-toolchain.ps1 after the code is downloaded (step 2). This installer
+# never installs or changes Visual Studio: that took 7 GB or more, opened the Visual Studio Installer, and
+# on a PC with a Visual Studio lacking the Clang tools it added several GB of workloads to it.
+# GT5_INSTALL_NOVS=1 (a test switch) looks past an installed Visual Studio.
+$vsClang = if ($env:GT5_INSTALL_NOVS) { $null } else { Find-VsClang }
+$useVs = [bool]($vsClang -and (Test-WinSdk))
+if ($useVs) { Say "  Compiler: the Visual Studio already on this PC ($vsClang)" }
+else { Say "  Compiler: fetched in step 2 into the install folder (about 1.5 GB; no Visual Studio needed)" }
 
 # ---- 2. The port's code -------------------------------------------------------------------------------
 Step 2 "The port's code (from GitHub)"
@@ -512,6 +504,28 @@ if ($dest.Existing) {
 }
 $tools = Join-Path $base "tools"
 New-Item -ItemType Directory -Force $tools | Out-Null
+if (-not $useVs) {
+    $tc = Find-Toolchain $base
+    if ($tc) { Say "  compiler tools: already in $tc" } else {
+        $getTc = Join-Path $base "get-toolchain.ps1"
+        if (-not (Test-Path -LiteralPath $getTc)) {
+            Stop-Install "this copy of the code is too old to fetch its own compiler tools. Run Update.bat in $base, then run the installer again."
+        }
+        Say "  compiler tools: LLVM, CMake, Ninja, and Microsoft's C/C++ libraries and Windows SDK" "Yellow"
+        Say "  (about 1.5 GB into $tools\toolchain; nothing is installed in Windows, delete the folder to remove them)." "Yellow"
+        Say "  Microsoft's part is under Microsoft's licence: the next lines show it and ask you to type yes." "Yellow"
+        # Not through a pipe: get-toolchain.ps1 asks its question in this window.
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $getTc -Path (Join-Path $tools "toolchain")
+        $tc = Find-Toolchain $base
+        if (-not $tc) {
+            Stop-Install "the compiler tools weren't fetched (see above). Run the installer again to retry: what was downloaded is kept. If you would rather use Visual Studio, install Visual Studio 2022 with 'Desktop development with C++', 'C++ Clang tools for Windows' and a Windows 11 SDK yourself, then run this again."
+        }
+        Say "  compiler tools: ready in $tc"
+    }
+    # setup.ps1 and build.cmd pick Visual Studio first; tell them to use these tools in this run (the test
+    # switch, or a Visual Studio that has no Windows SDK).
+    $env:GT5_TOOLCHAIN = $tc
+}
 
 # ---- 3. RPCS3 (only to unlock files) --------------------------------------------------------------
 $needFw = -not (Test-Path (Join-Path $gt5 "dev_flash\sys\external"))

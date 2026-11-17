@@ -9,6 +9,25 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.102**
+
+🧰 **The installer no longer installs or changes Visual Studio**
+- `GT5-Installer.bat` used to install Microsoft's C++ Build Tools (about 7 GB) when no Visual Studio with
+  the Clang tools was found, and on a PC that had a Visual Studio without them it opened the Visual
+  Studio Installer and added several GB of workloads to it (seen on a PC with Visual Studio 2026: it
+  started modifying that). Neither happens any more.
+- Now: a Visual Studio that already has the Clang tools and a Windows SDK is used as it is. Otherwise the
+  installer runs `get-toolchain.ps1` right after downloading the code: LLVM 19.1.5, CMake, Ninja and
+  Microsoft's C/C++ libraries and Windows SDK, about 1.5 GB, all inside the install folder
+  (`tools\toolchain`). No administrator rights, nothing installed in Windows, the same compiler version
+  the releases are tested with; delete the folder to remove it. Microsoft's part is under Microsoft's
+  licence: the installer shows the link and goes on only when you type `yes`.
+- Git and Python are still installed with winget when they are missing.
+- Checked on made-up install folders (a usable Visual Studio; tools already fetched; licence declined:
+  nothing downloaded and a clear message; an old checkout). A whole install through this route was not
+  run here, because Microsoft's licence is the player's to accept; the tools and `build.cmd`'s use of
+  them are unchanged since v0.1.28.
+
 🏷️ Released as **v0.1.101**
 
 ✨ **NVIDIA DLSS and DLAA, a frame generator that uses the game's real motion, and menu fixes (DirectX 12)**
