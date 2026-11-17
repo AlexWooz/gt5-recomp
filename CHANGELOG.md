@@ -9,6 +9,36 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.89**
+
+🧮 **The game's vector and float maths, done the way RPCS3 does it: the main game thread does 17% less work (one re-lift)**
+- From Whatcookie's two RPCS3 videos: do the PS3's vector instructions as whole vectors, handle the special
+  cases (NaN, denormals) only when one turns up, and use the PC's byte shuffle where the PS3 shuffles bytes.
+- **Vector float** in the game's own code (AltiVec): add, subtract, min, max, the compares, reciprocal,
+  reciprocal square root and the int/float converts ran one lane at a time, with three NaN tests per lane.
+  They now run four lanes at once, and the NaN rules run only for a vector that has a NaN in it.
+  Multiply-add already did (v0.1.42); add and subtract were the next most used (3,131 places in GT5's code).
+- **Byte moves:** `vperm`, `vsldoi`, `lvlx` and `lvrx` (4,404 places) were sixteen-step byte loops, and the
+  sixteen one-byte stores then held up whatever read the register next. Each is now one or two byte shuffles,
+  the way RPCS3 does the SPU's `shufb`.
+- **Scalar float:** a result that isn't a NaN no longer has its operands checked for one: one test where
+  there were three, on every add, subtract, multiply, divide and multiply-add.
+- **SPU float compares** (`fceq`, `fcgt`, `fcmeq`, `fcmgt`) use the PC's own compares, and the longer exact
+  form only for a vector the PC reads as holding a NaN.
+- Every one gives the same bits as before: the new forms were run against the old ones on 127 million random
+  and edge-case inputs with no difference (`runtime/ppu/tests/test_vmx_float4.cpp`,
+  `runtime/spu/tests/test_spu_fcmp_rz.c` in ps3recomp).
+- Measured: an Arcade race at High Speed Ring with the game held to 4 efficient cores of the i9-14900KF and
+  other programs running, the published build and this one raced in turn, four races each. The main game
+  thread used 41.7 million CPU cycles per game frame, down from 50.0 (-17%; every new race below every old
+  one). The second game thread, the SPU workers and the frame rate came out within the race-to-race spread
+  on that busy PC, so no frame-rate gain is claimed. Per operation the vector forms are 3 to 5 times faster.
+  On all cores the new build raced at 57-58 fps with clean sound.
+- This update regenerates the game code and rebuilds all of it once, so the first update to it takes about
+  as long as a fresh build.
+- Found on the way, not changed here: the Windows compiler (clang-cl) ignores two options the build passes
+  (`-ffp-contract=off`, `-fwrapv`), which the Linux build honours.
+
 🏷️ Released as **v0.1.88**
 
 🧩 **RPCS3 patches that change instructions in place can become mods**

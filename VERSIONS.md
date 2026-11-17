@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.89](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.89) | 16 Nov 2026 | The game's vector and float maths as whole vectors and byte shuffles, as RPCS3 does them: the main game thread does 17% less work (one re-lift) |
 | [v0.1.88](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.88) | 16 Nov 2026 | Mods: rpcs3_mods.py turns RPCS3 patches that change instructions in place into port mods for your exact copy |
 | [v0.1.87](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.87) | 16 Nov 2026 | Installer and updates work on exFAT/FAT32 drives: git no longer refuses the install folder (dubious ownership, #41) |
 | [v0.1.86](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.86) | 16 Nov 2026 | Launcher: your own lines in settings.bat are kept wherever and however you write them (lines after the Speed block or without quotes were dropped) |
