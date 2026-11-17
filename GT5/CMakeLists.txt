@@ -168,6 +168,11 @@ if(EXISTS "${GT5_NATIVE_DIR}/natives.txt" AND SPU_JOB_SOURCES)
         set_source_files_properties("${GT5_NATIVE_DIR}/spu_native.c" PROPERTIES
             INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu"
             COMPILE_OPTIONS "-O2;/w;/GS-;-mavx2;-mfma")
+        if(EXISTS "${GT5_NATIVE_DIR}/native_snd.c")
+            target_sources(gt5 PRIVATE "${GT5_NATIVE_DIR}/native_snd.c")
+            set_source_files_properties("${GT5_NATIVE_DIR}/native_snd.c" PROPERTIES
+                INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu" COMPILE_OPTIONS "-O2;/w;/GS-;-mavx2;-mfma")
+        endif()
         list(LENGTH _nat_done _nat_n)
         message(STATUS "Native SPU:      ${_nat_n} image(s) with native functions")
     endif()

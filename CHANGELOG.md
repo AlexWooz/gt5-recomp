@@ -7,6 +7,38 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 > or repeated frames (fixed on 4 Nov and 9 Nov), so treat them as rough before-and-after comparisons.
 > From 9 Nov on, numbers are the game's own frames.
 
+## 17 Nov 2026
+
+🏷️ Released as **v0.1.92**
+
+🧱 **The SPU translator writes faster code, and the reverb and the EQ's FFT are native**
+- Two changes to how SPU code is translated (`tools/spu_lifter.py`, both on by default):
+  - A read of a register's first word (the SPU's "preferred slot", used for every address, counter and
+    branch test) is written so the compiler keeps the register in one machine register. Before, each such
+    read made it keep a second copy in memory or move the value between vector and integer registers.
+  - The SPU rule "a zero result is +0" was applied after every float operation, three operations in
+    series on every chain of float maths. It now runs where a value leaves the chain (a store, a compare,
+    a shuffle); inside the chain the unfixed value is used, which gives the same results (the sign of a
+    zero operand cannot change a non-zero result, and a zero result is fixed where it leaves).
+- Same results: 4.27 million runs of the old translation against the new one on six job images (every
+  register and the whole local store compared), no difference. Measured alone, the busiest geometry
+  function is 1.3 times faster and the reverb's loops 1.4 to 3.6 times; the generated code is 3 to 8%
+  smaller.
+- Native code for the reverb (9 functions) and the EQ's FFT (6 functions), next to the mixer of v0.1.91.
+  Each was run 3 million times against the translated function without a difference, and is 1.8 to 5
+  times faster measured alone. `GT5_NATIVE_SND=0` runs the translated code, `=2` runs both and logs any
+  difference (`[native-snd]`).
+- In the game: with both versions of every native sound function run side by side (mixer, reverb, EQ),
+  159 million calls in menus and a race, no difference. The sound jobs together take 17% less time than
+  in v0.1.91 (two pairs of races run back to back on all cores: 2.21 to 1.84 and 2.18 to 1.84 seconds of
+  job time per 10 seconds).
+- What it does not show yet: the whole game's CPU use. On the test PC both builds hold 57-58 frames a
+  second on the fast cores and on 16 slow cores, and the busy-cores figure differs less between the
+  builds than between two races of the same build (about 5%). The gain in the geometry jobs is there in
+  the isolated measurements, not yet in a number from a race.
+- One re-lift: the update regenerates and rebuilds the game code once more (about 10 minutes plus the
+  build). The native functions that follow build on this translation and will not need another.
+
 ## 16 Nov 2026
 
 🏷️ Released as **v0.1.91**

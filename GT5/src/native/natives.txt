@@ -6,3 +6,19 @@ jD58063CD 00004C80 - native_mixer.c hooked
 jD58063CD 000044CC - native_mixer.c hooked
 jD58063CD 00004E58 - native_mixer.c hooked
 jD58063CD 00001908 - native_mixer.c hooked
+# The reverb (socetverb, jFE031AF6) and the EQ's FFT (socepdideq, jEB79FDFC). GT5_NATIVE_SND=0/1/2.
+jFE031AF6 00003720 - native_jFE031AF6.c hooked
+jFE031AF6 00003568 - native_jFE031AF6.c hooked
+jFE031AF6 000036F0 - native_jFE031AF6.c hooked
+jFE031AF6 00003538 - native_jFE031AF6.c hooked
+jFE031AF6 000037D8 - native_jFE031AF6.c hooked
+jFE031AF6 000038C8 - native_jFE031AF6.c hooked
+jFE031AF6 00003900 - native_jFE031AF6.c hooked
+jFE031AF6 00004680 - native_jFE031AF6.c hooked
+jFE031AF6 00004840 - native_jFE031AF6.c hooked
+jEB79FDFC 00003ADC - native_jEB79FDFC.c hooked
+jEB79FDFC 00003C6C - native_jEB79FDFC.c hooked
+jEB79FDFC 00003D80 - native_jEB79FDFC.c hooked
+jEB79FDFC 00004008 - native_jEB79FDFC.c hooked
+jEB79FDFC 00004158 - native_jEB79FDFC.c hooked
+jEB79FDFC 000043C0 - native_jEB79FDFC.c hooked
