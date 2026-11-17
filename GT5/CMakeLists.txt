@@ -117,6 +117,62 @@ foreach(_eq_job jEB79FDFC jE3FDDA10)
         COMPILE_OPTIONS "-O2;/w;/GS-;-mavx2;-mfma;-ffp-contract=off;-DSPU_X86_RZ_ALWAYS=1;-DSPU_X86_FAST_DOUBLE=1")
 endforeach()
 
+# Native replacements of hot SPU functions (src/native/natives.txt: image, address, symbol, source).
+# The lifted job file is compiled from a patched copy in which the listed function is renamed and a
+# switch with its old name picks native or lifted at run time (scripts/spu_native_patch.py), so no
+# re-lift is needed and every caller is unchanged. GT5_SPU_NATIVE=0 runs the lifted code as before.
+set(GT5_NATIVE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/native")
+if(EXISTS "${GT5_NATIVE_DIR}/natives.txt" AND SPU_JOB_SOURCES)
+    find_program(GT5_PYTHON NAMES python python3
+                 HINTS "${CMAKE_CURRENT_SOURCE_DIR}/../venv/Scripts" "${CMAKE_CURRENT_SOURCE_DIR}/../venv/bin")
+    file(STRINGS "${GT5_NATIVE_DIR}/natives.txt" _nat_lines REGEX "^[A-Za-z0-9]")
+    set(_nat_any OFF)
+    set(_nat_done "")
+    foreach(_l ${_nat_lines})
+        separate_arguments(_f UNIX_COMMAND "${_l}")
+        list(LENGTH _f _fn)
+        if(_fn LESS 4)
+            continue()
+        endif()
+        list(GET _f 0 _img)
+        list(GET _f 3 _src)
+        set(_in "${SPU_DIR}/jobs/${_img}/spu_recomp.c")
+        if(NOT EXISTS "${_in}" OR NOT GT5_PYTHON)
+            continue()   # this copy of the game has no such job (another release): nothing to replace
+        endif()
+        get_source_file_property(_opts "${_in}" COMPILE_OPTIONS)
+        set(_incs "${PS3RECOMP_DIR}/runtime/spu;${SPU_DIR}/jobs/${_img};${GT5_NATIVE_DIR}")
+        if(NOT _img IN_LIST _nat_done)
+            list(APPEND _nat_done ${_img})
+            set(_out "${CMAKE_BINARY_DIR}/spu_native/${_img}/spu_recomp.c")
+            add_custom_command(OUTPUT "${_out}"
+                COMMAND "${GT5_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/spu_native_patch.py" "${_in}" "${_out}" ${_img} "${GT5_NATIVE_DIR}/natives.txt"
+                DEPENDS "${_in}" "${GT5_NATIVE_DIR}/natives.txt" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/spu_native_patch.py"
+                COMMENT "Native SPU functions for ${_img}" VERBATIM)
+            file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/spu_native/${_img}")
+            set_source_files_properties("${_in}" PROPERTIES HEADER_FILE_ONLY ON)
+            target_sources(gt5 PRIVATE "${_out}")
+            set_source_files_properties("${_out}" PROPERTIES
+                INCLUDE_DIRECTORIES "${_incs}" COMPILE_DEFINITIONS SPU_USE_DISPATCH_MT COMPILE_OPTIONS "${_opts}")
+        endif()
+        get_source_file_property(_have "${GT5_NATIVE_DIR}/${_src}" COMPILE_OPTIONS)
+        if(NOT _have)
+            target_sources(gt5 PRIVATE "${GT5_NATIVE_DIR}/${_src}")
+            set_source_files_properties("${GT5_NATIVE_DIR}/${_src}" PROPERTIES
+                INCLUDE_DIRECTORIES "${_incs}" COMPILE_DEFINITIONS "SPU_USE_DISPATCH_MT;NATIVE_HOOKED" COMPILE_OPTIONS "${_opts}")
+        endif()
+        set(_nat_any ON)
+    endforeach()
+    if(_nat_any)
+        target_sources(gt5 PRIVATE "${GT5_NATIVE_DIR}/spu_native.c")
+        set_source_files_properties("${GT5_NATIVE_DIR}/spu_native.c" PROPERTIES
+            INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu"
+            COMPILE_OPTIONS "-O2;/w;/GS-;-mavx2;-mfma")
+        list(LENGTH _nat_done _nat_n)
+        message(STATUS "Native SPU:      ${_nat_n} image(s) with native functions")
+    endif()
+endif()
+
 target_include_directories(gt5 PRIVATE
     "${RECOMP_DIR}"
     "${PS3RECOMP_DIR}/include"

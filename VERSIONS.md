@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.91](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.91) | 16 Nov 2026 | First native code in place of translated PS3 code: the sound mixer's inner loops, 44% less time for the mixer job, same output bit for bit |
 | [v0.1.90](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.90) | 16 Nov 2026 | A 30 fps game at real speed, filled back up to 60 by the graphics card: new mod half-rate, frame generation fills the empty refresh (one re-lift) |
 | [v0.1.89](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.89) | 16 Nov 2026 | The game's vector and float maths as whole vectors and byte shuffles, as RPCS3 does them: the main game thread does 17% less work (one re-lift) |
 | [v0.1.88](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.88) | 16 Nov 2026 | Mods: rpcs3_mods.py turns RPCS3 patches that change instructions in place into port mods for your exact copy |

@@ -1,0 +1,8 @@
+# Native replacements of lifted SPU functions: <image> <address> <native symbol or -> <source> [pure] [hooked]
+# hooked = the source itself defines the function's name (built with NATIVE_HOOKED) and calls ..._orig_sv
+# The sound mixer (socisynth, jD58063CD): biquads, resampler, mix, ADPCM block loop. GT5_NATIVE_MIXER=0/1/2.
+jD58063CD 00004720 - native_mixer.c hooked
+jD58063CD 00004C80 - native_mixer.c hooked
+jD58063CD 000044CC - native_mixer.c hooked
+jD58063CD 00004E58 - native_mixer.c hooked
+jD58063CD 00001908 - native_mixer.c hooked

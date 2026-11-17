@@ -9,6 +9,28 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 16 Nov 2026
 
+🏷️ Released as **v0.1.91**
+
+🧱 **First native code in place of translated PS3 code: the sound mixer's inner loops, 44% less time for the mixer**
+- Until now every SPU function ran as a step-for-step translation of the PS3's code. The sound mixer's hot
+  loops (its two biquad filters, the resampler, the mix into the buses and the ADPCM block decoder) now run
+  as code written for a PC: filter state in scalars, one window load where the SPU code did three loads and
+  three shuffles, a whole ADPCM block decoded before its clamp is looked at.
+- Same output, bit for bit: 14 million test cases against the translated functions (every register and the
+  whole 256 KB local store compared, with audio-like data, edge values and unaligned or overlapping
+  buffers), and a race with both versions run side by side on every call: no difference.
+- Measured in a race (the game's own job timer, the same build, three races): the mixer job takes 0.88 ms
+  per 5.33 ms sound block, down from 1.56 ms. Per function it is 1.5 to 4.4 times faster. On small CPUs the
+  sound thread is the one that runs out first, so this is where stuttering sound should ease; that has not
+  been measured on a small CPU yet.
+- `GT5_NATIVE_MIXER=0` runs the translated code as before, `=2` runs both and logs any difference
+  (`[native-mixer] MISMATCH`; slow, for testing).
+- How it is built in: `GT5\src\native` holds the native functions and `natives.txt` lists them; the build
+  compiles the mixer from a copy in which those five functions are renamed and the native ones take their
+  place (`scripts\spu_native_patch.py`). No re-lift: the update rebuilds the mixer and links.
+- Only the mixer of the disc version and its 2.01 to 2.16 updates' shared image (`jD58063CD`); game update
+  2.17 has its own mixer image and keeps the translated code for now. Windows only for now.
+
 🏷️ Released as **v0.1.90**
 
 🎞️ **A 30 frames-a-second game at real speed, filled back up to 60 by the graphics card (new mod: half-rate)**
