@@ -10128,7 +10128,21 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
  from dataclasses import dataclass, field
  
  sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-@@ -373,6 +375,38 @@
+@@ -181,6 +183,13 @@
+     if m:
+         return m.group(1)
+     return "0"
++
++
++# wrch channels whose write only sets an spu_context field (spu_wrch's short switch, or the inline
++# copy of it in spu_helpers.h, SPU_CH_INLINE). Channel numbers as _chan returns them when the
++# disassembler printed no name.
++_WRCH_PARAM = {"MFC_LSA", "16", "MFC_EAH", "17", "MFC_EAL", "18", "MFC_Size", "19",
++               "MFC_TagID", "20", "MFC_WrTagMask", "22"}
+ 
+ 
+ def _chan(token: str) -> str:
+@@ -373,6 +382,38 @@
              groups[start] = end
          i = j
      return groups
@@ -10167,7 +10181,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
  
  
  def compute_link_returns(insns, bounds) -> set:
-@@ -494,6 +528,787 @@
+@@ -494,6 +535,787 @@
  
  
  
@@ -10955,7 +10969,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
  # lv2 stop-and-signal syscalls that resume at the next instruction (the same
  # set as find_spu_functions.LV2_RESUMING_STOPS, which decides function extents).
  LV2_RESUMING_STOPS = {0x100, 0x110, 0x111}
-@@ -529,11 +1344,70 @@
+@@ -529,11 +1351,71 @@
          # compute_link_returns(). Emitted as `return;` so they compose with the
          # brsl->C-call nesting instead of branching to an unregistered PC.
          self.link_return: set = set()
@@ -10963,6 +10977,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
 +        # starts a cross-function one may tail-call (set by main()).
 +        self.pcget_bi: dict = {}
 +        self.func_starts: set = set()
++        self.inline_wrch = False          # parameter channel writes without the register stores (main())
 +        # Register locals (on from the command line unless --no-reg-locals; off for
 +        # callers that build the class themselves): each function keeps the SPU
 +        # registers it touches in C locals and the local-store base in `_ls`, and
@@ -11027,7 +11042,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                                start_addr=start, end_addr=end)
  
          internal: set[int] = set()
-@@ -550,6 +1424,7 @@
+@@ -550,6 +1432,7 @@
          # for its interrupt handler (DMA-list stall-and-notify) never wakes. So
          # each merged chunk entry hands back to the drain when one is pending.
          merged_starts = {a for a in getattr(self, "func_starts", ()) if start < a < end}
@@ -11035,7 +11050,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
          last_insn = None
          for insn in insns:
              if insn.addr < start or insn.addr >= end:
-@@ -559,7 +1434,7 @@
+@@ -559,7 +1442,7 @@
              if insn.addr in merged_starts:
                  func.body_lines.append(
                      f"    if (ctx->int_enable && (ctx->event_status & ctx->event_mask)) "
@@ -11044,7 +11059,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      f"{self.prefix}spu_func_{insn.addr:08X}; return; }}")
              c = self._translate(insn, func)
              if c:
-@@ -583,7 +1458,7 @@
+@@ -583,7 +1466,7 @@
                           and (last_insn.raw & 0x3FFF) in LV2_RESUMING_STOPS))
                  and end in getattr(self, "func_starts", set())):
              func.body_lines.append(
@@ -11053,7 +11068,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
  
          # Infinite no-op self-loop (the SPU `br .` halt idiom): a function whose
          # whole body is nops + an unconditional branch back into itself does
-@@ -603,8 +1478,200 @@
+@@ -603,8 +1486,200 @@
                      "    spu_halt(ctx); return;",
                  ]
  
@@ -11255,7 +11270,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
  
      @staticmethod
      def _branch_target(insn: SPUInstruction):
-@@ -648,6 +1715,15 @@
+@@ -648,6 +1723,15 @@
          def ra(): return _reg(ops[1])
          def rb(): return _reg(ops[2])
          def g(i): return f"ctx->gpr[{i}]"
@@ -11271,7 +11286,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
  
          # ---- nop / sync / stop ----
          if mn in ("nop", "lnop"):
-@@ -670,10 +1746,10 @@
+@@ -670,10 +1754,10 @@
                  # lv2 services these and resumes at the next instruction (the
                  # reply is read from the inbound mailbox right after the stop).
                  # spu_stop puts the context back to RUNNING when it serviced it.
@@ -11285,7 +11300,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      f"ctx->status = SPU_STATUS_STOPPED_BY_STOP; spu_stop(ctx); return;")
  
          # ---- immediate loaders ----
-@@ -714,14 +1790,14 @@
+@@ -714,14 +1798,14 @@
                  cond = f"(int32_t){pw(ra())} > (int32_t){pw(rb())}"
              else:  # hlgt
                  cond = f"{pw(ra())} > {pw(rb())}"
@@ -11302,7 +11317,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      "ctx->status = SPU_STATUS_STOPPED_BY_STOP; spu_stop(ctx); return;")
  
          # ---- integer arithmetic (register) ----
-@@ -857,33 +1933,64 @@
+@@ -857,33 +1941,71 @@
              return f"{g(rt())} = spu_{mn}({g(ra())}, {g(rb())}, {g(rt())});"
  
          # ---- quadword loads / stores ----
@@ -11372,11 +11387,18 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
          if mn == "wrch":
              # operands: channel, $rt
 -            return f"spu_wrch(ctx, {_chan(ops[0])}, {g(_reg(ops[1]))});"
-+            return f"{SY}spu_wrch(ctx, {_chan(ops[0])}, {g(_reg(ops[1]))});"
++            ch = _chan(ops[0])
++            # An MFC parameter write only sets a context field, and with SPU_CH_INLINE the lifted
++            # job makes that store itself (spu_wrch_inl): the registers need not be stored first.
++            # With a channel diagnostic on it is the call, which then sees the registers as they
++            # were at the last call; none of the parameter channels' diagnostics look at them.
++            if self.inline_wrch and ch in _WRCH_PARAM:
++                return f"spu_wrch(ctx, {ch}, {g(_reg(ops[1]))});"
++            return f"{SY}spu_wrch(ctx, {ch}, {g(_reg(ops[1]))});"
  
          # ---- branches ----
          if mn in ("br", "bra"):
-@@ -893,7 +2000,7 @@
+@@ -893,7 +2015,7 @@
              # `goto loc_self` busy-spins the host thread forever; stop the SPU
              # instead (same halt path the lifter emits for a `stop` instruction).
              if tgt == addr:
@@ -11385,7 +11407,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
              return self._uncond_branch(tgt, func)
          if mn in ("brsl", "brasl"):
              # The disassembler drops the link register from brsl operands, so
-@@ -910,7 +2017,7 @@
+@@ -910,7 +2032,7 @@
              # boot in cri_audio_00023C58). Set the link, then stop the SPU (same
              # halt path the lifter emits for a `stop` instruction).
              if tgt == addr:
@@ -11394,7 +11416,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
              # PC-GETTER IDIOM: `brsl rX, .+4` (target == next instruction) just
              # loads PC+4 into rX for PC-relative addressing / computed jump tables;
              # it is NOT a real call. Emitting a host call here imbalances the C
-@@ -927,9 +2034,9 @@
+@@ -927,9 +2049,9 @@
                  # `bi $r0` returns via host return) + SPU_DRAIN (drains the
                  # callee's own tail-chains so they don't grow the caller frame)
                  # + image save/restore (adopt-on-serve cannot leak upward).
@@ -11407,7 +11429,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
              return f"{link} /* TODO spu: brsl unresolved target */;"
          if mn in _COND_BR:
              tgt = self._branch_target(insn)
-@@ -943,7 +2050,7 @@
+@@ -943,7 +2065,7 @@
              # Cross-function conditional branch = conditional tail: a direct
              # tail call when the drain has nothing to do on this step, else
              # the trampoline and unwind (SPU_DIRECT, spu_context.h).
@@ -11416,7 +11438,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      f"{self.prefix}spu_func_{tgt:08X}); }}")
          # Interrupt enable/disable bits on the bi family (bie/bid, irete/iretd,
          # bisle(d)...): bit 0x40000 = E (enable), 0x80000 = D (disable), taking
-@@ -955,6 +2062,11 @@
+@@ -955,6 +2077,11 @@
          # For bi/bisl the disassembler emits only "$rA" (ops[0] = target reg).
          if mn in ("bi",):
              tgt_reg = _reg(ops[0])
@@ -11428,7 +11450,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
              # SPU ABI: $r0 is the link register. `bi $r0` is the standard
              # function return — translate to a host return so call/return
              # discipline matches the C function nesting from brsl. EXCEPTION:
-@@ -969,14 +2081,14 @@
+@@ -969,14 +2096,14 @@
                  # publish THAT register as the return PC: SPU_RET publishes r0,
                  # and spu_drain_call restarts dispatch when pc != return_pc.
                  if tgt_reg != "0":
@@ -11447,7 +11469,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      "g_spu_trampoline_fn = spu_indirect_branch; return;")
          if mn in ("bisl",):
              # `bisl rt, ra`: rt = link, ra = TARGET. The disassembler emits BOTH
-@@ -992,10 +2104,10 @@
+@@ -992,10 +2119,10 @@
              # here and its `bi $r0` returns via host return.
              # read the target BEFORE writing the link: rt may be the same register as ra
              return (f"{{ uint32_t _tg = {g(tgt_reg)}._u32[0]; {g(link_rt)} = spu_link(0x{(addr + 4) & 0x3FFFC:X}); "
@@ -11460,7 +11482,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
          # bisled: set link, branch to RA only if an external event is pending.
          if mn in ("bisled",):
              link_rt = insn.raw & 0x7F            # rt = link
-@@ -1003,7 +2115,7 @@
+@@ -1003,7 +2130,7 @@
              # read the target before writing the link: rt may alias ra
              return (f"{{ uint32_t _tg = {g(tgt_reg)}._u32[0]; {g(link_rt)} = spu_link(0x{(addr + 4) & 0x3FFFC:X}); "
                      f"if ((ctx->event_status & ctx->event_mask) != 0) {{ "
@@ -11469,7 +11491,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      f"g_spu_trampoline_fn = spu_indirect_branch; return; }} }}")
          # biz/binz/bihz/bihnz: ops[0] = condition reg, ops[1] = target reg.
          if mn in ("biz", "binz", "bihz", "bihnz"):
-@@ -1017,9 +2129,9 @@
+@@ -1017,9 +2144,9 @@
              if (tgt_reg == "0" and addr not in self.bi_r0_jump) \
                      or addr in self.link_return:
                  if tgt_reg != "0":
@@ -11482,7 +11504,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                      f"g_spu_trampoline_fn = spu_indirect_branch; return; }}")
  
          # hint-for-branch: pure performance hint, safe to drop
-@@ -1035,6 +2147,13 @@
+@@ -1035,6 +2162,13 @@
                  f'spu_unsupported(0x{insn.addr:X}, "{mn}");')
  
      # ------------------------------------------------------------------ #
@@ -11496,7 +11518,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
      def _cond(self, mn: str, reg: str) -> str:
          """Condition expression on preferred slot for conditional branches."""
          word = f"ctx->gpr[{reg}]._u32[0]"
-@@ -1057,17 +2176,25 @@
+@@ -1057,17 +2191,25 @@
          # drain has nothing to do on this step, else hand the target to the
          # trampoline and unwind so the enclosing SPU_DRAIN re-enters (no
          # host-stack growth either way; SPU_DIRECT, spu_context.h).
@@ -11523,7 +11545,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
          lines.append("")
          lines.append("/* Runtime glue (runtime/spu/spu_channels.c) */")
          lines.append("void spu_register_function(uint32_t addr, void (*fn)(spu_context*));")
-@@ -1080,11 +2207,15 @@
+@@ -1080,11 +2222,15 @@
      def emit_source(self,header_name: str) -> str:
          lines = [SOURCE_PREAMBLE.format(header_name=header_name), ""]
          weak = "__attribute__((weak)) " if getattr(self, "weak_emit", False) else ""
@@ -11541,7 +11563,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
              lines.append("")
  
          # Stubs for cross-function branch/call targets the function-boundary
-@@ -1100,10 +2231,14 @@
+@@ -1100,10 +2246,14 @@
              lines.append(" * function detector did not seed (typically conditional")
              lines.append(" * branches that escape a function's range). */")
              for t in externs:
@@ -11557,13 +11579,16 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
              lines.append("")
  
          lines.append("/* Function table */")
-@@ -1188,6 +2323,45 @@
+@@ -1188,6 +2338,48 @@
                          "changes speed, not which code can be reached.")
      p.add_argument("--max-group-insns", type=int, default=4000,
                     help="Cap on instructions per merged group (keeps clang fast).")
 +    p.add_argument("--no-loop-head-loads", action="store_true",
 +                   help="With register locals, a loop head holds only the registers held on every "
 +                        "way in (the old output) instead of every register its loop uses.")
++    p.add_argument("--no-inline-wrch", action="store_true",
++                   help="Store the registers before every write to an MFC parameter channel (LSA, "
++                        "EAH, EAL, Size, TagID, WrTagMask), as before, instead of only before the others.")
 +    p.add_argument("--no-pcget-direct", action="store_true",
 +                   help="Lift `brsl $rX,.+4; ai $rX,$rX,K; bi $rX` through the indirect-branch "
 +                        "dispatcher as before, instead of as a direct branch to link+K.")
@@ -11603,7 +11628,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
      p.add_argument("--force-indirect", default="",
                     help="Comma-separated `bi $rN` addresses to emit as GENERIC "
                          "indirect dispatch, overriding the link-register-return "
-@@ -1311,12 +2485,25 @@
+@@ -1311,12 +2503,26 @@
      insns = disassemble_spu(data, base)
  
      lifter = SPULifter(trace=args.trace, prefix=args.symbol_prefix)
@@ -11623,13 +11648,14 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
                f"(r0 set by lqa/lqr/il/ila, not a link): "
                f"{', '.join(f'0x{a:X}' for a in sorted(lifter.bi_r0_jump))}")
      lifter.link_return = compute_link_returns(insns, bounds)
++    lifter.inline_wrch = not (args.no_inline_wrch or args.trace)
 +    if not args.no_pcget_direct:
 +        lifter.pcget_bi = compute_pcget_branches(insns)
 +        lifter.func_starts = {s for (s, _e) in bounds}
      if args.force_indirect:
          forced = {int(x, 0) for x in args.force_indirect.split(",") if x.strip()}
          dropped = lifter.link_return & forced
-@@ -1341,8 +2528,40 @@
+@@ -1341,8 +2547,40 @@
                                      entry_points=seeds)
          print(f"  {len(groups)} merged function group(s) "
                f"(--merge-chunks, max {args.max_group_insns} insns)")
@@ -11671,7 +11697,7 @@ diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
  
      os.makedirs(args.output, exist_ok=True)
      hp = os.path.join(args.output, args.header_name)
-@@ -1363,6 +2582,8 @@
+@@ -1363,6 +2601,8 @@
      print(f"Wrote {sp}")
      print(f"  {len(lifter.functions)} function(s) lifted")
      print(f"  {len(lifter.call_targets)} call target(s)")
