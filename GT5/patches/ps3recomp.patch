@@ -19311,7 +19311,7 @@ diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
-@@ -1,3319 +1,4285 @@
+@@ -1,3319 +1,4330 @@
 -/*
 - * ps3recomp - SPU channel + indirect-branch runtime glue
 - *
@@ -26105,6 +26105,49 @@ diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
 +    return done;
 +}
 +
++/* SPU_IB_HIST=1: every 5 s, the indirect-branch targets that reached this full resolver most often
++ * (image, LS address, count), to find which guest code pays for dispatch. */
++static void spu_ib_hist(const spu_context* ctx)
++{
++    enum { N = 4096 };
++    static struct { volatile uint32_t key; volatile uint32_t n; } tab[N];
++    static volatile unsigned long long total, t0_ms;
++    const uint32_t key = ((uint32_t)(ctx->image_id & 0xFFF) << 20) | (ctx->pc & SPU_LS_MASK) | 1u;
++    uint32_t h = (key * 0x9E3779B1u) >> 20;
++    for (int probe = 0; probe < 16; probe++, h = (h + 1) & (N - 1)) {
++        uint32_t k = __atomic_load_n(&tab[h].key, __ATOMIC_RELAXED);
++        if (!k && __atomic_compare_exchange_n(&tab[h].key, &k, key, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) k = key;
++        if (k == key) { __atomic_fetch_add(&tab[h].n, 1, __ATOMIC_RELAXED); break; }
++    }
++    const unsigned long long t = __atomic_add_fetch(&total, 1, __ATOMIC_RELAXED);
++    if ((t & 0xFFFF) == 0) {
++#ifdef _WIN32
++        const unsigned long long now = GetTickCount64();
++#else
++        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
++        const unsigned long long now = (unsigned long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
++#endif
++        unsigned long long t0 = __atomic_load_n(&t0_ms, __ATOMIC_RELAXED);
++        if (!t0) { __atomic_store_n(&t0_ms, now, __ATOMIC_RELAXED); return; }
++        if (now - t0 < 5000 || !__atomic_compare_exchange_n(&t0_ms, &t0, now, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return;
++        uint32_t best[24] = {0}, bn[24] = {0};
++        unsigned long long sum = 0;
++        for (int i = 0; i < N; i++) {
++            const uint32_t n = __atomic_exchange_n(&tab[i].n, 0, __ATOMIC_RELAXED);
++            sum += n;
++            for (int j = 0; j < 24; j++)
++                if (n > bn[j]) {
++                    for (int m = 23; m > j; m--) { bn[m] = bn[m - 1]; best[m] = best[m - 1]; }
++                    bn[j] = n; best[j] = tab[i].key; break;
++                }
++        }
++        fprintf(stderr, "[ib-hist] %llu indirect branches/s through the full resolver; top:", sum * 1000 / (now - t0));
++        for (int j = 0; j < 24 && bn[j]; j++)
++            fprintf(stderr, " img%u:%05X=%u", best[j] >> 20, (best[j] & SPU_LS_MASK) & ~1u, (unsigned)(bn[j] * 1000ull / (now - t0)));
++        fputc(10, stderr);
++    }
++}
++
 +/* The whole dispatcher. spu_indirect_branch (below) takes the plain case
 + * itself and hands everything else here. */
 +#if defined(_MSC_VER) && !defined(__clang__)
@@ -26120,6 +26163,8 @@ diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
 +     * and falls into branch-to-0. All lifted funcs live below SPU_LS_SIZE, so
 +     * masking is a no-op for already-valid targets. */
 +    ctx->pc &= SPU_LS_MASK;
++    { static int s_h = -1; if (s_h < 0) s_h = getenv("SPU_IB_HIST") ? 1 : 0;
++      if (__builtin_expect(s_h, 0)) { spu_ib_hist(ctx); } }
 +    /* Interrupt-return register restore (see spu_drain.c spu_irq_regs_save):
 +     * the WWS handler's save/restore shim lives at unlifted top-of-LS, so we
 +     * enforce the preserve-all-registers hardware contract here -- the first
