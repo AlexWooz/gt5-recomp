@@ -24,6 +24,10 @@ cfg() {   # cfg <dir> <flags>
         -DPS3RECOMP_RSX_VULKAN=ON -DPS3RECOMP_FFMPEG_RUNTIME=ON \
         "-DCMAKE_C_FLAGS=$2" "-DCMAKE_CXX_FLAGS=$2" "${@:3}"
 }
+put() {   # put <binary>: becomes build-linux/gt5, also while the game runs (a copy over a running
+          # executable fails with "Text file busy"; a rename does not)
+    cp -p "$1" "$GT5/build-linux/gt5.new" && mv -f "$GT5/build-linux/gt5.new" "$GT5/build-linux/gt5"
+}
 case "${1:-}" in
 gen)
     cfg build-pgo-gen "-fprofile-generate" -DCMAKE_EXE_LINKER_FLAGS=-fprofile-generate
@@ -31,14 +35,14 @@ gen)
 record)
     mkdir -p "$PROF"; rm -f "$PROF"/*.profraw
     cp -p "$GT5/build-linux/gt5" "$GT5/build-linux/gt5.release"
-    cp -p "$GT5/build-pgo-gen/gt5" "$GT5/build-linux/gt5"
+    put "$GT5/build-pgo-gen/gt5"
     sed -i "/pgo_linux.sh record/d; /LLVM_PROFILE_FILE/d" "$GT5/settings.sh" 2>/dev/null || true
     printf '# pgo_linux.sh record (temporary)\nexport LLVM_PROFILE_FILE=%s/gt5-%%p.profraw\n' "$PROF" >> "$GT5/settings.sh"
     echo "Play menus and a race, quit the game itself, then: bash scripts/pgo_linux.sh use" ;;
 use)
     llvm-profdata merge -o "$PROF/gt5.profdata" "$PROF"/gt5-*.profraw
     sed -i "/pgo_linux.sh record/d; /LLVM_PROFILE_FILE/d" "$GT5/settings.sh"
-    [ -f "$GT5/build-linux/gt5.release" ] && cp -p "$GT5/build-linux/gt5.release" "$GT5/build-linux/gt5"
+    if [ -f "$GT5/build-linux/gt5.release" ]; then put "$GT5/build-linux/gt5.release"; fi
     cfg build-pgo-use "-fprofile-use=$PROF/gt5.profdata -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
     # ninja does not track the profile: with the same flags and sources a new profile would be
     # ignored ("no work to do"), so every object is rebuilt.
@@ -46,7 +50,7 @@ use)
     ninja -C "$GT5/build-pgo-use" -j "$JOBS" gt5 ;;
 install)
     [ -f "$GT5/build-linux/gt5.release" ] || cp -p "$GT5/build-linux/gt5" "$GT5/build-linux/gt5.release"
-    cp -p "$GT5/build-pgo-use/gt5" "$GT5/build-linux/gt5"
+    put "$GT5/build-pgo-use/gt5"
     echo "build-linux/gt5 is now the profile-guided build (normal build: build-linux/gt5.release)" ;;
 *) sed -n '2,19p' "$0"; exit 1 ;;
 esac
