@@ -4,6 +4,9 @@
 #   powershell -ExecutionPolicy Bypass -File update.ps1 -List               list the versions
 #   powershell -ExecutionPolicy Bypass -File update.ps1 -Version v0.1.0     switch to that version
 #   powershell -ExecutionPolicy Bypass -File update.ps1 -Dev                newest changes not yet released
+#   powershell -ExecutionPolicy Bypass -File update.ps1 -Test               the test build: changes still being
+#                                                                           tried out, when there is one (plain
+#                                                                           update.ps1 goes back to the release)
 # -NoBuild switches without building (build later with GT5\scripts\build.cmd gt5); -Force re-lifts and
 # rebuilds even when nothing changed. Easiest: the launcher's Updates page, or double-click Update.bat.
 # (-Relaunch <exe>: the launcher's Update button; this opens it again when done.)
@@ -12,7 +15,7 @@
 # play.bat (set aside during the switch and put back). The previous gt5.exe is kept as
 # GT5\build\gt5.previous.exe. The slow re-lift only runs when a version changes the lift tools;
 # otherwise only the changed code is rebuilt.
-param([string]$Version, [switch]$List, [switch]$Dev, [switch]$NoBuild, [switch]$Force, [switch]$Here, [string]$Relaunch)
+param([string]$Version, [switch]$List, [switch]$Dev, [switch]$Test, [switch]$NoBuild, [switch]$Force, [switch]$Here, [string]$Relaunch)
 # Errors are checked through exit codes: with "Stop", Windows PowerShell turns git's progress messages
 # on stderr into errors.
 $ErrorActionPreference = "Continue"
@@ -117,7 +120,12 @@ $label = $from
 if (-not $Here) {
     git -C $base fetch --quiet --tags origin
     if ($LASTEXITCODE -ne 0) { Fail "couldn't reach GitHub" }
-    if ($Dev) {
+    if ($Test) {
+        # The test build: a branch of its own that releases never point at.
+        git -C $base fetch --quiet origin "+refs/heads/test:refs/remotes/origin/test"
+        if ($LASTEXITCODE -ne 0) { Fail "there is no test build at the moment" }
+        $target = "origin/test"; $label = "the test build"
+    } elseif ($Dev) {
         $target = "origin/main"; $label = "the newest development build"
     } elseif ($Version) {
         if ($Version -notmatch '^v') { $Version = "v$Version" }

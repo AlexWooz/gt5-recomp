@@ -9,6 +9,13 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.107**
+
+🧪 **A test channel**
+- `update.ps1 -Test` switches an install to the test build: changes that are still being tried out, kept on
+  a branch of their own (`test`) that releases, new installs and the launcher's Update never point at.
+  A plain `update.ps1` (or Update.bat, or the launcher's Update) goes back to the newest release. When
+  there is no test build it says so.
 🏷️ Released as **v0.1.106**
 
 🎨 **Installer: a calmer look and plainer words**

@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.107](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.107) | 17 Nov 2026 | A test channel: update.ps1 -Test |
 | [v0.1.106](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.106) | 17 Nov 2026 | Installer: calmer look (no red banner), plain wording, titled GT5 Recomp |
 | [v0.1.105](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.105) | 17 Nov 2026 | Installer: one window, no RPCS3, nothing installed into Windows, and a processor check |
 | [v0.1.104](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.104) | 17 Nov 2026 | The port's own Python (python.org 3.11.9 in tools\python): no Python install, the PC's Python is no longer used |
