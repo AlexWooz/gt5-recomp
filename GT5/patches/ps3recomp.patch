@@ -9922,6 +9922,15 @@ diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
          lines.append("}")
          lines.append("")
          return lines
+@@ -4255,7 +4447,7 @@
+             with open(path, "r") as f:
+                 if f.read() == text:
+                     return False
+-        except OSError:
++        except (OSError, UnicodeDecodeError):   # unreadable as text here (e.g. lifted on Windows): rewrite
+             pass
+         tmp = path + ".tmp"
+         with open(tmp, "w") as f:
 @@ -4402,6 +4594,46 @@
          # blr, bctr, or `b` without link ends the run
          if v in (0x4E800020, 0x4E800420) or (v >> 26 == 18 and not v & 1):
