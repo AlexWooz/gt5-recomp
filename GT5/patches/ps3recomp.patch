@@ -6730,18 +6730,20 @@ diff --git a/tools/find_spu_functions.py b/tools/find_spu_functions.py
  def collect_ila_continuation_targets(insns, code_start, code_end):
      """Continuation addresses materialised as plain immediates:
  
-@@ -434,6 +508,11 @@
+@@ -434,7 +508,12 @@
      return targets
  
  
+-def collect_duff_targets(insns, code_start, code_end, window=12, span=64):
 +# First operand is not a register written (branches, hints, no-ops).
 +_DUFF_NO_WRITE = {"br", "bra", "brsl", "brasl", "bi", "bisl", "bisled", "biz", "binz", "bihz",
 +                  "bihnz", "brz", "brnz", "brhz", "brhnz", "iret", "nop", "lnop", "sync", "dsync"}
 +
 +
- def collect_duff_targets(insns, code_start, code_end, window=12, span=64):
++def collect_duff_targets(insns, code_start, code_end, window=12, span=64, span_always=False):
      """Mid-ladder entries of a Duff's device (computed jump into an unrolled
      loop). Sony's SPU job CRT clears BSS with one:
+ 
 @@ -463,6 +542,11 @@
          reg = ops[0]
          link = None
@@ -6768,7 +6770,7 @@ diff --git a/tools/find_spu_functions.py b/tools/find_spu_functions.py
          if link is None or imm <= 0:
              continue
          base = link + imm
-+        if not computed:
++        if not computed and not span_always:   # --duff-span-always: the span every time, as before
 +            if code_start <= base < code_end:
 +                targets.add(base)
 +            continue
@@ -6780,7 +6782,7 @@ diff --git a/tools/find_spu_functions.py b/tools/find_spu_functions.py
  
  
 -def detect_functions(buf, base_override=None, verbose=True, raw=False):
-+def detect_functions(buf, base_override=None, verbose=True, raw=False, entry=None):
++def detect_functions(buf, base_override=None, verbose=True, raw=False, entry=None, duff_span_always=False):
      if raw:
          # A raw local-store image: a SPURS job binary, which the title loads
          # from its own data files as a flat code+data blob rather than as an
@@ -6793,28 +6795,35 @@ diff --git a/tools/find_spu_functions.py b/tools/find_spu_functions.py
                                         "vaddr": base, "filesz": len(buf),
                                         "memsz": len(buf)}], "shs": []}
          text_off, text_va, text_size = 0, base, len(buf)
-@@ -656,6 +747,8 @@
+@@ -656,8 +747,10 @@
      for t in (collect_link_register_targets(insns)
                | collect_computed_branch_targets(insns)
                | collect_jump_table_targets(insns, code, code_start, code_end)
 +              | collect_bi_table_targets(insns, code, code_start, code_end)
 +              | collect_after_bi_targets(insns)
                | collect_ila_continuation_targets(insns, code_start, code_end)
-               | collect_duff_targets(insns, code_start, code_end)
+-              | collect_duff_targets(insns, code_start, code_end)
++              | collect_duff_targets(insns, code_start, code_end, span_always=duff_span_always)
                | fptr_targets):
-@@ -728,12 +821,14 @@
+         if code_start <= t < code_end and (t & 3) == 0 and t in insns_by_addr:
+             seed_starts.add(t)
+@@ -728,12 +821,18 @@
                          "from the branch analysis")
      p.add_argument("--base", type=lambda x: int(x, 0), default=None,
                     help="Override the .text base address")
 +    p.add_argument("--entry", type=lambda x: int(x, 0), default=None,
 +                   help="With --raw: the entry address, for images whose start is a header")
++    p.add_argument("--duff-span-always", action="store_true",
++                   help="Seed the 64 bytes after every PC-getter `bi` as entries, as before the "
++                        "constant-target case was told apart (keeps an older lift byte-for-byte)")
      args = p.parse_args()
  
      with open(args.input, "rb") as f:
          buf = f.read()
  
 -    funcs, (text_off, base, size) = detect_functions(buf, args.base, raw=args.raw)
-+    funcs, (text_off, base, size) = detect_functions(buf, args.base, raw=args.raw, entry=args.entry)
++    funcs, (text_off, base, size) = detect_functions(buf, args.base, raw=args.raw, entry=args.entry,
++                                                    duff_span_always=args.duff_span_always)
  
      out_obj = [{"start": s, "end": e} for s, e in funcs]
      if args.out:

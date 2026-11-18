@@ -42,6 +42,24 @@ WWS_SAMPLE = 64  # code bytes checked at first dispatch; pins the overlay to its
 NAME_RE = re.compile(r"^spujob_([0-9A-Fa-f]{16})_(\d+)\.bin$")
 
 
+# Images with hand-written native functions (src/native/natives.txt) are used only when their lifted
+# file is byte-for-byte the one those were written against (its lift-sha1). Such an image is lifted
+# as it was then: without the lifter's newer output changes, which would otherwise turn its natives off.
+OLD_LIFT_FINDER = ["--duff-span-always"]
+OLD_LIFT_LIFTER = ["--no-pcget-direct", "--no-inline-wrch"]
+
+
+def native_images():
+    f = ROOT / "src" / "native" / "natives.txt"
+    if not f.exists():
+        return set()
+    return {p[0] for p in (l.split() for l in f.read_text(encoding="utf-8").splitlines())
+            if len(p) >= 3 and p[1] == "lift-sha1"}
+
+
+NATIVE_IMAGES = native_images()
+
+
 def run(*args):
     r = subprocess.run([sys.executable, *map(str, args)], capture_output=True, text=True, cwd=ROOT)
     if r.returncode:
@@ -55,10 +73,13 @@ def lift(blob, fp):
     outdir = OUT / f"j{fp[:8]}"
     outdir.mkdir(parents=True, exist_ok=True)
     funcs = OUT / f"j{fp[:8]}_funcs.json"
-    out = run(TOOLS / "find_spu_functions.py", "--raw", "--base", hex(base), "--out", funcs, blob)
+    old = f"j{fp[:8]}" in NATIVE_IMAGES
+    out = run(TOOLS / "find_spu_functions.py", "--raw", "--base", hex(base), "--out", funcs, blob,
+              *(OLD_LIFT_FINDER if old else []))
     m = re.search(r"Detected ([\d,]+) function", out)
     run(TOOLS / "spu_lifter.py", blob, "--base", hex(base), "--functions", funcs,
-        "--symbol-prefix", f"gt5_j{fp[:8]}", "--output", outdir, "--source-name", "spu_recomp.c")
+        "--symbol-prefix", f"gt5_j{fp[:8]}", "--output", outdir, "--source-name", "spu_recomp.c",
+        *(OLD_LIFT_LIFTER if old else []))
     return int(m.group(1).replace(",", "")) if m else 0
 
 
@@ -89,11 +110,13 @@ def lift_wws(job):
     outdir = OUT / name
     outdir.mkdir(parents=True, exist_ok=True)
     funcs = OUT / f"{name}_funcs.json"
+    old = name in NATIVE_IMAGES
     out = run(TOOLS / "find_spu_functions.py", "--raw", "--base", hex(WWS_BASE), "--entry", hex(WWS_BASE + entry),
-              "--out", funcs, path)
+              "--out", funcs, path, *(OLD_LIFT_FINDER if old else []))
     m = re.search(r"Detected ([\d,]+) function", out)
     run(TOOLS / "spu_lifter.py", path, "--base", hex(WWS_BASE), "--functions", funcs, "--code-end", hex(WWS_BASE + code),
-        "--return-entries", "--merge-chunks", "--symbol-prefix", f"gt5_{name}", "--output", outdir, "--source-name", "spu_recomp.c")
+        "--return-entries", "--merge-chunks", "--symbol-prefix", f"gt5_{name}", "--output", outdir, "--source-name", "spu_recomp.c",
+        *(OLD_LIFT_LIFTER if old else []))
     return int(m.group(1).replace(",", "")) if m else 0
 
 
