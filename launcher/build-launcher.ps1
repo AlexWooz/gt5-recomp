@@ -33,6 +33,9 @@ if ((Test-Path $png) -and -not (Test-Path $icon)) {
     } catch {}
 }
 
+# Launchers an earlier build set aside because they were open (below): gone once nothing runs them.
+Get-ChildItem -LiteralPath $root -Filter "GT5Launcher.exe.old*" -File -ErrorAction SilentlyContinue |
+    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 $tmp = Join-Path $env:TEMP ("GT5Launcher-" + [guid]::NewGuid().ToString("N") + ".exe")
 $cscArgs = @("/nologo", "/target:winexe", "/optimize+", "/codepage:65001", "/out:$tmp",
              "/r:System.dll", "/r:System.Drawing.dll", "/r:System.Windows.Forms.dll", "/r:System.Web.Extensions.dll")
@@ -47,9 +50,21 @@ try {
     Move-Item -LiteralPath $tmp -Destination $exe -Force -ErrorAction Stop
     Write-Host "launcher: built GT5Launcher.exe"
 } catch {
-    Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
-    Write-Host "launcher: GT5Launcher.exe is open, so it wasn't replaced; close it and run update.ps1 -Force or this script again." -ForegroundColor Yellow
-    exit 0
+    # It is open (a player keeps it open for days). Windows lets a running program's file be renamed: the open one
+    # goes on from GT5Launcher.exe.old, the new one takes its name, and the next start is the new one (the old file
+    # goes at the next build).
+    $old = "$exe.old"
+    if (Test-Path -LiteralPath $old) { $old = "$exe.old-" + (Get-Date -Format "yyyyMMddHHmmss") }
+    try {
+        Rename-Item -LiteralPath $exe -NewName (Split-Path $old -Leaf) -ErrorAction Stop
+        Move-Item -LiteralPath $tmp -Destination $exe -ErrorAction Stop
+        Write-Host "launcher: built GT5Launcher.exe (the open one is set aside as $(Split-Path $old -Leaf) until it closes)"
+    } catch {
+        if ((Test-Path -LiteralPath $old) -and -not (Test-Path -LiteralPath $exe)) { Rename-Item -LiteralPath $old -NewName "GT5Launcher.exe" -ErrorAction SilentlyContinue }
+        Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+        Write-Host "launcher: GT5Launcher.exe couldn't be replaced ($($_.Exception.Message)); the next update tries again." -ForegroundColor Yellow
+        exit 0
+    }
 }
 
 # The desktop shortcut.

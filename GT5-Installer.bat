@@ -24,9 +24,12 @@ goto :eof
 #
 # What it does, in the install folder you choose (each step skips what is already done, so running it
 # again carries on after a stop, and on an existing install it updates and rebuilds):
-#   1. checks the PC: the compiler (a Visual Studio with the Clang tools is used as it is; otherwise
-#      Microsoft's licence for the compiler libraries is shown and only YOU can accept it) and Git (the
-#      PC's own, else Git for Windows' portable MinGit in the install folder's tools\git)
+#   1. checks the PC: the compiler (a Visual Studio with the Clang tools is used as it is; otherwise the
+#      compiler tools are fetched in step 3) and Git (the PC's own, else Git for Windows' portable MinGit in
+#      the install folder's tools\git). Parts that come under another company's licence (Microsoft's C++
+#      libraries in the compiler tools; NVIDIA DLSS on a PC with an NVIDIA RTX card) are named, with links to
+#      their licences, in one line by the Install button: pressing Install is the player's acceptance, and
+#      only the parts that line named are fetched under it (.gt5\installer-licences.txt records them).
 #   2. downloads the port's code from GitHub (code only: nothing from the game), or updates it
 #   3. fetches the port's own Python (python.org's 3.11.9, 17 MB) into tools\python and, without Visual
 #      Studio, the compiler tools (about 1.5 GB) into tools\toolchain. Nothing is installed in Windows, and
@@ -34,7 +37,8 @@ goto :eof
 #   4. installs the PS3 system software from Sony's PS3UPDAT.PUP into GT5\dev_flash
 #   5. copies your game (a disc folder or an .iso) into GT5\vfs
 #   6. unlocks (decrypts) the game's EBOOT.BIN into GT5\input\EBOOT.elf
-#   7. and 8. runs setup.ps1, which generates the game code and builds gt5.exe (and GT5Launcher.exe)
+#   7. and 8. runs setup.ps1, which generates the game code and builds gt5.exe with both renderers
+#      (DirectX 12 and Vulkan) and GT5Launcher.exe, then adds AMD FSR 3 and, when the line named it, NVIDIA DLSS
 # Steps 4 and 6 need Sony's keys, which this project never publishes: GT5\scripts\ps3_unlock.py fetches
 # them from RPCS3's public source, and RPCS3 itself is fetched as a fallback tool only when that fails.
 #
@@ -47,21 +51,25 @@ goto :eof
 #   "engine"  the work (Invoke-Install), reporting as lines on its standard output (Send).
 #   "console" the same work, reporting to the console (GT5_INSTALL_NOGUI=1).
 # The engine only reports through the Report functions (Step-Start, Step-End, Set-Now, Set-Pct, Say,
-# Note, Ask-Licence, Stop-Install); the window never does the work itself.
+# Note, Stop-Install); the window never does the work itself. What the player accepted with the Install
+# button reaches the engine as GT5_INSTALL_ACCEPTED (the ids of the parts the line named, "dlss,msvc").
 #
 # Test switches (environment variables):
 #   GT5_INSTALL_NOGUI=1        no window: the whole install in the console
 #   GT5_INSTALL_GAME / _FIRMWARE / _DEST   the three choices (with the window: the fields' first values)
 #   GT5_INSTALL_NOBUILD=1      stop before the game code and the build (setup.ps1 -NoBuild)
 #   GT5_INSTALL_LNKDIR=<dir>   where the desktop shortcut goes
-#   GT5_INSTALL_NOVS=1         act as if there were no Visual Studio (the compiler tools and the licence)
+#   GT5_INSTALL_NOVS=1         act as if there were no Visual Studio (the compiler tools and their licence)
+#   GT5_INSTALL_NORTX=1        act as if there were no NVIDIA RTX card (no DLSS, no NVIDIA in the licence line)
+#   GT5_INSTALL_NOAVX2=1       act as if the processor had no AVX2 (the first page says the PC can't run the game)
+#   GT5_INSTALL_RAMGB=<n>      act as if the PC had n GB of memory
+#   GT5_INSTALL_ACCEPTED=<ids> console: what was accepted, without the question ("none", or "dlss,msvc")
 #   GT5_INSTALL_NOGIT=1        act as if there were no Git (the portable MinGit in tools\git)
 #   GT5_INSTALL_RPCS3=1        unlock with RPCS3 even when ps3_unlock.py could do it
 #   GT5_INSTALL_NOTAR=1, GT5_INSTALL_NO7Z=1   RPCS3 unpacking: skip tar / the PC's 7-Zip
 #   GT5_INSTALL_UISCALE=<k>    draw the window at that scale (1.5 = 150 %)
 #   GT5_INSTALL_AUTOGO=1       the window fills in the three choices and presses Install itself
 #   GT5_INSTALL_SNAP=<dir>     the window saves a picture of itself at each stage (and stays off screen)
-#   GT5_INSTALL_TESTDECLINE=1  the licence page answers "Don't accept" by itself (it never accepts)
 #   GT5_INSTALL_TESTCANCEL=<s> the window cancels <s> seconds into the work, without asking
 #   GT5_INSTALL_AUTOCLOSE=1    the window closes itself on the last page
 # =====================================================================================================
@@ -100,6 +108,8 @@ $Prologue  = '(?i)prologue|\u30D7\u30ED\u30ED\u30FC\u30B0|\u5E8F\u7AE0|\uD504\uB
 $OtherIds  = @("BCAS20108", "BCAS20218")   # Asian releases players have tried to install
 $RegKey    = "HKCU:\Software\GT5-PC-installer"
 $NeedGB    = 25
+$NeedUpdateGB = 5   # an existing install: the build's changed files and the code generated again
+$NeedRamGB = 8
 $StepTitles = @("Getting ready", "Downloading the code", "Build tools",
                 "PS3 system software", "Your game files", "Preparing the game",
                 "Converting the game", "Building the game")
@@ -260,21 +270,67 @@ function Get-DestState([string]$d) {
     try { $full = [IO.Path]::GetFullPath($d) } catch { return @{ Ok = $false; Text = "That isn't a valid folder path." } }
     $root = [IO.Path]::GetPathRoot($full)
     if (-not (Test-Path -LiteralPath $root)) { return @{ Ok = $false; Text = "Drive $root isn't there." } }
-    $free = [math]::Round((New-Object IO.DriveInfo($root)).AvailableFreeSpace / 1GB)
+    $drive = New-Object IO.DriveInfo($root)
+    $free = [math]::Round($drive.AvailableFreeSpace / 1GB)
+    $fs = ""; try { $fs = "$($drive.DriveFormat)" } catch {}
     $existing = (Test-Path -LiteralPath (Join-Path $full "setup.ps1")) -and (Test-Path -LiteralPath (Join-Path $full "GT5"))
     $resume = (-not $existing) -and (Test-Mark $full "started")
     $st = @{ Ok = $true; Full = $full; Existing = $existing; Resume = $resume; Free = $free
              HasFw = (Test-Path -LiteralPath (Join-Path $full "GT5\dev_flash\sys")) -and -not (Test-Mark $full "firmware-partial")
              HasGame = (Test-Path -LiteralPath (Join-Path $full "GT5\vfs\PS3_GAME\USRDIR")) -and -not (Test-Mark $full "game-partial") }
-    if ($existing -and (Test-Mark $full "started")) { $st.Text = "An unfinished install is here: it carries on where it stopped. $free GB free." }
+    # The space still needed: all of it for a new folder; an install that has the game's data (GT.VOL, 12 GB) needs
+    # room for the build; an update rebuilds what changed.
+    $need = if ($existing -and -not (Test-Mark $full "started")) { $NeedUpdateGB }
+            elseif (Test-Path -LiteralPath (Join-Path $full "GT5\vfs\PS3_GAME\USRDIR\GT.VOL")) { $NeedGB - 15 }
+            else { $NeedGB }
+    $new = -not $existing -and -not $resume
+    if ($new -and (Test-Path -LiteralPath $full) -and (Get-ChildItem -LiteralPath $full -Force | Select-Object -First 1)) {
+        $st.Ok = $false; $st.Text = "That folder isn't empty. Choose an empty or new folder."
+    } elseif ($new -and $fs -match '^FAT') {
+        # FAT32 holds no file over 4 GB, and the game's data is one 12 GB file.
+        $st.Ok = $false; $st.Text = "Drive $root can't hold the game's data. Choose another drive."
+    } elseif ($new -and $full -match '[^\x20-\x7E]') {
+        # The tools and the game read folder names in the PC's code page: letters outside it break them.
+        $st.Ok = $false; $st.Text = "Choose a folder whose path has only English letters and numbers."
+    } elseif ($free -lt $need) {
+        $st.Ok = $false; $st.Text = "Only $free GB free on $root; about $need GB is needed."
+    } elseif ($existing -and (Test-Mark $full "started")) { $st.Text = "An unfinished install is here: it carries on where it stopped. $free GB free." }
     elseif ($existing) { $st.Text = "Already installed here: it will be updated and rebuilt. $free GB free." }
     elseif ($resume) { $st.Text = "An unfinished install is here: it carries on where it stopped. $free GB free." }
-    elseif ((Test-Path -LiteralPath $full) -and (Get-ChildItem -LiteralPath $full -Force | Select-Object -First 1)) {
-        $st.Ok = $false; $st.Text = "That folder isn't empty. Choose an empty or new folder."
-    } elseif ($free -lt $NeedGB) {
-        $st.Ok = $false; $st.Text = "Only $free GB free on $root; about $NeedGB GB is needed."
-    } else { $st.Text = "$free GB free." }
+    else { $st.Text = "$free GB free." }
     return $st
+}
+
+# Can this PC run the game at all? Asked before anything long. "" when it can, else a few plain words. The game is built
+# for processors with AVX2 (GT5\CMakeLists.txt: -mavx2 -mfma ...; one without stops at start), and the first build needs
+# memory. Test switches: GT5_INSTALL_NOAVX2=1, GT5_INSTALL_RAMGB=<n>.
+function Get-PcProblem {
+    if (-not ("Gt5Pc.Cpu" -as [type])) {
+        try {
+            Add-Type -Namespace Gt5Pc -Name Cpu -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(uint feature);
+[DllImport("kernel32.dll")] public static extern ulong GetEnabledXStateFeatures();
+[DllImport("kernel32.dll")] public static extern bool GetPhysicallyInstalledSystemMemory(out ulong kb);
+'@
+        } catch { return "" }
+    }
+    $avx2 = $true; $how = "unknown"
+    try {
+        # No AVX state in use at all: no AVX, so no AVX2 (the processors this stops: before 2013's, and AMD's before
+        # Excavator). Where this Windows knows the AVX entries (39 = AVX), AVX2 (40) is asked directly; an older
+        # Windows answers no to both, and then the processor is given the benefit of the doubt.
+        if (([Gt5Pc.Cpu]::GetEnabledXStateFeatures() -band 4) -eq 0) { $avx2 = $false; $how = "no AVX" }
+        elseif ([Gt5Pc.Cpu]::IsProcessorFeaturePresent(39)) { $avx2 = [Gt5Pc.Cpu]::IsProcessorFeaturePresent(40); $how = "AVX2 $avx2" }
+    } catch {}
+    if ($env:GT5_INSTALL_NOAVX2) { $avx2 = $false; $how = "GT5_INSTALL_NOAVX2" }
+    $script:PcFacts = "processor: $how"
+    if (-not $avx2) { return "This PC's processor is too old for the game." }
+    $gb = 0
+    try { $kb = [uint64]0; if ([Gt5Pc.Cpu]::GetPhysicallyInstalledSystemMemory([ref]$kb)) { $gb = [int][math]::Round($kb / 1MB) } } catch {}
+    if ($env:GT5_INSTALL_RAMGB) { $gb = [int]$env:GT5_INSTALL_RAMGB }
+    $script:PcFacts += ", memory: $gb GB"
+    if ($gb -gt 0 -and $gb -lt $NeedRamGB) { return "This PC has $gb GB of memory; the game needs at least $NeedRamGB GB." }
+    return ""
 }
 
 # Lock files a stopped git leaves in .git ("index.lock exists"), which make the next git refuse to work.
@@ -415,24 +471,15 @@ function Set-Mounted([string]$iso) {
     $script:Mounted = $iso
     if ($script:Pipe) { if ($iso) { Send "mount" @($iso) } else { Send "unmount" @() } }
 }
-# Microsoft's licence: only the player can accept it. True when they did.
-function Ask-Licence([string]$url) {
-    if ($script:Pipe) {
-        Send "ask" @("licence", $url)
-        $a = $null
-        try { $a = [Console]::In.ReadLine() } catch {}
-        return ("$a".Trim([char]0xFEFF, ' ') -eq "yes")
-    }
+# The console has no Install button: the same line, and Enter is the acceptance. True when accepted.
+function Ask-Licences($parts) {
     Write-Host ""
-    Write-Host "Microsoft's C/C++ libraries and the Windows SDK (part of the compiler tools) are Microsoft's, under"
-    Write-Host "the licence of the Visual Studio 2022 Build Tools:"
+    Write-Host "  $(Get-LicenceLine $parts)"
+    foreach ($p in $parts) { Write-Host "    $($p.Name): $($p.Url)" -ForegroundColor Cyan }
     Write-Host ""
-    Write-Host "    $url" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "Please open that link and read it. Only you can accept it; the installer never does it for you."
-    $a = Read-Host "Type yes to accept Microsoft's licence and go on (anything else stops here)"
-    Write-LogLine "Microsoft's licence ($url): answered '$a'"
-    return ("$a".Trim() -eq "yes")
+    $a = Read-Host "  Press Enter to accept them and install (type no to stop)"
+    Write-LogLine "$(Get-LicenceLine $parts) Answered '$a'."
+    return ("$a".Trim() -notmatch '^(?i)n')
 }
 
 # ---- Running programs: their output read line by line, nothing left waiting for an answer ----------------
@@ -558,17 +605,44 @@ function Find-Toolchain([string]$base) {
     foreach ($c in $cands) { if ($c -and (Test-Path -LiteralPath (Join-Path $c "gt5-toolchain.txt"))) { return $c } }
     return $null
 }
-# The link to Microsoft's licence, as get-toolchain.ps1 finds it: the Build Tools entry of Microsoft's
-# Visual Studio 2022 catalog.
-function Get-MsLicence {
-    $url = "https://go.microsoft.com/fwlink/?LinkId=2179911"
-    try {
-        $ch = Invoke-RestMethod -Uri "https://aka.ms/vs/17/release/channel" -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
-        $bt = $ch.channelItems | Where-Object { $_.id -eq "Microsoft.VisualStudio.Product.BuildTools" } | Select-Object -First 1
-        $l = ($bt.localizedResources | Where-Object { $_.language -eq "en-us" } | Select-Object -First 1).license
-        if ($l) { $url = $l }
-    } catch {}
-    return $url
+# ---- The licence line by the Install button -------------------------------------------------------------
+# Parts this install downloads that come under another company's licence, named in one line by the Install
+# button with links to their licences: pressing Install accepts them (the console asks once instead).
+#   msvc  Microsoft's C++ libraries (and the Windows SDK) in the compiler tools, when those are fetched: no
+#         Visual Studio with the Clang tools and a Windows SDK, and no tools fetched before. The link is
+#         get-toolchain.ps1's own (Microsoft's link to the Visual Studio 2022 Build Tools licence).
+#   dlss  NVIDIA DLSS, which setup.ps1 adds after the build on a PC with an NVIDIA RTX card (the install
+#         doesn't have it yet). The tag is the one of $Pin in GT5\scripts\add_dlss.ps1.
+$MsLicence   = "https://go.microsoft.com/fwlink/?LinkId=2179911"
+$DlssLicence = "https://github.com/NVIDIA/DLSS/blob/v310.9.16/LICENSE.txt"
+# An NVIDIA RTX card (DLSS runs on no other): the test add_dlss.ps1 and the launcher make too.
+function Test-RtxCard {
+    if ($env:GT5_INSTALL_NORTX) { return $false }
+    return [bool](@(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue) | Where-Object { "$($_.Name)" -match 'NVIDIA' -and "$($_.Name)" -match '\bRTX\b' })
+}
+# $vsOk: a Visual Studio with the Clang tools and the Windows SDK is on this PC (Find-VsClang + Test-WinSdk);
+# $rtx: Test-RtxCard. Both are asked by the caller, once (they take a moment).
+function Get-LicenceParts([string]$base, [bool]$vsOk, [bool]$rtx) {
+    $parts = @()
+    $haveDlss = $base -and (Test-Path -LiteralPath (Join-Path $base "GT5\build\gt5_upscale_dlss.dll"))
+    if ($rtx -and -not $haveDlss) { $parts += @{ Id = "dlss"; Name = "NVIDIA DLSS"; Url = $DlssLicence } }
+    $haveTc = $base -and (Find-Toolchain $base)
+    if (-not $vsOk -and -not $haveTc) { $parts += @{ Id = "msvc"; Name = "Microsoft's C++ libraries"; Url = $MsLicence } }
+    return , $parts
+}
+function Get-LicenceLine($parts) {
+    if (-not $parts -or $parts.Count -eq 0) { return "" }
+    return "By installing you accept the licences of the parts it downloads: " + (($parts | ForEach-Object { $_.Name }) -join ", ")
+}
+# .gt5\installer-licences.txt: one line per part whose licence the player accepted ("dlss <link> <date>").
+# setup.ps1 and update.ps1 add NVIDIA DLSS (add_dlss.ps1 -Accept) only when it names dlss.
+function Write-LicenceMark([string]$base, $parts) {
+    if (-not $parts -or $parts.Count -eq 0) { return }
+    $f = Join-Path $base ".gt5\installer-licences.txt"
+    New-Item -ItemType Directory -Force (Split-Path $f) | Out-Null
+    $keep = @(Get-Content -LiteralPath $f -ErrorAction SilentlyContinue | Where-Object { $l = $_; -not ($parts | Where-Object { $l -match "^$($_.Id)\b" }) })
+    $new = @($parts | ForEach-Object { "$($_.Id) $($_.Url) accepted with the installer's Install button $(Get-Date -Format 'yyyy-MM-dd HH:mm')" })
+    [IO.File]::WriteAllLines($f, [string[]]($keep + $new))
 }
 # Git for Windows' MinGit (the official portable build, checked by SHA-256 and signature) into $dir.
 # Nothing is installed in Windows; setup.ps1, update.ps1 and the launcher's updates use it from there.
@@ -883,6 +957,11 @@ function Install-Rpcs3Firmware([string]$rp, [string]$pup) {
 function Invoke-Install {
     $pickGame = "$env:GT5_INSTALL_GAME".Trim('"', ' ')
     $pickFw = "$env:GT5_INSTALL_FIRMWARE".Trim('"', ' ')
+    # Before anything long: a PC that can't run the game is told so (the window has already said it and offered no
+    # Install; this is the console's way, and a safety net).
+    $pcProblem = Get-PcProblem
+    Say "This PC: $script:PcFacts"
+    if ($pcProblem) { Stop-Install $pcProblem }
     $dest = Get-DestState "$env:GT5_INSTALL_DEST".Trim('"', ' ')
     if (-not $dest.Ok) { Stop-Install $dest.Text }
     $base = $dest.Full; $gt5 = Join-Path $base "GT5"; $tools = Join-Path $base "tools"
@@ -896,7 +975,23 @@ function Invoke-Install {
     } catch {}
     Say "Installing to $base"
     if ($game.Text) { Say "Game: $($game.Text)" }
+    # The parts the Install button's line named (the window passes them), else, in the console, the same line
+    # and one question.
+    $vsClang = if ($env:GT5_INSTALL_NOVS) { $null } else { Find-VsClang }
+    $useVs = [bool]($vsClang -and (Test-WinSdk))
+    $accepted = @()
+    if ($env:GT5_INSTALL_ACCEPTED) { $accepted = @("$env:GT5_INSTALL_ACCEPTED" -split '[,\s]+' | Where-Object { $_ -and $_ -ne "none" }) }
+    elseif (-not $script:Pipe) {
+        $parts = Get-LicenceParts $base $useVs (Test-RtxCard)
+        if ($parts.Count -gt 0) {
+            if (-not (Ask-Licences $parts)) { Stop-Install "the licences weren't accepted, so nothing was installed." }
+            $accepted = @($parts | ForEach-Object { $_.Id })
+        }
+    }
     if (-not $dest.Existing) { New-Item -ItemType Directory -Force $base | Out-Null; Set-Mark $base "started" }
+    $acceptedParts = @(@(@{ Id = "dlss"; Url = $DlssLicence }, @{ Id = "msvc"; Url = $MsLicence }) | Where-Object { $accepted -contains $_.Id })
+    Write-LicenceMark $base $acceptedParts
+    foreach ($p in $acceptedParts) { Say "  Licence accepted with the Install button: $($p.Id) ($($p.Url))" }
     # On a drive that doesn't record who owns a file (exFAT, FAT32, many USB and network drives) git refuses
     # to work in the install folder ("detected dubious ownership", #41). Trust it for the git this installer
     # and the scripts it starts run, through git's environment config; the player's git settings stay as they are.
@@ -918,15 +1013,16 @@ function Invoke-Install {
     }
     # Python's progress lines (the code generation) arrive as they are printed, not in blocks.
     $env:PYTHONUNBUFFERED = "1"
+    # Another Python's settings (Anaconda, QGIS and others set these for everyone) would make the port's own Python
+    # load that one's libraries.
+    Remove-Item Env:PYTHONHOME, Env:PYTHONPATH -ErrorAction SilentlyContinue
 
     # ---- 1. This PC ----------------------------------------------------------------------------------
     Step-Start 1 "A few seconds."
     Update-Path
-    # The compiler first: when Microsoft's licence has to be asked, it's asked now, before anything big is
-    # downloaded. A Visual Studio with the Clang tools and the Windows SDK that is already here is used as it
-    # is; this installer never installs or changes Visual Studio. GT5_INSTALL_NOVS=1 looks past one.
-    $vsClang = if ($env:GT5_INSTALL_NOVS) { $null } else { Find-VsClang }
-    $useVs = [bool]($vsClang -and (Test-WinSdk))
+    # The compiler first. A Visual Studio with the Clang tools and the Windows SDK that is already here is used
+    # as it is; this installer never installs or changes Visual Studio. GT5_INSTALL_NOVS=1 looks past one.
+    # Otherwise the compiler tools are fetched in step 3, under the licence the Install button's line named.
     $needTc = $false; $tc = $null
     if ($useVs) { Say "  Compiler: the Visual Studio already on this PC ($vsClang)" }
     else {
@@ -935,12 +1031,11 @@ function Invoke-Install {
         else {
             $needTc = $true
             Say "  Compiler: no Visual Studio with the Clang tools here, so the compiler tools are fetched into $tools\toolchain in step 3 (about 1.5 GB; nothing is installed in Windows)"
-            Set-Now "Waiting for you: Microsoft's licence"
-            $lic = Get-MsLicence
-            if (-not (Ask-Licence $lic)) {
-                Stop-Install "Microsoft's licence wasn't accepted, so the compiler tools can't be fetched (nothing was downloaded for them). The other way is Visual Studio 2022 with 'Desktop development with C++', 'C++ Clang tools for Windows' and a Windows 11 SDK, installed by you (README, Requirements); then run this again."
+            if ($accepted -notcontains "msvc") {
+                # The line by the Install button didn't name them (this PC changed since the window looked):
+                # back to the first page, where it now does.
+                Stop-Install "choose Install again: the compiler tools have to be fetched, and the line by the Install button now names their licence."
             }
-            Say "  Microsoft's licence: accepted by you ($lic)"
         }
     }
     $ownGit = Join-Path $tools "git\cmd"
@@ -1023,7 +1118,8 @@ function Invoke-Install {
                 Stop-Install "this copy of the code is too old to fetch its compiler tools from the installer window. Run Update.bat in $base, then run the installer again."
             }
             Set-Now "Downloading build tools (about 1.5 GB)" "10 to 30 minutes, once."
-            # -AcceptLicence: the player accepted Microsoft's licence in step 1 (the window's tick box, or "yes").
+            # -AcceptLicence: the player accepted Microsoft's licence with the Install button, whose line named it
+            # (or, in the console, by answering its one question).
             $code = Invoke-Ps $getTc @("-Path", (Join-Path $tools "toolchain"), "-AcceptLicence") -Dir $base -OnLine {
                 param($l)
                 if ($l -match '^\s*#*\s*(\d{1,3}(?:\.\d)?)%\s*$') { Set-Pct ([double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture)); return $true }
@@ -1087,7 +1183,7 @@ function Invoke-Install {
                 }
             }
             if ($script:Mounted) { Dismount-Iso $script:Mounted; Set-Mounted $null }
-            if ($code -ge 8 -or $code -lt 0) { Stop-Install "copying the game files failed (robocopy code $code). Is there enough space?" }
+            if ($code -ge 8 -or $code -lt 0) { Say "  robocopy ended with code $code"; Stop-Install "copying the game files didn't finish. Is there enough free space?" }
             Clear-Mark $base "game-partial"
             Step-End "done" "Done"
         }
@@ -1118,7 +1214,7 @@ function Invoke-Install {
     Set-Now "Checking everything is in place" "About 10 minutes."; Set-Pct -1
     Remove-GitLocks $base 10
     # Code generation: relift.ps1's phases ("== name") and how much of the time each takes.
-    $sp = @{ Msg = ""; Missing = @(); Phase = ""; Built = $false; Gen = $false
+    $sp = @{ Msg = ""; Missing = @(); Phase = ""; Built = $false; Gen = $false; Lost = @()
              W = @{ version_addrs = 1; ppu_loader = 4; find_functions = 8; filter = 1; mods = 1; ppu_lifter = 50; setjmp_patch = 2
                     spu_programs = 14; spu_jobs_find = 2; spu_jobs = 12; gen_hle_nids = 3; lift_stamp = 2 } }
     $sp.Order = @("version_addrs", "ppu_loader", "find_functions", "filter", "mods", "ppu_lifter", "setjmp_patch", "spu_programs", "spu_jobs_find", "spu_jobs", "gen_hle_nids", "lift_stamp")
@@ -1128,11 +1224,14 @@ function Invoke-Install {
         $t = $l.Trim()
         if ($t -match '^\[missing\]\s+(.*)$') { $sp.Missing += $Matches[1] }
         elseif ($t -match '^setup stopped: (.*)$') { $sp.Msg = $Matches[1] }
-        elseif ($t -match '^downloading FFmpeg') { Set-Now "Downloading the video player (about 100 MB)" }
+        elseif ($t -match '^downloading FFmpeg') { Set-Now "Downloading the video player (about 75 MB)" }
+        # An optional part that didn't come: the install goes on, and the finish page says in a few words what is missing.
+        elseif ($t -match '^\[note\]\s+FFmpeg') { $sp.Lost += "The game's movies won't play until the next update." }
         elseif ($t -match '^Generating the game code') { $sp.Gen = $true; Set-Now "Converting the game" "About 10 minutes."; Set-Pct 0 }
         elseif ($t -match '^Trying once more from the start') {
-            Note "That step is being run again (about 10 more minutes)."
-            Set-Now "Converting the game (second try)" "About 10 minutes."; Set-Pct 0
+            # A retry is Details' business, not a note in the main window.
+            Say "  The code generation stopped; it is being run once more from the start."
+            Set-Now "Converting the game" "About 10 minutes."; Set-Pct 0
         }
         elseif ($sp.Gen -and $t -match '^== (\w+)$' -and $sp.W.ContainsKey($Matches[1])) {
             $sp.Phase = $Matches[1]; $done = 0
@@ -1159,12 +1258,27 @@ function Invoke-Install {
             Set-Now "Building the game"
         }
         elseif ($t -match '^launcher: built') { Set-Now "Finishing up" }
+        elseif ($t -match '^GT5_ADD (\w+) (\S+) ?(.*)$') {
+            # The parts setup.ps1 adds (Vulkan before the build, AMD FSR 3 and NVIDIA DLSS after it): their
+            # progress lines (GT5\scripts\addon_common.ps1), shown inside the step that is running.
+            $ph = $Matches[1]; $pc = $Matches[2]; $wd = $Matches[3]
+            if ($ph -eq "start") { $sp.AddPrev = $script:LastNow; $sp.AddHint = $script:LastHint; $sp.Part = $wd; Set-Now "Adding $wd" $sp.AddHint; Set-Pct 0 }
+            elseif ($ph -eq "done" -or $ph -eq "skip" -or $ph -eq "fail") {
+                Say "  $($sp.Part): $(if ($ph -eq 'done') { 'ready' } else { "not added ($wd)" })"
+                if ($sp.AddPrev) { Set-Now $sp.AddPrev $sp.AddHint }
+                Set-Pct -1
+            }
+            elseif ($pc -match '^\d+$') { Set-Pct ([double]$pc) }
+            return $true
+        }
         $false
     }
     if ($code -ne 0) {
-        $why = if ($sp.Msg) { $sp.Msg } elseif ($sp.Missing.Count) { "these are still missing: $($sp.Missing -join '; ')." } else { "see Details." }
-        Stop-Install "setup stopped: $why"
+        # setup.ps1's stop is a few plain words already; what led to it is in Details.
+        $why = if ($sp.Msg) { $sp.Msg } elseif ($sp.Missing.Count) { "these are still missing: $($sp.Missing -join '; ')." } else { "the setup didn't finish (Details has the whole text)." }
+        Stop-Install $why
     }
+    foreach ($l in $sp.Lost) { if ($script:Pipe) { Send "lost" @($l) } else { Say "  $l" "Yellow" } }
     if ($env:GT5_INSTALL_NOBUILD) {
         if (-not $sp.End7) { Step-End "skip" "Not run (GT5_INSTALL_NOBUILD)" }
         Say "Stopped before building (GT5_INSTALL_NOBUILD)." "Yellow"
@@ -1192,6 +1306,9 @@ function Invoke-Engine {
     # UTF-8 on this process's console: its report lines, and the PowerShell scripts it starts (they share
     # the console and write in its code page).
     try { [Console]::OutputEncoding = $Utf8 } catch {}
+    # Below normal priority, and so is everything started from here (git, Python, the compiler: a child takes a below
+    # normal parent's class): "You can keep using your PC" while the hour-long build runs.
+    try { [Diagnostics.Process]::GetCurrentProcess().PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
     if (-not $script:Pipe) {
         $script:LogW = Open-LogWriter
         Write-LogLine ""; Write-LogLine "==== GT5-Installer $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), console ===="
@@ -1282,12 +1399,11 @@ function Show-Window {
     $t1.Font = New-Object Drawing.Font("Segoe UI Semibold", (20 * $fk))
     $U.Sub = New-Ctl "Label" $band 25 48 720 24; $U.Sub.ForeColor = [Drawing.Color]::FromArgb(186, 192, 208); $U.Sub.AutoEllipsis = $true
     $U.Pages = @{}
-    foreach ($n in "pick", "work", "lic", "fin") {
+    foreach ($n in "pick", "work", "fin") {
         $pg = New-Ctl "Panel" $f 0 78 760 442; $pg.Visible = $false; $U.Pages[$n] = $pg
     }
     Build-PickPage $U.Pages.pick
     Build-WorkPage $U.Pages.work
-    Build-LicencePage $U.Pages.lic
     Build-FinishPage $U.Pages.fin
 
     $U.Timer = New-Object Windows.Forms.Timer
@@ -1321,9 +1437,8 @@ function Show-Page([string]$name) {
     foreach ($k in @($U.Pages.Keys)) { $U.Pages[$k].Visible = ($k -eq $name) }
     $U.Page = $name
     $U.Sub.Text = switch ($name) {
-        "pick" { "Builds the PC version from your own copy of the game. Point it at two things and press Install." }
+        "pick" { "Builds the PC version from your own copy of the game. Choose the three things below and press Install." }
         "work" { if ($U.Mode -eq "run") { "Installing. You can keep using your PC." } else { $U.Sub.Text } }
-        "lic"  { "One question before the compiler tools are fetched." }
         "fin"  { "Finished." }
     }
     Request-Snap $name
@@ -1363,8 +1478,20 @@ function Build-PickPage($pg) {
     $bgF = New-Btn $pg "Folder..." 502 $rg.Y 110; $bgI = New-Btn $pg "ISO file..." 620 $rg.Y 118
     $bfB = New-Btn $pg "Browse..." 502 $rf.Y 110; $bfS = New-Btn $pg "Get it from Sony" 620 $rf.Y 118
     $bdB = New-Btn $pg "Browse..." 502 $rd.Y 110
-    $note = New-Ctl "Label" $pg 22 330 716 50; $note.ForeColor = $U.Dim
+    $note = New-Ctl "Label" $pg 22 326 716 40; $note.ForeColor = $U.Dim
     $note.Text = "Takes about an hour the first time. Everything goes into the install folder. Nothing from your game is uploaded or shared."
+    # This PC can't run the game (no AVX2, too little memory): that line instead, and no Install. Asked once.
+    $U.PcProblem = Get-PcProblem
+    Write-UiLog "PC: $script:PcFacts$(if ($U.PcProblem) { " -> $($U.PcProblem)" })"
+    if ($U.PcProblem) { $note.Text = $U.PcProblem; $note.ForeColor = $U.Bad; $note.Font = $U.Bold }
+    # The licences of the parts it downloads, when there are any: one line, the names are links. Pressing
+    # Install is the acceptance (Get-LicenceParts; set again by $U.Check, as it depends on the folder).
+    $U.Lic = New-Ctl "LinkLabel" $pg 22 368 716 20; $U.Lic.ForeColor = $U.Dim; $U.Lic.Font = $U.Small
+    $U.Lic.LinkBehavior = "HoverUnderline"
+    $U.Lic.Add_LinkClicked({ param($s, $e) try { Start-Process ([string]$e.Link.LinkData) } catch {} })
+    $U.LicParts = @()
+    $U.VsOk = [bool]((-not $env:GT5_INSTALL_NOVS) -and (Find-VsClang) -and (Test-WinSdk))
+    $U.Rtx = Test-RtxCard
     $U.Go = New-Btn $pg "Install" 520 392 110; $U.Go.Font = $U.Bold
     $cancel = New-Btn $pg "Cancel" 638 392 100
     $U.Form.AcceptButton = $U.Go
@@ -1377,6 +1504,10 @@ function Build-PickPage($pg) {
         $fw0 = Get-ChildItem (Join-Path $env:USERPROFILE "Downloads") -Filter "PS3UPDAT.PUP" -Recurse -Depth 2 -ErrorAction SilentlyContinue |
             Select-Object -First 1 -ExpandProperty FullName
     }
+    # A remembered game or firmware file that isn't there any more (deleted, or on a drive not plugged in) isn't filled
+    # in: an install that already has them needs neither, and a red "isn't there" would only stop Install.
+    if ($saved.Game -and -not (Test-Path -LiteralPath $saved.Game)) { Write-UiLog "The game remembered from last time isn't there now: $($saved.Game)"; $saved.Game = $null }
+    if ($fw0 -and -not (Test-Path -LiteralPath $fw0)) { Write-UiLog "The firmware file remembered from last time isn't there now: $fw0"; $fw0 = $null }
     $rg.Box.Text = if ($env:GT5_INSTALL_GAME) { $env:GT5_INSTALL_GAME } else { $saved.Game }
     $rf.Box.Text = if ($env:GT5_INSTALL_FIRMWARE) { $env:GT5_INSTALL_FIRMWARE } else { $fw0 }
     $rd.Box.Text = if ($env:GT5_INSTALL_DEST) { $env:GT5_INSTALL_DEST } elseif ($saved.Dest) { $saved.Dest } else { "C:\Games\GT5-PC" }
@@ -1386,21 +1517,37 @@ function Build-PickPage($pg) {
         $d = Get-DestState $U.Rd.Box.Text.Trim('"', ' '); $U.Dest = $d
         $U.Rd.Status.Text = $d.Text; $U.Rd.Status.ForeColor = $(if ($d.Ok) { $U.Ok } else { $U.Bad })
         $gp = $U.Rg.Box.Text.Trim('"', ' ')
+        # Already in the install folder: a path that isn't there now (the .iso was deleted after the first install)
+        # counts as nothing chosen. The game and firmware are only needed when the folder lacks them.
+        $gpGone = $gp -and -not (Test-Path -LiteralPath $gp) -and $d.Ok -and $d.HasGame
+        if ($gpGone) { $gp = "" }
         if ($gp -ne $U.GamePick) { $U.GamePick = $gp; $U.Form.Cursor = "WaitCursor"; $U.Game = Get-GameInfo $gp; $U.Form.Cursor = "Default" }
         $g = $U.Game
         if ($g -and $g.Ok) { $U.Rg.Status.Text = $g.Text; $U.Rg.Status.ForeColor = $U.Ok }
         elseif ($g -and $g.Text) { $U.Rg.Status.Text = $g.Text; $U.Rg.Status.ForeColor = $U.Bad }
         elseif ($d.Ok -and $d.HasGame) { $U.Rg.Status.Text = "Not needed: the game is already in the install folder."; $U.Rg.Status.ForeColor = $U.Ok }
         else { $U.Rg.Status.Text = "" }
-        $p = Test-Pup $U.Rf.Box.Text.Trim('"', ' ')
+        $fp = $U.Rf.Box.Text.Trim('"', ' ')
+        $fpGone = $fp -and -not (Test-Path -LiteralPath $fp) -and $d.Ok -and $d.HasFw
+        if ($fpGone) { $fp = "" }
+        $p = Test-Pup $fp
         $fwOk = ($p -eq "ok")
         if ($fwOk) { $U.Rf.Status.Text = "Found: PS3 system software"; $U.Rf.Status.ForeColor = $U.Ok }
         elseif ($p) { $U.Rf.Status.Text = $p; $U.Rf.Status.ForeColor = $U.Bad }
         elseif ($d.Ok -and $d.HasFw) { $U.Rf.Status.Text = "Not needed: already installed in the install folder."; $U.Rf.Status.ForeColor = $U.Ok }
         else { $U.Rf.Status.Text = "" }
-        $gameReady = ($g -and $g.Ok) -or ((-not $U.Rg.Box.Text) -and $d.Ok -and $d.HasGame)
-        $fwReady = $fwOk -or ((-not $U.Rf.Box.Text) -and $d.Ok -and $d.HasFw)
-        $U.Go.Enabled = [bool]($d.Ok -and $gameReady -and $fwReady)
+        $gameReady = ($g -and $g.Ok) -or ((-not $gp) -and $d.Ok -and $d.HasGame)
+        $fwReady = $fwOk -or ((-not $fp) -and $d.Ok -and $d.HasFw)
+        $U.Go.Enabled = [bool]($d.Ok -and $gameReady -and $fwReady -and -not $U.PcProblem)
+        $U.GameArg = $gp; $U.FwArg = $fp   # what Install passes on (a path that's gone and not needed: nothing)
+        # The licence line: only the parts this install will download.
+        $U.LicParts = Get-LicenceParts $(if ($d.Ok) { $d.Full } else { "" }) $U.VsOk $U.Rtx
+        $line = Get-LicenceLine $U.LicParts
+        if ($U.Lic.Text -ne $line) {
+            $U.Lic.Text = $line; $U.Lic.Links.Clear()
+            foreach ($p in $U.LicParts) { [void]$U.Lic.Links.Add($line.LastIndexOf($p.Name), $p.Name.Length, $p.Url) }
+        }
+        $U.Lic.Visible = [bool]$line
     }
     foreach ($r in @($rg, $rf, $rd)) { $r.Box.Add_Leave({ try { & $script:U.Check } catch {} }) }
     $bgF.Add_Click({ $dlg = New-Object Windows.Forms.FolderBrowserDialog; $dlg.Description = "Choose your GT5 disc dump (the folder with PS3_GAME in it)"
@@ -1423,7 +1570,10 @@ function Start-Install {
     $U = $script:U
     & $U.Check
     if (-not $U.Go.Enabled) { return }
-    $U.Choice = @{ Game = $U.Rg.Box.Text.Trim('"', ' '); Firmware = $U.Rf.Box.Text.Trim('"', ' '); Dest = $U.Rd.Box.Text.Trim('"', ' ') }
+    $U.Choice = @{ Game = $U.GameArg; Firmware = $U.FwArg; Dest = $U.Rd.Box.Text.Trim('"', ' ') }
+    # Pressing Install with the licence line shown accepts the parts it names.
+    $U.Accepted = if ($U.LicParts.Count -gt 0) { (@($U.LicParts | ForEach-Object { $_.Id }) -join ",") } else { "none" }
+    Write-UiLog "Install pressed. $(if ($U.Lic.Visible) { "Licence line shown: $($U.Lic.Text) ($((@($U.LicParts | ForEach-Object { $_.Url })) -join ', '))" } else { 'No licence line (nothing it downloads needs one).' })"
     $U.Base = $U.Dest.Full
     $U.T0 = Get-Date
     Show-Page "work"
@@ -1557,38 +1707,6 @@ function Draw-Bar([Drawing.Graphics]$g, [int]$w, [int]$h) {
     }
 }
 
-# ---- Page: Microsoft's licence (asked by the engine in step 1) --------------------------------------------
-function Build-LicencePage($pg) {
-    $U = $script:U
-    $t = New-Ctl "Label" $pg 22 14 716 28 "Microsoft's licence for the compiler libraries"; $t.Font = $U.NowFont
-    $x = New-Ctl "Label" $pg 22 46 716 96
-    $x.Text = "This PC has no Visual Studio with the Clang tools, so the installer fetches the compiler tools into the install folder (about 1.5 GB; nothing is installed in Windows). Part of them, Microsoft's C/C++ libraries and the Windows SDK, are Microsoft's, under the licence of the Visual Studio 2022 Build Tools. Please open it and read it: only you can accept it, the installer never does."
-    $U.LicLink = New-Ctl "LinkLabel" $pg 22 146 716 22
-    $U.LicLink.Add_LinkClicked({ try { Start-Process $script:U.LicUrl } catch {} })
-    $U.LicTick = New-Ctl "CheckBox" $pg 22 180 716 26 "I have read Microsoft's licence and I accept it"
-    $U.LicTick.Font = $U.Bold
-    $U.LicTick.Add_CheckedChanged({ $script:U.LicGo.Enabled = $script:U.LicTick.Checked })
-    $a = New-Ctl "Label" $pg 22 222 716 60
-    $a.ForeColor = $U.Dim
-    $a.Text = "Rather not? Then install Visual Studio 2022 Community yourself with 'Desktop development with C++' and 'C++ Clang tools for Windows' (README, Requirements), and run this installer again: it uses that instead."
-    $U.LicGo = New-Btn $pg "Continue" 520 392 110; $U.LicGo.Font = $U.Bold; $U.LicGo.Enabled = $false
-    $U.LicGo.Add_Click({ try { Send-Answer "yes" } catch {} })
-    $no = New-Btn $pg "Don't accept" 638 392 100
-    $no.Add_Click({ try { Send-Answer "no" } catch {} })
-}
-function Show-Licence([string]$url) {
-    $U = $script:U
-    $U.LicUrl = $url; $U.LicLink.Text = $url; $U.LicTick.Checked = $false; $U.LicGo.Enabled = $false
-    Show-Page "lic"
-    if (-not $U.SnapDir) { $U.Form.Activate() }
-}
-function Send-Answer([string]$a) {
-    $U = $script:U
-    Write-UiLog "Microsoft's licence ($($U.LicUrl)): $(if ($a -eq 'yes') { 'accepted by the player (tick box)' } else { 'not accepted' })"
-    Show-Page "work"
-    if ($U.Proc -and -not $U.Proc.HasExited) { try { $U.Proc.StandardInput.WriteLine($a); $U.Proc.StandardInput.Flush() } catch {} }
-}
-
 # ---- Page: finished ---------------------------------------------------------------------------------------
 function Build-FinishPage($pg) {
     $U = $script:U
@@ -1598,6 +1716,8 @@ function Build-FinishPage($pg) {
     $tips.Text = "Play opens the launcher: settings (resolution, full screen, wheel, language), Play and Updates.`r`n`r`nKeyboard: Z = Cross, X = Circle, arrows, Enter = Start. Pads work too. More in README.md.`r`nTo update later: the launcher's Updates page, or Update.bat in the install folder."
     $U.LnkTick = New-Ctl "CheckBox" $pg 22 230 716 26 "Put 'Gran Turismo 5 (PC)' on the desktop"
     $U.LnkTick.Checked = $true
+    # An optional part that didn't come this time (the install went on without it): what that means, in a few words.
+    $U.FinLost = New-Ctl "Label" $pg 22 270 716 44; $U.FinLost.ForeColor = $U.Dim
     $U.PlayBtn = New-Btn $pg "Play" 520 392 110; $U.PlayBtn.Font = $U.Bold
     $U.PlayBtn.Add_Click({ try { Start-Game } catch { Write-UiLog "window: $($_.Exception.Message)" } })
     $close = New-Btn $pg "Close" 638 392 100
@@ -1607,6 +1727,7 @@ function Show-Finish([string]$base, [string]$kind) {
     $U = $script:U
     $U.Base = $base
     $U.FinWhere.Text = "Installed in $base"
+    $U.FinLost.Text = (@($U.Lost) -join "`r`n")
     if ($kind -eq "nobuild") {
         $U.FinBig.Text = "Stopped before building (GT5_INSTALL_NOBUILD)."; $U.FinBig.ForeColor = $U.Amber
         $U.LnkTick.Checked = $false
@@ -1635,7 +1756,7 @@ function Start-Engine {
     $U = $script:U
     for ($i = 0; $i -lt $Total; $i++) { $U.St[$i] = "wait"; $U.StNote[$i] = "" }
     $U.Cur = 0; $U.Now = "Starting"; $U.Hint = ""; $U.Pct = -1; $U.Shown = -1; $U.SubText = ""; $U.NoteText = ""
-    $U.StopText = ""; $U.Done = $null; $U.Cancelled = $false; $U.Mounted = $null; $U.EtaBase = $null; $U.CopyBtn.Text = "Copy details"
+    $U.StopText = ""; $U.Done = $null; $U.Cancelled = $false; $U.Mounted = $null; $U.EtaBase = $null; $U.CopyBtn.Text = "Copy details"; $U.Lost = @()
     $U.NoteL.Text = ""; $U.NoteL.ForeColor = $U.Amber
     $U.StepT0 = Get-Date; $U.RunT0 = Get-Date; $U.ExitSeen = 0; $U.LastSnapT = [Environment]::TickCount
     Set-WorkMode "run"
@@ -1646,7 +1767,7 @@ function Start-Engine {
     $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
     $psi.StandardOutputEncoding = $Utf8; $psi.StandardErrorEncoding = $Utf8
     $psi.EnvironmentVariables["GT5_INSTALLER_ROLE"] = "engine"
-    foreach ($kv in @(@("GT5_INSTALL_GAME", $U.Choice.Game), @("GT5_INSTALL_FIRMWARE", $U.Choice.Firmware), @("GT5_INSTALL_DEST", $U.Choice.Dest))) {
+    foreach ($kv in @(@("GT5_INSTALL_GAME", $U.Choice.Game), @("GT5_INSTALL_FIRMWARE", $U.Choice.Firmware), @("GT5_INSTALL_DEST", $U.Choice.Dest), @("GT5_INSTALL_ACCEPTED", $U.Accepted))) {
         if ($kv[1]) { $psi.EnvironmentVariables[$kv[0]] = $kv[1] } elseif ($psi.EnvironmentVariables.ContainsKey($kv[0])) { $psi.EnvironmentVariables.Remove($kv[0]) }
     }
     Write-UiLog ""; Write-UiLog "---- Install started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): game '$($U.Choice.Game)', firmware '$($U.Choice.Firmware)', folder '$($U.Choice.Dest)'"
@@ -1750,9 +1871,9 @@ function On-EngineLine([string]$l) {
             $U.Pct = $p; $U.SubText = if ($f.Count -gt 3) { $f[3] } else { "" }
         }
         "note" { $U.NoteL.ForeColor = $U.Amber; $U.NoteL.Text = $f[2]; Add-Detail "  $($f[2])"; Write-UiLog "  Note: $($f[2])" }
-        "ask" { if ($f[2] -eq "licence") { Write-UiLog "  Asking for Microsoft's licence: $($f[3])"; Show-Licence $f[3] } }
         "stop" { $U.StopText = $f[2]; Add-Detail "Stopped: $($f[2])"; Write-UiLog ""; Write-UiLog "Stopped: $($f[2])" }
         "done" { $U.Done = @{ Base = $f[2]; Kind = $f[3] }; Write-UiLog "Done ($($f[3])): $($f[2])" }
+        "lost" { $U.Lost = @($U.Lost) + $f[2]; Add-Detail "  $($f[2])"; Write-UiLog "  Left out: $($f[2])" }
         "mount" { $U.Mounted = $f[2] }
         "unmount" { $U.Mounted = $null }
     }
@@ -1831,7 +1952,6 @@ function On-Tick {
         $name = $U.SnapName; $U.SnapDue = 0
         Save-Snap $name
         if ($name -eq "pick" -and $env:GT5_INSTALL_AUTOGO -and -not $U.AutoWent) { $U.AutoWent = $true; Start-Install }
-        elseif ($name -eq "lic" -and $env:GT5_INSTALL_TESTDECLINE) { Send-Answer "no" }
         elseif ($name -eq "failed" -and -not $U.Details.Visible) { Show-Details $true; Update-Details; Request-Snap "failed-details" }
         elseif ($env:GT5_INSTALL_AUTOCLOSE -and ($name -eq "fin" -or (($name -eq "failed-details" -or $name -eq "stopped" -or $name -eq "work") -and -not $U.Proc -and $U.Mode -ne "run"))) { $U.Form.Close() }
     }

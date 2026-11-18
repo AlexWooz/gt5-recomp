@@ -1,14 +1,18 @@
 # Set up and build GT5 Recomp with one command. Run it from the gt5-recomp folder:
 #   powershell -ExecutionPolicy Bypass -File setup.ps1
 # Run it as often as you like. It does whatever is still to do: fetches and patches ps3recomp, makes
-# the Python environment, downloads FFmpeg, then checks your game files and says exactly what's
-# missing or wrong. When everything is in place it generates the game code and builds gt5.exe (the
-# first time takes 30 to 60 minutes), and you can play with GT5\play.bat. -NoBuild stops after the
-# checks. To update later, use update.ps1.
+# the Python environment, downloads FFmpeg (optional: the movies), then checks your game files and says exactly what's
+# missing or wrong. When everything is in place it generates the game code and builds gt5.exe with both
+# renderers, DirectX 12 and Vulkan (the first time takes 30 to 60 minutes), then adds AMD FSR 3 and, on a PC
+# with an NVIDIA RTX card whose installer showed NVIDIA's licence, NVIDIA DLSS. Then play with
+# GT5Launcher.exe or GT5\play.bat. -NoBuild stops after the checks. To update later, use update.ps1.
 param([switch]$NoBuild)
 # Errors are checked through exit codes: with "Stop", Windows PowerShell turns a native command's
 # redirected stderr into a terminating error before the check can run.
 $ErrorActionPreference = "Continue"
+# Another Python's settings (Anaconda, QGIS and others set these for everyone) would make the port's own Python load
+# that one's libraries: not for this run or anything it starts.
+Remove-Item Env:PYTHONHOME, Env:PYTHONPATH -ErrorAction SilentlyContinue
 # On a drive that doesn't record who owns a file (exFAT, FAT32, many USB and network drives) git refuses
 # to work in the install folder ("detected dubious ownership", #41). Trust it for git run from here and
 # what this starts, through git's environment config; the player's own git settings stay as they are.
@@ -59,6 +63,35 @@ if (-not (Test-Path (Join-Path $gt5 "scripts\relift.ps1"))) {
 }
 Write-Host "== GT5 Recomp setup in $base"
 Write-Host ""
+
+# ---- Can this PC run the game? Before anything long (GT5-Installer.bat asks the same on its first page) ----------
+# The game is built for processors with AVX2 (GT5\CMakeLists.txt: -mavx2 -mfma ...): one without it stops the moment
+# the game starts, after an hour of building. The first build also needs memory.
+function Get-PcProblem {
+    try {
+        if (-not ("Gt5Pc.Cpu" -as [type])) {
+            Add-Type -Namespace Gt5Pc -Name Cpu -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(uint feature);
+[DllImport("kernel32.dll")] public static extern ulong GetEnabledXStateFeatures();
+[DllImport("kernel32.dll")] public static extern bool GetPhysicallyInstalledSystemMemory(out ulong kb);
+'@
+        }
+        $avx2 = $true
+        # No AVX state in use: no AVX, so no AVX2. A Windows that knows the AVX entries (39) answers AVX2 (40) directly;
+        # an older one answers no to both, and the processor is given the benefit of the doubt.
+        if (([Gt5Pc.Cpu]::GetEnabledXStateFeatures() -band 4) -eq 0) { $avx2 = $false }
+        elseif ([Gt5Pc.Cpu]::IsProcessorFeaturePresent(39)) { $avx2 = [Gt5Pc.Cpu]::IsProcessorFeaturePresent(40) }
+        if ($env:GT5_INSTALL_NOAVX2) { $avx2 = $false }
+        if (-not $avx2) { return "this PC's processor is too old for the game (it has no AVX2)." }
+        $kb = [uint64]0; $gb = 0
+        if ([Gt5Pc.Cpu]::GetPhysicallyInstalledSystemMemory([ref]$kb)) { $gb = [int][math]::Round($kb / 1MB) }
+        if ($env:GT5_INSTALL_RAMGB) { $gb = [int]$env:GT5_INSTALL_RAMGB }
+        if ($gb -gt 0 -and $gb -lt 8) { return "this PC has $gb GB of memory; the game needs at least 8 GB." }
+    } catch { }
+    return ""
+}
+$pcProblem = Get-PcProblem
+if ($pcProblem) { Stop-Setup $pcProblem }
 Write-Host "Tools:"
 
 # ---- Git ------------------------------------------------------------------------------------------------
@@ -165,29 +198,26 @@ else {
 
 # ---- ps3recomp, patched for this version (the same step update.ps1 uses) --------------------------------
 $out = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $base "update.ps1") -Here 2>&1
-if ($LASTEXITCODE -ne 0) { $out | ForEach-Object { Write-Host "            $_" }; Stop-Setup "fetching or patching ps3recomp failed (see above)." }
+if ($LASTEXITCODE -ne 0) { $out | ForEach-Object { Write-Host "            $_" }; Stop-Setup "the game's tools couldn't be fetched (is the internet connection up?)." }
 Ok "ps3recomp, patched"
-& $py -m pip install --quiet --disable-pip-version-check -r (Join-Path $rc "requirements.txt")
-if ($LASTEXITCODE -ne 0) { Stop-Setup "installing the Python packages failed (see above)." }
+# The packages at the versions the tools are tested with (requirements.txt gives only lower bounds, so each install
+# got whatever was newest that day). A later version of one of these comes with an update that names it here.
+$pins = @("capstone==5.0.9", "construct==2.10.70", "pycryptodome==4.2.0", "tabulate==0.10.0", "tqdm==4.70.1")
+& $py -m pip install --quiet --disable-pip-version-check -r (Join-Path $rc "requirements.txt") @pins
+if ($LASTEXITCODE -ne 0) { Stop-Setup "the Python packages couldn't be installed (is the internet connection up?)." }
 Ok "Python packages"
 
-# ---- FFmpeg (LGPL shared build; GT5\CMakeLists.txt expects this folder name) -----------------------------
+# ---- FFmpeg (plays the game's movies; optional) ------------------------------------------------------------
+# get-ffmpeg.ps1 fetches a fixed release, checked by its SHA-256. Without it the game builds and runs, and only its
+# movies don't play: a failed download is a note, never a stop, and the next update tries again.
 $ffname = "ffmpeg-n9.0-latest-win64-lgpl-shared-9.0"
 $ffdir = Join-Path $base "ffmpeg"
-if (-not (Test-Path (Join-Path $ffdir "$ffname\bin"))) {
-    Write-Host "            downloading FFmpeg (about 100 MB)..."
-    New-Item -ItemType Directory -Force $ffdir | Out-Null
-    $zip = Join-Path $ffdir "ffmpeg.zip"
-    $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$ffname.zip"
-    try {
-        $ProgressPreference = "SilentlyContinue"
-        Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -ErrorAction Stop
-        Expand-Archive -Path $zip -DestinationPath $ffdir -Force -ErrorAction Stop
-        Remove-Item $zip
-    } catch { }
+$getFf = Join-Path $base "get-ffmpeg.ps1"
+if ((Test-Path -LiteralPath $getFf) -and -not (Test-Path (Join-Path $ffdir "$ffname\bin\avcodec-63.dll"))) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $getFf | ForEach-Object { Write-Host "            $_" }
 }
-if (Test-Path (Join-Path $ffdir "$ffname\bin")) { Ok "FFmpeg (plays the game's movies)" }
-else { Todo "FFmpeg" "Download $ffname.zip from https://github.com/BtbN/FFmpeg-Builds/releases and unpack it into the ffmpeg folder, so that ffmpeg\$ffname\bin exists." }
+if (Test-Path (Join-Path $ffdir "$ffname\bin\avcodec-63.dll")) { Ok "FFmpeg (plays the game's movies)" }
+else { Write-Host "  [note]    FFmpeg: not added this time, so the game's movies won't play. The next update tries again." -ForegroundColor Yellow }
 
 # ---- Your game files ------------------------------------------------------------------------------------
 Write-Host ""
@@ -299,15 +329,61 @@ if ($LASTEXITCODE -ne 0) {
         Write-Host "Generating the game code stopped (see above). Trying once more from the start..." -ForegroundColor Yellow
         & powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\relift.ps1"
     }
-    if ($LASTEXITCODE -ne 0) { Pop-Location; Stop-Setup "generating the game code failed twice with Python $pyVer (see above). Please report it with that output: https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml" }
+    if ($LASTEXITCODE -ne 0) { Write-Host "Generating the game code failed twice (Python $pyVer)."; Pop-Location; Stop-Setup "converting the game's code didn't finish." }
 } else {
     Write-Host "The game code is already generated and current."
 }
 Write-Host "Building gt5.exe (the first build takes 20 to 50 minutes)..."
+# The parts the game is built with or gets next to it are set up here, not on first use: Vulkan (the second
+# renderer) before the build, so this one build has both renderers; AMD FSR 3 and, on a PC with an NVIDIA RTX
+# card, NVIDIA DLSS after it. Their scripts (GT5\scripts\add_*.ps1) write their whole text to GT5\logs and pass
+# on only their progress lines (GT5_ADD ...). None of them can stop setup: without one, the launcher simply
+# doesn't offer it, and the next update tries again.
+$addCommon = Join-Path $gt5 "scripts\addon_common.ps1"
+$addOns = Test-Path -LiteralPath $addCommon
+if ($addOns) { . $addCommon }
+$logs = Join-Path $gt5 "logs"
+$cacheFile = Join-Path $gt5 "build\CMakeCache.txt"
+function Test-VulkanInBuild { return (Test-Path -LiteralPath $cacheFile) -and [bool](Select-String -LiteralPath $cacheFile -Pattern '^PS3RECOMP_RSX_VULKAN:BOOL=ON' -Quiet) }
+if ($addOns) {
+    $r = Invoke-AddOn (Join-Path $gt5 "scripts\add_vulkan.ps1") @("-Prepare") "add_vulkan" $logs
+    if ($r -eq 0) { Write-Host "  Vulkan: built in" } elseif ($r -eq 1) { Write-Host "  Vulkan: left out this time (DirectX 12 only; GT5\logs\add_vulkan.log says why). The next update tries again." }
+}
 cmd /c "scripts\build.cmd gt5"
 $built = $LASTEXITCODE
+if ($built -ne 0 -and $addOns -and (Test-VulkanInBuild)) {
+    # The game must build even when Vulkan doesn't (a newer compiler that its code doesn't suit, say): once more
+    # without it, which rebuilds only the runtime. The next update tries Vulkan again.
+    Write-Host "The build stopped. Building once more without Vulkan..."
+    $null = Invoke-AddOn (Join-Path $gt5 "scripts\add_vulkan.ps1") @("-Remove", "-Prepare") "add_vulkan-off" $logs
+    cmd /c "scripts\build.cmd gt5"
+    $built = $LASTEXITCODE
+    if ($built -eq 0) { Write-Host "  Vulkan: left out this time (the build with it stopped; GT5\logs says why). The next update tries again." }
+}
 Pop-Location
-if ($built -ne 0) { Stop-Setup "the build failed (see above). Please report it with that output: https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml" }
+if ($built -ne 0) { Stop-Setup "the build didn't finish." }
+# The launcher (settings, Play, updates) is built after every good build (GT5\scripts\build_run.ps1). Without it the
+# shortcut would start the game in a console window: once more, else the setup isn't done.
+$launcherExe = Join-Path $base "GT5Launcher.exe"
+$buildLauncher = Join-Path $base "launcher\build-launcher.ps1"
+if (-not (Test-Path -LiteralPath $launcherExe) -and (Test-Path -LiteralPath $buildLauncher)) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $buildLauncher
+    if (-not (Test-Path -LiteralPath $launcherExe)) { Stop-Setup "the launcher couldn't be built." }
+}
+if ($addOns) {
+    $r = Invoke-AddOn (Join-Path $gt5 "scripts\add_fsr.ps1") @() "add_fsr" $logs
+    if ($r -eq 0) { Write-Host "  AMD FSR 3: added" } elseif ($r -eq 1) { Write-Host "  AMD FSR 3: not added this time (GT5\logs\add_fsr.log says why). The next update tries again." }
+    # NVIDIA's licence: accepted with the installer's Install button, which showed it (GT5-Installer.bat writes
+    # .gt5\installer-licences.txt), or when DLSS was added before. A setup.ps1 run by hand without either
+    # leaves DLSS out without a word: the launcher's Display page can add it, with the same licence line.
+    $licFile = Join-Path $base ".gt5\installer-licences.txt"
+    $dlssShown = (Test-Path -LiteralPath $licFile) -and [bool](Select-String -LiteralPath $licFile -Pattern '^dlss\b' -Quiet)
+    $dlssThere = Test-Path -LiteralPath (Join-Path $gt5 "build\gt5_upscale_dlss.dll")
+    if (($dlssShown -or $dlssThere) -and (Test-RtxCard)) {
+        $r = Invoke-AddOn (Join-Path $gt5 "scripts\add_dlss.ps1") @("-Accept") "add_dlss" $logs
+        if ($r -eq 0) { Write-Host "  NVIDIA DLSS: added" } elseif ($r -eq 1) { Write-Host "  NVIDIA DLSS: not added this time (GT5\logs\add_dlss.log says why). The next update tries again." }
+    }
+}
 Write-Host ""
 Write-Host "Done! Start GT5Launcher.exe in this folder (settings, Play, Updates), or GT5\play.bat directly." -ForegroundColor Green
 Write-Host "Later, the launcher's Updates page or a double-click on Update.bat gets new versions." -ForegroundColor Green

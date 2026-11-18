@@ -1,5 +1,5 @@
-// gt5_menu_internal.h - shared between gt5_menu.cpp (window, input, Direct3D 12) and gt5_menu_ui.cpp
-// (what is on screen). Not part of the menu's API.
+// gt5_menu_internal.h - shared between gt5_menu.cpp (window, input, sizes), gt5_menu_ui.cpp (what is
+// on screen) and the renderers' files (gt5_menu_dx12.cpp, gt5_menu_vk.cpp). Not part of the menu's API.
 #pragma once
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -30,6 +30,9 @@ struct PadEdges {
 
 struct Ui {
     bool open = false;
+    bool quit = false;              // [win] "Quit the game?" is asking (over the game, or over the menu)
+    bool quit_focus = false;        // ... put the focus on No
+    double hint_until = 0;          // [win] the first-start hint shows until then (now_s())
     int  page = 0;
     int  sub = SUB_NONE;
     bool in_content = false;        // the focus is in the rows (not in the page list)
@@ -42,7 +45,9 @@ struct Ui {
     char help_key[64] = "";         // the setting whose help is shown
     char help_text[640] = "";       // or this text (map screens)
     bool zh = false;
-    float scale = 1.0f;             // the size of everything, 1 = a 1080-line frame at normal size
+    float scale = 1.0f;             // the size of everything in the window's pixels: 1 = 100 % scaling, Normal size
+    char scrolled_to[64] = "";      // the row the page last scrolled to show whole (once per focus change)
+    int  shown_page = -1, shown_sub = -1;   // what the page area showed last frame: another starts at its top
     // waiting for a key or a wheel button
     int  bind = BIND_NONE;
     int  bind_row = 0;
@@ -60,6 +65,13 @@ struct Ui {
     float  fps_hist[120] = {};
     int    fps_n = 0;
     double fps_t = 0;
+    // what the last frame laid out, in the window's pixels (gt5_menu_test_info_get)
+    struct {
+        float panel[4], page[4], focus[4], nav[GT5_PAGE_COUNT][4];
+        float cap_px, small_px, density;
+        bool  stacked, help_cut, help_inline;
+        char  focus_key[64];
+    } tv = {};
 };
 
 extern Ui ui;
@@ -75,15 +87,39 @@ void         bind_cancel();
 void         open_url(const char* url);
 void         open_logs_folder();
 void         request_close();
+void         quit_ask();                     // [win] the About page's "Quit the game"
+void         quit_answer(bool yes);          // [win] the quit question's Yes or No
+bool         pad_connected();                // [win] a controller is there (for the hint's words)
 void         need_fallback_fonts();          // text beyond Latin is about to be drawn
 unsigned     frame_w();
 unsigned     frame_h();
 void         note_changed();                 // a setting changed: save soon
+int          notices_get(char out[][192], int max);   // the notices to show now, in the menu's language
+
+// gt5_menu.cpp, for the renderers' files. Starting: core_begin (the window, the size of the picture the
+// menu is drawn into, the About page's texts), the renderer's own objects, core_context (Dear ImGui's
+// context and the first font), the renderer's Dear ImGui backend (core_context_abort when it fails),
+// core_finish. A frame: core_build_frame (false: nothing to show; called only when the renderer has
+// something to draw the menu into: it also tells the quit question the picture still comes), then the renderer draws
+// ImGui::GetDrawData(). Stopping: core_shutdown_begin, the renderer's GPU idle and its backend shut down,
+// core_shutdown_end, the renderer's own objects. All on the window's thread.
+void         core_begin(HWND hwnd, unsigned w, unsigned h, const char* version, const char* title);
+void         core_context();
+void         core_context_abort();
+void         core_finish(void (*renderer_new_frame)(), const char* what);   // what: "frame", "swap chain" (the log line)
+bool         core_inited();
+bool         core_build_frame();
+void         core_set_size(unsigned w, unsigned h);   // the picture the menu is drawn into has a new size
+void         core_shutdown_begin();
+void         core_shutdown_end();
 
 // gt5_menu_ui.cpp
 void         ui_opened();
 void         ui_build(const PadEdges& pad);  // the menu, between NewFrame and Render
 void         ui_build_osd();                 // the corner readout alone
+void         ui_build_quit();                // [win] "Quit the game?" alone (over the game or the menu)
+void         ui_build_hint(float alpha);     // [win] the first-start hint in the corner
+void         ui_build_notices();             // the notices (gt5_menu_notice), top right
 void         ui_key_taken(const char* key_name);   // a key arrived for the row that waits (NULL = cancelled)
 void         ui_apply_style(float scale);
 

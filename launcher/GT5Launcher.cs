@@ -64,10 +64,48 @@ namespace Gt5Launcher
                 Application.Run(new UpdateForm(args[1], args[2], rest));
                 return;
             }
+            // One launcher per install: a second start brings the open one to the front instead (two would each write
+            // settings.bat over the other's changes, and an update can't replace an open one).
+            bool first;
+            string dir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\').ToLowerInvariant();
+            uint h = 2166136261;   // FNV-1a of the folder: the same name in every run
+            foreach (char c in dir) { h ^= c; h *= 16777619; }
+            one = new Mutex(true, "Local\\GT5Launcher-" + h.ToString("x8"), out first);
+            if (!first) { ShowOther(dir); return; }
             // --play: press Play straight away (a "play directly" shortcut).
             var form = new LauncherForm(false);
             if (Array.IndexOf(args, "--play") >= 0) form.Shown += delegate { form.PlayNow(); };
             Application.Run(form);
+            GC.KeepAlive(one);
+        }
+
+        static Mutex one;
+        [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+        [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+
+        // The launcher already open from this folder (also one an update renamed while it ran): to the front.
+        static void ShowOther(string dir)
+        {
+            try
+            {
+                int me = Process.GetCurrentProcess().Id;
+                foreach (var p in Process.GetProcesses())
+                {
+                    try
+                    {
+                        if (p.Id == me || !p.ProcessName.StartsWith("GT5Launcher", StringComparison.OrdinalIgnoreCase)) continue;
+                        if (!string.Equals(Path.GetDirectoryName(p.MainModule.FileName).TrimEnd('\\'), dir, StringComparison.OrdinalIgnoreCase)) continue;
+                        IntPtr w = p.MainWindowHandle;
+                        if (w == IntPtr.Zero) continue;
+                        if (IsIconic(w)) ShowWindow(w, 9);   // SW_RESTORE
+                        SetForegroundWindow(w);
+                        return;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
         }
     }
 
@@ -103,6 +141,101 @@ namespace Gt5Launcher
         }
     }
 
+    // ---- This PC's graphics cards ------------------------------------------------------------------
+    // NVIDIA DLSS runs on an NVIDIA RTX card only, and its frame generation on an RTX 40 series or newer: the
+    // launcher offers them only there. The names come from DXGI (every graphics card, also a laptop's NVIDIA chip
+    // that drives no screen), else from the display devices.
+    class GpuInfo
+    {
+        public bool Rtx, RtxFrameGen;
+        public List<string> Names = new List<string>();
+
+        [ComImport, Guid("770aae78-f26f-4dba-a829-253c83d1b387"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IDXGIFactory1
+        {
+            void SetPrivateData(); void SetPrivateDataInterface(); void GetPrivateData(); void GetParent();
+            void EnumAdapters(); void MakeWindowAssociation(); void GetWindowAssociation(); void CreateSwapChain(); void CreateSoftwareAdapter();
+            [PreserveSig] int EnumAdapters1(uint index, out IDXGIAdapter1 adapter);
+        }
+        [ComImport, Guid("29038f61-3839-4626-91fd-086879011a05"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IDXGIAdapter1
+        {
+            void SetPrivateData(); void SetPrivateDataInterface(); void GetPrivateData(); void GetParent();
+            void EnumOutputs(); void GetDesc(); void CheckInterfaceSupport();
+            [PreserveSig] int GetDesc1(out AdapterDesc1 desc);
+        }
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct AdapterDesc1
+        {
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string Description;
+            public uint VendorId, DeviceId, SubSysId, Revision;
+            public UIntPtr DedicatedVideoMemory, DedicatedSystemMemory, SharedSystemMemory;
+            public uint LuidLow; public int LuidHigh; public uint Flags;
+        }
+        [DllImport("dxgi.dll")] static extern int CreateDXGIFactory1(ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IDXGIFactory1 factory);
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct DisplayDevice
+        {
+            public int cb;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceString;
+            public int StateFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceID;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceKey;
+        }
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool EnumDisplayDevices(string device, uint i, ref DisplayDevice dd, uint flags);
+
+        public static GpuInfo Read()
+        {
+            var g = new GpuInfo();
+            // GT5_LAUNCHER_GPU=<name> (testing): as if that were the only card.
+            string test = Environment.GetEnvironmentVariable("GT5_LAUNCHER_GPU");
+            if (!string.IsNullOrEmpty(test)) g.Names.Add(test);
+            else
+            {
+                try
+                {
+                    var iid = typeof(IDXGIFactory1).GUID;
+                    IDXGIFactory1 f;
+                    if (CreateDXGIFactory1(ref iid, out f) == 0 && f != null)
+                    {
+                        for (uint i = 0; i < 16; i++)
+                        {
+                            IDXGIAdapter1 a;
+                            if (f.EnumAdapters1(i, out a) != 0 || a == null) break;
+                            AdapterDesc1 d;
+                            if (a.GetDesc1(out d) == 0 && (d.Flags & 2) == 0 && !string.IsNullOrEmpty(d.Description) && !g.Names.Contains(d.Description.Trim()))
+                                g.Names.Add(d.Description.Trim());   // flag 2: a software adapter
+                            Marshal.ReleaseComObject(a);
+                        }
+                        Marshal.ReleaseComObject(f);
+                    }
+                }
+                catch { }
+                if (g.Names.Count == 0)
+                {
+                    try
+                    {
+                        var dd = new DisplayDevice(); dd.cb = Marshal.SizeOf(typeof(DisplayDevice));
+                        for (uint i = 0; EnumDisplayDevices(null, i, ref dd, 0); i++) { if (!g.Names.Contains(dd.DeviceString)) g.Names.Add(dd.DeviceString); dd.cb = Marshal.SizeOf(typeof(DisplayDevice)); }
+                    }
+                    catch { }
+                }
+            }
+            foreach (var n in g.Names)
+            {
+                if (n.IndexOf("NVIDIA", StringComparison.OrdinalIgnoreCase) < 0 || !Regex.IsMatch(n, @"\bRTX\b", RegexOptions.IgnoreCase)) continue;
+                g.Rtx = true;
+                // RTX 40 / 50 series (GeForce "RTX 4070", laptops too), and the Ada and Blackwell workstation cards.
+                Match m = Regex.Match(n, @"\bRTX\s+(\d\d)\d\d\b", RegexOptions.IgnoreCase);
+                if (Regex.IsMatch(n, @"\b(Ada|Blackwell)\b", RegexOptions.IgnoreCase) ||
+                    (m.Success && n.IndexOf("Quadro", StringComparison.OrdinalIgnoreCase) < 0 && int.Parse(m.Groups[1].Value) >= 40))
+                    g.RtxFrameGen = true;
+            }
+            return g;
+        }
+    }
+
     // ---- Text in two languages ---------------------------------------------------------------------
     static class T
     {
@@ -118,119 +251,137 @@ namespace Gt5Launcher
             { "nav.help", new[] { "Help", "帮助" } },
             { "play", new[] { "PLAY", "开始游戏" } },
             { "running", new[] { "RUNNING", "运行中" } },
-            { "ready", new[] { "Ready. Settings are saved when you press Play.", "就绪。按“开始游戏”时会保存设置。" } },
-            { "notbuilt", new[] { "The game isn't built yet (GT5\\build\\gt5.exe is missing). Run GT5-Installer.bat or setup.ps1 first.", "游戏尚未构建（缺少 GT5\\build\\gt5.exe）。请先运行 GT5-Installer.bat 或 setup.ps1。" } },
-            { "noelf", new[] { "GT5\\input\\EBOOT.elf is missing: setup isn't finished (see README, Install).", "缺少 GT5\\input\\EBOOT.elf：安装尚未完成（见 README 的安装部分）。" } },
-            { "novol", new[] { "GT5\\vfs\\PS3_GAME\\USRDIR\\GT.VOL is missing. It's the game's data (about 12 GB): without it the game starts to a black screen. Copy it from PS3_GAME\\USRDIR in your disc dump into that folder.", "缺少 GT5\\vfs\\PS3_GAME\\USRDIR\\GT.VOL。这是游戏数据（约 12 GB），没有它游戏会黑屏。请从光盘 dump 的 PS3_GAME\\USRDIR 中把它复制到该文件夹。" } },
-            { "volparts", new[] { "GT.VOL is in pieces (GT.VOL.66600, .66601, ...), as dumps made to a FAT32 drive are. The game needs it in one file. Join the pieces now? It takes a few minutes and about 12 GB of free space.", "GT.VOL 被分成了多个部分（GT.VOL.66600、.66601 ……），这是保存到 FAT32 硬盘的 dump 的特点。游戏需要完整的一个文件。现在合并吗？需要几分钟和约 12 GB 可用空间。" } },
-            { "volparts.page", new[] { "GT.VOL is in pieces (GT.VOL.66600, .66601, ...), as dumps made to a FAT32 drive are. Press Play to join them into one file (a few minutes, about 12 GB of free space).", "GT.VOL 被分成了多个部分（GT.VOL.66600、.66601 ……），这是保存到 FAT32 硬盘的 dump 的特点。按“开始游戏”即可合并为一个文件（需要几分钟和约 12 GB 可用空间）。" } },
+            { "ready", new[] { "Ready.", "就绪。" } },
+            { "notbuilt", new[] { "The game isn't installed yet: run the installer.", "游戏尚未安装：请运行安装程序。" } },
+            { "noelf", new[] { "The install isn't finished: run the installer again.", "安装尚未完成：请再次运行安装程序。" } },
+            { "novol", new[] { "The game's data is missing: run the installer again and choose your game.", "缺少游戏数据：请再次运行安装程序并选择你的游戏。" } },
+            { "volparts.page", new[] { "The game's data is in pieces: Play joins them first (a few minutes, 12 GB free space).", "游戏数据被分成了多个部分：按“开始游戏”会先合并（几分钟，需 12 GB 可用空间）。" } },
             { "already", new[] { "The game is already running.", "游戏已经在运行。" } },
             { "started", new[] { "Starting the game...", "正在启动游戏..." } },
             { "stopped", new[] { "The game has closed.", "游戏已关闭。" } },
-            { "quickexit", new[] { "The game closed right after starting. Its log is in GT5\\logs\\play.err (Help: Save logs for a report).", "游戏启动后立即关闭。日志在 GT5\\logs\\play.err（帮助：保存日志用于报告）。" } },
-            { "crashed", new[] { "The game stopped. Windows says: {0}. This is in GT5\\logs\\play.err too (Help: Save logs for a report).", "游戏已停止。Windows 报告：{0}。这也写在 GT5\\logs\\play.err 里（帮助：保存日志用于报告）。" } },
+            // The game ended on its own with an exit code that isn't one of its own (0, or 20 / 21, where it has told
+            // the player itself): what Windows recorded goes to GT5\logs\play.err, not here.
+            { "crashed", new[] { "The game stopped unexpectedly. Help: Save logs for a report.", "游戏意外停止。可在“帮助”中保存日志用于报告。" } },
+            { "nostart", new[] { "The game couldn't be started.", "无法启动游戏。" } },
             { "version", new[] { "Version", "版本" } },
             { "devbuild", new[] { "development build", "开发版本" } },
-            // Display
+            // Display. The rows say what the game's own menu says (ps3recomp runtime\settings\gt5_settings_table.h).
             { "res", new[] { "Resolution", "分辨率" } },
-            { "res.help", new[] { "The TV mode the game is told it's on, like on a PS3. 1080p: races drawn at 1728x972 with a sharp 1920x1080 HUD. 720p: races at 1152x648, for slow graphics chips.", "游戏所认为的电视模式（同 PS3）。1080p：比赛以 1728x972 绘制，界面为 1920x1080。720p：比赛以 1152x648 绘制，适合较慢的显卡。" } },
-            { "res.1080", new[] { "1080p (sharper)", "1080p（更清晰）" } },
-            { "res.720", new[] { "720p (faster on slow graphics)", "720p（较慢显卡更流畅）" } },
-            { "aa", new[] { "Anti-aliasing (NVIDIA DLSS)", "抗锯齿（NVIDIA DLSS）" } },
-            { "aa.off", new[] { "Off (as the game draws)", "关（游戏原样）" } },
-            { "aa.dlaa", new[] { "DLAA (smoothest edges)", "DLAA（边缘最平滑）" } },
-            { "aa.q", new[] { "DLSS Quality", "DLSS 质量" } },
-            { "aa.b", new[] { "DLSS Balanced", "DLSS 平衡" } },
-            { "aa.p", new[] { "DLSS Performance", "DLSS 性能" } },
-            { "aa.help", new[] { "Smooths jagged edges in races with NVIDIA's DLSS (RTX graphics cards). DLAA draws the 3D picture at full size and cleans it; the DLSS modes draw it smaller and rebuild it, for slower cards. Menus are left as they are. Can be changed while playing (F1). DirectX 12 only.", "在比赛中用 NVIDIA 的 DLSS 平滑锯齿边缘（需要 RTX 显卡）。DLAA 以完整尺寸绘制 3D 画面并加以处理；DLSS 各模式以较小尺寸绘制后重建，适合较慢的显卡。菜单保持原样。可在游戏中按 F1 随时更改。仅限 DirectX 12。" } },
-            { "dlss.add", new[] { "NVIDIA DLSS isn't on this PC's game yet. Add it now?\n\nDLSS is NVIDIA's software, not part of this project. This fetches NVIDIA's DLSS SDK (about 150 MB) from NVIDIA's own GitHub page, shows you NVIDIA's licence to accept, and builds a small plug-in next to gt5.exe: about a minute, in a window that shows the progress. It needs an NVIDIA RTX graphics card. The game works the same without it.", "这台电脑的游戏里还没有 NVIDIA DLSS。现在添加吗？\n\nDLSS 是 NVIDIA 的软件，不属于本项目。这会从 NVIDIA 自己的 GitHub 页面下载 DLSS SDK（约 150 MB），显示 NVIDIA 的许可协议供你确认，并在 gt5.exe 旁边编译一个小插件：大约一分钟，进度会显示在一个窗口中。需要 NVIDIA RTX 显卡。不添加也不影响游戏。" } },
-            { "dlss.adding", new[] { "Adding NVIDIA DLSS (see the other window)...", "正在添加 NVIDIA DLSS（见另一个窗口）……" } },
-            { "dlss.added", new[] { "NVIDIA DLSS is ready: the next Play uses it.", "NVIDIA DLSS 已就绪：下次开始游戏时使用。" } },
-            { "dlss.failed", new[] { "NVIDIA DLSS wasn't added (the other window said why), so anti-aliasing is off again.", "未能添加 NVIDIA DLSS（原因见另一个窗口），抗锯齿已改回关闭。" } },
-            { "rres", new[] { "Render resolution", "渲染分辨率" } },
-            { "rres.same", new[] { "Same as the game draws", "与游戏绘制的相同" } },
-            { "rres.help", new[] { "The height the picture is really drawn at, whatever the game's own mode above is: 1440p, 4K or 5K make everything sharper and smooth jagged edges, and cost graphics-card time. On a smaller screen the bigger picture is scaled down to it, which smooths edges further. Can also be changed while playing, in the game's menu (F1). DirectX 12 only.", "画面实际绘制的高度，与上面的游戏模式无关：1440p、4K 或 5K 更清晰、锯齿更少，但更占用显卡。屏幕较小时会缩小显示，边缘更平滑。也可以在游戏中按 F1 打开菜单随时更改。仅限 DirectX 12。" } },
+            { "aa", new[] { "Anti-aliasing", "抗锯齿" } },
+            { "aa.off", new[] { "Off", "关" } },
+            { "aa.dlaa", new[] { "DLAA", "DLAA" } },
+            { "aa.q", new[] { "DLSS: Quality", "DLSS：质量" } },
+            { "aa.b", new[] { "DLSS: Balanced", "DLSS：平衡" } },
+            { "aa.p", new[] { "DLSS: Performance", "DLSS：性能" } },
+            { "aa.u", new[] { "DLSS: Ultra Performance", "DLSS：超级性能" } },
+            { "aa.c", new[] { "DLSS: custom scale", "DLSS：自定义比例" } },
+            { "shadows", new[] { "Shadows", "阴影" } },
+            { "shadows.standard", new[] { "Standard", "标准" } },
+            { "shadows.high", new[] { "High", "高" } },
+            { "shadows.ultra", new[] { "Ultra", "极高" } },
+            // The NVIDIA DLSS row under Anti-aliasing (an add-on: see class Addon). [[...]] is the link.
+            { "dlss.name", new[] { "NVIDIA DLSS", "NVIDIA DLSS" } },
+            { "dlss.note", new[] { "From NVIDIA, about 60 MB. Adding it accepts [[NVIDIA's licence]].", "来自 NVIDIA，约 60 MB。添加即表示接受 [[NVIDIA 的许可协议]]。" } },
+            { "dlss.note.added", new[] { "NVIDIA's software, under [[NVIDIA's licence]].", "NVIDIA 的软件，适用 [[NVIDIA 的许可协议]]。" } },
+            { "dlss.title.add", new[] { "Adding NVIDIA DLSS", "正在添加 NVIDIA DLSS" } },
+            { "dlss.title.remove", new[] { "Removing NVIDIA DLSS", "正在移除 NVIDIA DLSS" } },
+            { "dlss.ask.remove", new[] { "Remove NVIDIA DLSS?", "移除 NVIDIA DLSS？" } },
+            { "dlss.ask.remove.text", new[] { "Anti-aliasing goes back to Off. You can add it again any time.", "抗锯齿会改回关闭。之后可随时再次添加。" } },
+            { "dlss.added", new[] { "NVIDIA DLSS is ready: pick a mode in Anti-aliasing.", "NVIDIA DLSS 已就绪：在“抗锯齿”中选择模式即可。" } },
+            { "dlss.notadded", new[] { "NVIDIA DLSS wasn't added.", "未添加 NVIDIA DLSS。" } },
+            { "dlss.removed", new[] { "NVIDIA DLSS is removed.", "已移除 NVIDIA DLSS。" } },
+            { "dlss.notremoved", new[] { "NVIDIA DLSS wasn't removed.", "未能移除 NVIDIA DLSS。" } },
+            { "dlss.first", new[] { "Add NVIDIA DLSS first (the button below).", "请先添加 NVIDIA DLSS（下面的按钮）。" } },
+            { "addon.add", new[] { "Add", "添加" } },
+            { "addon.adding", new[] { "Adding...", "正在添加…" } },
+            { "addon.added", new[] { "Added", "已添加" } },
+            { "addon.remove", new[] { "Remove", "移除" } },
+            { "addon.removing", new[] { "Removing...", "正在移除…" } },
             { "shape", new[] { "Screen shape", "画面比例" } },
-            { "shape.help", new[] { "Auto uses your monitor's shape: on an ultrawide the game draws a wider view and keeps the HUD 16:9 in the middle.", "自动：使用显示器的比例。超宽屏上游戏会显示更宽的视野，界面保持 16:9 居中。" } },
+            { "shape.help", new[] { "", "" } },
             { "shape.auto", new[] { "Auto (your monitor)", "自动（跟随显示器）" } },
             { "window", new[] { "Window", "窗口" } },
-            { "window.help", new[] { "Borderless full screen covers the whole monitor (Alt+Enter is switched off in the game).", "无边框全屏会铺满整个显示器（游戏中已禁用 Alt+Enter）。" } },
+            { "window.help", new[] { "", "" } },
             { "window.windowed", new[] { "Window", "窗口模式" } },
             { "window.max", new[] { "Maximized window", "最大化窗口" } },
             { "window.borderless", new[] { "Borderless full screen", "无边框全屏" } },
             { "size", new[] { "Window size", "窗口大小" } },
-            { "size.help", new[] { "The size the window opens at (window mode only).", "窗口打开时的大小（仅窗口模式）。" } },
+            { "size.help", new[] { "", "" } },
             { "size.default", new[] { "Default", "默认" } },
-            { "speed", new[] { "Speed", "速度" } },
+            { "speed", new[] { "Frame rate", "帧率" } },
             { "intro", new[] { "Skip the opening movie", "跳过开场动画" } },
-            { "intro.help", new[] { "A quicker start. On a busy or slower PC the opening movie could stop on one frame at the first start. GT TV still has it.", "启动更快。在繁忙或较慢的电脑上，开场动画在首次启动时可能会卡在一帧。GT TV 中仍可观看。" } },
-            { "speed.help", new[] { "30 fps draws every other frame. It only makes the game faster when the graphics card is what holds it back (GPU busy near 100%). On most PCs the CPU is the limit: then the picture gets less smooth for little or no gain (about 10% on a 6-core test, nothing on a player's Ryzen 5 3600). While it's on, the window title shows both numbers, e.g. FPS: 15 (game 30); the game number is the one that counts.", "30 fps 隔帧绘制。只有在显卡是瓶颈（GPU 占用接近 100%）时才会让游戏变快。大多数电脑的瓶颈是 CPU：这时画面变得不流畅，速度几乎没有提升（6 核测试中约 10%，一位玩家的 Ryzen 5 3600 上没有提升）。开启时窗口标题会同时显示两个数字，例如 FPS: 15 (game 30)；以 game 后面的数字为准。" } },
-            { "speed.full", new[] { "Draw every frame (recommended)", "每帧都绘制（推荐）" } },
-            { "speed.30", new[] { "30 fps: draw every other frame (only if the graphics card is the limit)", "30 fps：隔帧绘制（仅当显卡是瓶颈时）" } },
-            { "watch", new[] { "Watch mode by itself", "自动观看模式" } },
-            { "watch.help", new[] { "Comes on after 10 s without input (B-Spec, replays): draws fewer frames (see the next setting) and lowers the game's priority. F9 toggles it any time.", "10 秒无操作后自动开启（B-Spec、回放）：减少绘制的帧数（见下一项）并降低游戏优先级。随时可按 F9 切换。" } },
-            { "framegen", new[] { "Frame generation (beta)", "帧生成（测试版）" } },
-            { "framegen.help", new[] { "Fills the frames that 30 fps and watch mode leave out with frames made on the graphics card, so the picture stays at 60. The game and its CPU work are unchanged; the newest frame reaches the screen one refresh later. Off: only drawn frames are shown.", "用显卡生成的帧补上 30 fps 和观看模式省略的帧，让画面保持 60 帧。游戏本身和 CPU 负载不变；最新的一帧会晚一次刷新显示。关闭时只显示实际绘制的帧。" } },
-            { "fgmult", new[] { "Frame rate multiplier", "帧率倍增" } },
-            { "fgmult.off", new[] { "Off", "关闭" } },
-            { "fgmult.help", new[] { "Shows 2, 3 or 4 frames for every frame the game draws, the extra ones made on the graphics card, for screens faster than 60 Hz. It is limited to what the screen can show: 2x needs 120 Hz, 3x needs 180 Hz, 4x needs 240 Hz (a 144 or 165 Hz screen gets 2x). The game itself still runs at 60; the newest frame reaches the screen about half a frame later. Turns frame generation on.", "游戏每绘制一帧，显示 2、3 或 4 帧，多出的帧由显卡生成，适用于刷新率高于 60 Hz 的显示器。倍数受显示器限制：2 倍需要 120 Hz，3 倍需要 180 Hz，4 倍需要 240 Hz（144 或 165 Hz 的显示器为 2 倍）。游戏本身仍以 60 帧运行；最新的一帧会晚约半帧显示。会同时开启帧生成。" } },
-            { "texdump", new[] { "Dump textures (for texture packs)", "导出纹理（用于制作纹理包）" } },
-            { "texdump.help", new[] { "Writes every texture the game shows to GT5\\textures\\dump (DDS and PNG), to make HD texture packs from (see MODDING.md). Costs a little speed: turn it off when you are done. DirectX 12 only.", "把游戏显示的每个纹理写入 GT5\\textures\\dump（DDS 和 PNG），用来制作高清纹理包（见 MODDING.md）。会稍微降低速度，用完请关闭。仅限 DirectX 12。" } },
+            { "intro.help", new[] { "", "" } },
+            { "speed.full", new[] { "60 fps", "60 fps" } },
+            { "speed.30", new[] { "30 fps", "30 fps" } },
+            { "framegen", new[] { "Frame generation", "帧生成" } },
+            { "fgmult", new[] { "Multiplier", "倍数" } },
+            { "fg.off", new[] { "Off", "关" } },
+            { "fg.on", new[] { "On", "开" } },
+            { "fgmethod", new[] { "Generator", "生成器" } },
+            { "fgmethod.auto", new[] { "Auto (best available)", "自动（最佳可用）" } },
+            { "fgmethod.builtin", new[] { "Built-in", "内置" } },
+            // The AMD FSR 3 row (an add-on, like NVIDIA DLSS).
+            { "fsr.name", new[] { "AMD FSR 3", "AMD FSR 3" } },
+            { "fsr.note", new[] { "From AMD, about 20 MB.", "来自 AMD，约 20 MB。" } },
+            { "fsr.note.added", new[] { "", "" } },
+            { "fsr.title.add", new[] { "Adding AMD FSR 3", "正在添加 AMD FSR 3" } },
+            { "fsr.title.remove", new[] { "Removing AMD FSR 3", "正在移除 AMD FSR 3" } },
+            { "fsr.ask.remove", new[] { "Remove AMD FSR 3?", "移除 AMD FSR 3？" } },
+            { "fsr.ask.remove.text", new[] { "Frame generation will use another generator. You can add it again any time.", "帧生成将改用其他生成器。之后可随时再次添加。" } },
+            { "fsr.added", new[] { "AMD FSR 3 is ready.", "AMD FSR 3 已就绪。" } },
+            { "fsr.notadded", new[] { "AMD FSR 3 wasn't added.", "未添加 AMD FSR 3。" } },
+            { "fsr.removed", new[] { "AMD FSR 3 is removed.", "已移除 AMD FSR 3。" } },
+            { "fsr.notremoved", new[] { "AMD FSR 3 wasn't removed.", "未能移除 AMD FSR 3。" } },
+            { "fsr.first", new[] { "Add AMD FSR 3 first (the button below).", "请先添加 AMD FSR 3（下面的按钮）。" } },
             { "renderer", new[] { "Renderer", "渲染器" } },
-            { "renderer.help", new[] { "DirectX 12 is the port's main renderer and the fastest. Vulkan (the Linux and Android renderer) is here to try: on Windows it's slower for now, some effects may look different, and frame generation and the F9 watch-mode key are DirectX 12 only. Picking Vulkan the first time adds it to your gt5.exe (a one-time build).", "DirectX 12 是本移植的主要渲染器，也是最快的。Vulkan（Linux 和 Android 版使用的渲染器）可供试用：目前在 Windows 上较慢，部分效果可能不同，帧生成和 F9 观看模式快捷键只在 DirectX 12 下可用。第一次选择 Vulkan 时会把它编译进 gt5.exe（只需一次）。" } },
-            { "renderer.dx12", new[] { "DirectX 12 (recommended)", "DirectX 12（推荐）" } },
+            { "renderer.dx12", new[] { "DirectX 12", "DirectX 12" } },
             { "renderer.vk", new[] { "Vulkan (experimental)", "Vulkan（实验性）" } },
-            { "vk.add", new[] { "Vulkan isn't in your gt5.exe yet. Add it now?\n\nThis downloads the source code of SDL2 and glslang (about 60 MB, from GitHub) and rebuilds the game's runtime with them: about 10 to 20 minutes, in a window that shows the progress. DirectX 12 keeps working either way.", "你的 gt5.exe 里还没有 Vulkan。现在添加吗？\n\n这会从 GitHub 下载 SDL2 和 glslang 的源代码（约 60 MB），并用它们重新编译游戏的运行库：约 10 到 20 分钟，进度会显示在一个窗口中。无论如何 DirectX 12 都能继续使用。" } },
-            { "vk.adding", new[] { "Adding Vulkan to gt5.exe (see the other window)...", "正在把 Vulkan 加入 gt5.exe（见另一个窗口）……" } },
-            { "vk.added", new[] { "Vulkan is ready: the next Play uses it.", "Vulkan 已就绪：下次开始游戏时使用。" } },
-            { "vk.failed", new[] { "Vulkan couldn't be added (the other window said why), so the renderer is DirectX 12 again.", "未能添加 Vulkan（原因见另一个窗口），渲染器已改回 DirectX 12。" } },
-            { "wdraw", new[] { "Watch mode draws", "观看模式绘制" } },
-            { "wdraw.help", new[] { "B-Spec mode for laptops: while you only watch, fewer frames are drawn and the race keeps full speed, so more of the CPU is left for the game. The window title shows FPS: x (game y); y is how fast the game runs.", "笔记本的 B-Spec 模式：只观看时绘制更少的帧，比赛保持全速，把更多 CPU 留给游戏。窗口标题显示 FPS: x (game y)；y 是游戏实际运行的速度。" } },
-            { "wdraw.2", new[] { "1 frame in 2", "每 2 帧绘制 1 帧" } },
-            { "wdraw.3", new[] { "1 frame in 3 (laptops)", "每 3 帧绘制 1 帧（笔记本）" } },
-            { "wdraw.4", new[] { "1 frame in 4 (weakest PCs)", "每 4 帧绘制 1 帧（最弱的电脑）" } },
-            { "spus", new[] { "Extra SPU threads", "额外 SPU 线程" } },
-            { "spus.help", new[] { "PC threads for the PS3's co-processors. 2 suits most CPUs; 0-1 on 4-core CPUs.", "用于 PS3 协处理器的 PC 线程。多数 CPU 用 2；4 核 CPU 用 0-1。" } },
+            // Under Renderer while Vulkan is chosen: the rows it does nothing with yet are greyed.
+            { "renderer.dx12only", new[] { "Greyed settings need DirectX 12.", "灰色的设置需要 DirectX 12。" } },
             { "cockpit", new[] { "Cockpit view", "车内视角" } },
             { "cockpit.game", new[] { "As in the game", "游戏原样" } },
             { "cfov", new[] { "Field of view", "视野" } },
-            { "cfov.help", new[] { "Only the view from the driver's seat (52.4° from the top of the screen to the bottom in the game; the sides widen with it). The chase, bumper and roof views stay as they are.", "只影响驾驶座视角（游戏中从屏幕上缘到下缘为 52.4°，左右随之变宽）。追尾、保险杠和车顶视角保持不变。" } },
+            { "cfov.help", new[] { "", "" } },
             { "cfov.wider", new[] { "{0}° wider", "加宽 {0}°" } },
             { "cfov.narrower", new[] { "{0}° narrower", "缩小 {0}°" } },
             { "cseat", new[] { "Seat forward / back", "座椅前后" } },
-            { "cseat.help", new[] { "Moves your eye in the cockpit view toward the windscreen, or back, from where the game puts the driver.", "在车内视角中把视点移向挡风玻璃，或从游戏设定的驾驶员位置向后移。" } },
+            { "cseat.help", new[] { "", "" } },
             { "cseat.fwd", new[] { "{0} cm forward", "向前 {0} 厘米" } },
             { "cseat.back", new[] { "{0} cm back", "向后 {0} 厘米" } },
             { "cheight", new[] { "Seat height", "座椅高度" } },
             { "cheight.up", new[] { "{0} cm higher", "升高 {0} 厘米" } },
             { "cheight.down", new[] { "{0} cm lower", "降低 {0} 厘米" } },
             // Controls
+            { "triggers", new[] { "Triggers", "扳机键" } },
+            { "triggers.drive", new[] { "Throttle and brake", "油门和刹车" } },
+            { "triggers.ps3", new[] { "As on a PS3 pad", "与 PS3 手柄相同" } },
             { "padbg", new[] { "Controller works when the game isn't in front", "游戏不在前台时手柄仍可用" } },
             { "clip", new[] { "Keep the mouse inside the window", "鼠标限制在窗口内" } },
             { "wheel", new[] { "Steering wheel", "方向盘" } },
-            { "wheel.help", new[] { "Plug it in before starting. The game sees it as a Logitech G27 with force feedback (new, not yet tried on a real wheel: please report how it goes).", "请在启动前连接。游戏会将其识别为带力反馈的 Logitech G27（新功能，尚未在真实方向盘上测试，欢迎反馈）。" } },
+            { "wheel.help", new[] { "", "" } },
             { "wheel.on", new[] { "Use one if connected", "已连接时使用" } },
             { "wheel.off", new[] { "Don't look for a wheel", "不使用方向盘" } },
             { "range", new[] { "Wheel rotation", "方向盘转角" } },
-            { "range.help", new[] { "Set it to what your wheel is set to.", "设置为方向盘自身的转角设定。" } },
+            { "range.help", new[] { "", "" } },
             { "ffb", new[] { "Force feedback strength", "力反馈强度" } },
             { "ffbinv", new[] { "Forces push the wrong way (invert)", "力反馈方向相反（反转）" } },
             { "mouse", new[] { "Steer with the mouse", "用鼠标转向" } },
-            { "mouse.help", new[] { "In races, move the mouse left and right to steer. Left button = throttle, right button = brake, middle button = straighten the wheel; the keyboard and pads keep working. At the menus, left click = OK, right click = back and the mouse wheel moves up and down; Alt+Tab frees the mouse at any time. The game sees a steering wheel, so a real wheel isn't used while this is on.", "比赛中左右移动鼠标即可转向。左键 = 油门，右键 = 刹车，中键 = 方向盘回正；键盘和手柄仍然可用。在菜单中，左键 = 确定，右键 = 返回，鼠标滚轮上下移动；随时按 Alt+Tab 即可释放鼠标。游戏会把它当作方向盘，所以开启时不会使用真实方向盘。" } },
+            { "mouse.help", new[] { "", "" } },
             { "msens", new[] { "Mouse steering speed", "鼠标转向灵敏度" } },
-            { "msens.help", new[] { "100% is normal: mouse movement about the width of a 1080p screen turns the wheel from straight ahead to full lock (at Windows' default pointer speed). Lower is slower, 50% needs twice the movement; 1 to 1000, in steps of 0.5.", "100% 为正常：鼠标移动约一个 1080p 屏幕的宽度，方向盘从正前方转到打满（按 Windows 默认指针速度）。数值越小越慢，50% 需要两倍的移动距离；范围 1 到 1000，步长 0.5。" } },
+            { "msens.help", new[] { "", "" } },
             { "msens.normal", new[] { "Normal", "正常" } },
             { "mcenter", new[] { "Wheel straightens by itself", "方向盘自动回正" } },
-            { "mcenter.help", new[] { "When you stop moving the mouse. Off: the wheel stays where the mouse left it.", "停止移动鼠标时回正。关：方向盘停留在鼠标留下的位置。" } },
+            { "mcenter.help", new[] { "", "" } },
             { "mcenter.slow", new[] { "Slowly", "慢" } },
             { "mcenter.mid", new[] { "Medium", "中" } },
             { "mcenter.fast", new[] { "Quickly", "快" } },
             { "mouse.short", new[] { "Mouse steering", "鼠标转向" } },
-            { "keys", new[] { "Keyboard: Z = Cross (OK), X = Circle, A = Square, S = Triangle, arrows = D-pad, Enter = Start, Tab = Select (change them on the Controls page). DualSense, DualShock 4 and Xbox pads work too.", "键盘：Z = ✕（确定），X = ○，A = □，S = △，方向键 = 十字键，Enter = Start，Tab = Select（可在“操控”页面更改）。也支持 DualSense、DualShock 4 和 Xbox 手柄。" } },
+            // The Play page: how to reach the game's own settings ({0}: the menu key, and the controller's buttons).
+            { "menukey", new[] { "In the game, {0} opens the settings.", "游戏中按 {0} 打开设置。" } },
             // Keyboard keys (PS3_KEYS)
             { "kb.title", new[] { "Keyboard keys", "键盘按键" } },
-            { "kb.help", new[] { "Click a row, then press the key you want (Esc cancels); right-click a row to add a second key, × clears it. A key that's already used moves to the new row. The keyboard is used when no pad is connected. The actions are GT5's own pad layout (Options > Hardware > Change Button Assignments in the game); change them there and these rows follow the button, not the action. With mouse steering on, the keys work the same.", "点击一行，然后按下想要的键（Esc 取消）；右键点击一行可添加第二个键，× 清除。已被使用的键会移到新的一行。未连接手柄时使用键盘。动作为 GT5 自带的手柄布局（游戏中：选项 > 硬件 > 更改按键分配）；在那里更改后，这里的行对应的是按钮而不是动作。开启鼠标转向时按键同样有效。" } },
-            { "kb.views", new[] { "Left View, Right View and Flash Lights have no pad button in GT5's default layout: give them one in the game (for example the right stick's left and right), then bind a key to that button here.", "在 GT5 默认布局中，“左视角”“右视角”和“闪灯”没有手柄按钮：先在游戏中为它们分配一个按钮（例如右摇杆的左和右），再在这里为该按钮绑定按键。" } },
+            { "kb.help", new[] { "", "" } },
+            { "kb.views", new[] { "Left View, Right View, Flash Lights: give them a button in the game first.", "左视角、右视角、闪灯：先在游戏中为它们分配按钮。" } },
             { "kb.reset", new[] { "Reset to defaults", "恢复默认" } },
             { "kb.press", new[] { "Press a key...", "请按一个键..." } },
             { "kb.none", new[] { "(no key)", "（无按键）" } },
@@ -257,8 +408,8 @@ namespace Gt5Launcher
             { "kb.a.lstick_right", new[] { "Steer right", "右转" } },
             { "kb.a.rstick_up", new[] { "Accelerate", "加速" } },
             { "kb.a.rstick_down", new[] { "Brake", "刹车" } },
-            { "kb.a.rstick_left", new[] { "(nothing by default: Left View?)", "（默认无：左视角？）" } },
-            { "kb.a.rstick_right", new[] { "(nothing by default: Right View?)", "（默认无：右视角？）" } },
+            { "kb.a.rstick_left", new[] { "(nothing by default)", "（默认无）" } },
+            { "kb.a.rstick_right", new[] { "(nothing by default)", "（默认无）" } },
             { "kb.b.cross", new[] { "Cross", "✕" } }, { "kb.b.square", new[] { "Square", "□" } },
             { "kb.b.circle", new[] { "Circle", "○" } }, { "kb.b.triangle", new[] { "Triangle", "△" } },
             { "kb.b.l1", new[] { "L1", "L1" } }, { "kb.b.r1", new[] { "R1", "R1" } }, { "kb.b.l2", new[] { "L2", "L2" } },
@@ -273,10 +424,16 @@ namespace Gt5Launcher
             { "kb.b.rstick_left", new[] { "Right stick left", "右摇杆左" } }, { "kb.b.rstick_right", new[] { "Right stick right", "右摇杆右" } },
             // Game
             { "lang", new[] { "Game language", "游戏语言" } },
-            { "lang.help", new[] { "The PS3 system language the game is told. It only changes if your disc has that language (Europe: many; North America: English, French, Spanish, Portuguese, Japanese).", "告诉游戏的 PS3 系统语言。只有光盘包含该语言时才会改变（欧版语言较多；美版：英、法、西、葡、日）。" } },
+            { "lang.help", new[] { "Only languages your disc has.", "仅限光盘包含的语言。" } },
             { "lang.system", new[] { "Same as Windows", "与 Windows 相同" } },
             { "mods", new[] { "Mods", "模组" } },
-            { "mods.none", new[] { "No mods installed. Mods go in GT5\\mods (see MODDING.md); after adding one, run update.ps1 -Force so it's built in.", "未安装模组。模组放在 GT5\\mods（见 MODDING.md）；添加后运行 update.ps1 -Force 以编译进游戏。" } },
+            // Mods the port ships, by their folder name (GT5\mods\<name>): a few words in place of mod.json's text.
+            // Another mod shows its own name only.
+            { "mod.half-rate", new[] { "Half rate (30 fps, less CPU)", "半速（30 帧，更省 CPU）" } },
+            { "sound", new[] { "Sound", "声音" } },
+            { "volume", new[] { "Volume", "音量" } },
+            { "bgmute", new[] { "Mute when in the background", "在后台时静音" } },
+            { "launcher", new[] { "Launcher", "启动器" } },
             { "ui", new[] { "Launcher language", "启动器语言" } },
             { "hide", new[] { "Minimize the launcher while playing", "游戏时最小化启动器" } },
             { "autocheck", new[] { "Check for updates when the launcher opens", "打开启动器时检查更新" } },
@@ -285,14 +442,13 @@ namespace Gt5Launcher
             { "upd.latest", new[] { "Newest release", "最新版本" } },
             { "upd.check", new[] { "Check now", "立即检查" } },
             { "upd.now", new[] { "Update now", "立即更新" } },
-            { "upd.checking", new[] { "Checking GitHub...", "正在检查 GitHub..." } },
+            { "upd.checking", new[] { "Checking...", "正在检查..." } },
             { "upd.uptodate", new[] { "You're up to date.", "已是最新版本。" } },
             { "upd.available", new[] { "Update available: {0}", "有可用更新：{0}" } },
-            { "upd.failed", new[] { "Couldn't reach GitHub: {0}", "无法连接 GitHub：{0}" } },
-            { "upd.howto", new[] { "Update now opens a window that downloads the new version, rebuilds what changed (a few minutes; sometimes about 10 minutes more) and opens the launcher again. Your saves, settings and game files are kept.", "“立即更新”会打开一个窗口，下载新版本并重新构建改动部分（几分钟，有时多约 10 分钟），然后重新打开启动器。存档、设置和游戏文件都会保留。" } },
+            { "upd.failed", new[] { "Couldn't check for updates.", "无法检查更新。" } },
             { "upd.notes", new[] { "What's new", "更新内容" } },
             { "upd.running", new[] { "The game is running: close it before updating.", "游戏正在运行：请先关闭游戏再更新。" } },
-            { "upd.nogit", new[] { "Updating needs the install folder made by the installer (a git clone with update.ps1).", "更新需要由安装程序创建的安装文件夹（含 update.ps1 的 git 克隆）。" } },
+            { "upd.nogit", new[] { "Updating needs an install made by the installer.", "需要由安装程序创建的安装才能更新。" } },
             // The update window
             { "uw.title", new[] { "Updating Gran Turismo 5", "正在更新 Gran Turismo 5" } },
             { "uw.start", new[] { "Starting the update", "正在开始更新" } },
@@ -301,37 +457,89 @@ namespace Gt5Launcher
             { "uw.relift", new[] { "Translating the game's code again (about 10 minutes)", "正在重新转换游戏代码（约 10 分钟）" } },
             { "uw.build", new[] { "Building the game", "正在构建游戏" } },
             { "uw.files", new[] { "{0:N0} of {1:N0} steps", "第 {0:N0} / {1:N0} 步" } },
-            { "uw.retry", new[] { "The build stopped; trying again with fewer jobs", "构建中断，正在以更少的并行任务重试" } },
             { "uw.finish", new[] { "Finishing", "正在完成" } },
+            { "uw.addon", new[] { "Adding {0}", "正在添加 {0}" } },
             { "uw.done", new[] { "Updated to {0}", "已更新到 {0}" } },
             { "uw.donegen", new[] { "Update finished", "更新完成" } },
             { "uw.uptodate", new[] { "Already up to date", "已是最新版本" } },
             { "uw.opening", new[] { "Opening the launcher...", "正在打开启动器..." } },
             { "uw.failed", new[] { "The update stopped", "更新已中止" } },
-            { "uw.log", new[] { "The full text is in GT5\\logs\\update.log: attach it when you report this.", "完整内容在 GT5\\logs\\update.log：报告问题时请附上。" } },
+            { "uw.f.game", new[] { "Close the game, then update again.", "请关闭游戏后再次更新。" } },
+            { "uw.f.net", new[] { "Couldn't connect. Check the internet connection and try again.", "无法连接。请检查网络连接后重试。" } },
+            { "uw.f.other", new[] { "It stopped before the end. Run Update now again to carry on.", "更新在完成前中断。再次点击“立即更新”即可继续。" } },
+            { "uw.log", new[] { "The full text is under Details.", "完整内容见“详细信息”。" } },
             { "uw.details", new[] { "Details", "详细信息" } },
             { "uw.hide", new[] { "Hide details", "隐藏详细信息" } },
             { "uw.open", new[] { "Open the launcher", "打开启动器" } },
             { "uw.close", new[] { "Close", "关闭" } },
-            { "uw.stop", new[] { "The update is still running. Stop it?\n\nThe game may not start until an update finishes: run Update now again later.", "更新仍在进行。要停止吗？\n\n在更新完成之前游戏可能无法启动：之后请再次点击“立即更新”。" } },
+            { "uw.stop", new[] { "Stop the update?\n\nRun Update now again later to finish it.", "要停止更新吗？\n\n之后再次点击“立即更新”即可完成。" } },
             // Help
             { "help.logs", new[] { "Open the logs folder", "打开日志文件夹" } },
             { "help.save", new[] { "Save logs for a report", "保存日志用于报告" } },
-            { "help.saved", new[] { "Saved to your desktop as {0}. Attach it to your report (GitHub accepts .txt).", "已保存到桌面：{0}。请附加到报告中（GitHub 接受 .txt）。" } },
+            { "help.saved", new[] { "Saved to your desktop: {0}. Attach them to your report.", "已保存到桌面：{0}。请附加到报告中。" } },
+            { "help.nologs", new[] { "No logs yet: start the game once first.", "还没有日志：请先启动一次游戏。" } },
             { "help.report", new[] { "Report a problem", "报告问题" } },
             { "help.shaders", new[] { "Clear the shader cache", "清除着色器缓存" } },
             { "help.pkg", new[] { "Install a game update or DLC (.pkg)", "安装游戏更新或 DLC（.pkg）" } },
-            { "pkg.running", new[] { "Close the game first: installing a package changes its files.", "请先关闭游戏：安装包会更改游戏文件。" } },
-            { "pkg.missing", new[] { "GT5\\scripts\\install_pkg.ps1 is missing: update first (Updates page).", "缺少 GT5\\scripts\\install_pkg.ps1：请先更新（更新页面）。" } },
-            { "shaders.ask", new[] { "Delete the shader cache ({0} files, {1:0} MB)?\n\nThe game compiles its shaders again as it needs them, so the first visit to each menu, car and track stutters again for a while, as after a fresh install. Saves, settings and game files are not touched.", "删除着色器缓存（{0} 个文件，{1:0} MB）？\n\n游戏会在需要时重新编译着色器，因此每个菜单、车辆和赛道第一次出现时会再次短暂卡顿，就像刚安装时一样。存档、设置和游戏文件不受影响。" } },
+            { "pkg.title", new[] { "Installing game updates and DLC", "正在安装游戏更新和 DLC" } },
+            { "pkg.done", new[] { "Installed.", "已安装。" } },
+            { "pkg.next", new[] { "Installed. To play the update, run setup.bat in the install folder once (about an hour).", "已安装。要玩这个更新，请在安装文件夹中运行一次 setup.bat（约一小时）。" } },
+            { "pkg.dlc", new[] { "Installed. Each DLC also needs its licence key (README, DLC).", "已安装。每个 DLC 还需要对应的许可密钥（见 README 的 DLC 部分）。" } },
+            { "pkg.notdone", new[] { "The packages weren't all installed.", "部分安装包未能安装。" } },
+            { "pkg.norpcs3", new[] { "Unpacking packages needs RPCS3 (the PS3 emulator) on this PC. Install it from rpcs3.net, then try again.", "解包需要这台电脑上有 RPCS3（PS3 模拟器）。请从 rpcs3.net 安装后重试。" } },
+            { "pkg.notpkg", new[] { "Those files aren't PS3 game packages.", "这些文件不是 PS3 游戏包。" } },
+            { "pkg.some", new[] { "Some packages weren't installed. The log says which.", "部分安装包未能安装。详情见日志。" } },
+            // Joining GT.VOL when it was copied in pieces (Play)
+            { "vol.ask", new[] { "Join the game's data?", "合并游戏数据？" } },
+            { "vol.text", new[] { "The game's data was copied in pieces, as happens with some USB drives. The game needs it in one piece: joining takes a few minutes and about 12 GB of free space.", "游戏数据是分成多个部分复制的（某些 U 盘会这样）。游戏需要完整的一份：合并需要几分钟和约 12 GB 可用空间。" } },
+            { "vol.join", new[] { "Join", "合并" } },
+            { "vol.title", new[] { "Joining the game's data", "正在合并游戏数据" } },
+            { "vol.done", new[] { "The game's data is in one piece.", "游戏数据已合并完成。" } },
+            { "vol.failed", new[] { "The game's data wasn't joined, so the game can't start yet.", "游戏数据未能合并，游戏暂时无法启动。" } },
+            // The task strip: questions and progress at the bottom of the page area (class TaskStrip)
+            { "ask.add", new[] { "Add it", "添加" } },
+            { "ask.notnow", new[] { "Not now", "暂不" } },
+            { "ask.keep", new[] { "Keep it", "保留" } },
+            { "busy", new[] { "One thing at a time: wait until this one finishes.", "请等当前任务完成后再试。" } },
+            { "st.start", new[] { "Starting", "正在开始" } },
+            { "st.download", new[] { "Downloading", "正在下载" } },
+            { "st.unpack", new[] { "Unpacking", "正在解包" } },
+            { "st.prepare", new[] { "Getting ready", "正在准备" } },
+            { "st.build", new[] { "Building", "正在构建" } },
+            { "st.buildgame", new[] { "Building the game", "正在构建游戏" } },
+            { "st.install", new[] { "Installing", "正在安装" } },
+            { "st.copy", new[] { "Copying", "正在复制" } },
+            { "st.join", new[] { "Joining", "正在合并" } },
+            { "st.remove", new[] { "Removing", "正在移除" } },
+            { "st.working", new[] { "Working", "正在处理" } },
+            { "st.stopping", new[] { "Stopping", "正在停止" } },
+            { "st.done", new[] { "Done.", "完成。" } },
+            { "st.failed", new[] { "Didn't finish.", "未完成。" } },
+            { "st.stopped", new[] { "Stopped.", "已停止。" } },
+            { "st.again", new[] { "You can try again any time.", "之后可随时重试。" } },
+            { "st.cancel", new[] { "Cancel", "取消" } },
+            { "st.log", new[] { "Open the log", "打开日志" } },
+            { "st.closeask", new[] { "This isn't finished yet. Stop it and close the launcher?", "尚未完成。要停止并关闭启动器吗？" } },
+            { "st.stopclose", new[] { "Stop and close", "停止并关闭" } },
+            { "st.keepgoing", new[] { "Keep going", "继续" } },
+            { "fail.net", new[] { "The download didn't finish. Check the internet connection and try again.", "下载未完成。请检查网络连接后重试。" } },
+            { "fail.game", new[] { "The game is running. Close it, then try again.", "游戏正在运行。请关闭后重试。" } },
+            { "fail.update", new[] { "This needs the newest version first: update on the Updates page.", "需要先更新到最新版本（更新页面）。" } },
+            { "fail.notbuilt", new[] { "The game isn't built yet: finish the setup first.", "游戏尚未构建：请先完成安装。" } },
+            { "fail.tools", new[] { "The game's build tools weren't found. Running the installer again sets them up.", "未找到游戏的构建工具。重新运行安装程序即可安装。" } },
+            { "fail.space", new[] { "There isn't enough free disk space. Free some, then try again.", "磁盘可用空间不足。请释放一些空间后重试。" } },
+            { "fail.nonvidia", new[] { "DLSS needs an NVIDIA graphics card, and none was found in this PC.", "DLSS 需要 NVIDIA 显卡，这台电脑上没有找到。" } },
+            { "fail.build", new[] { "The build stopped before the end. The log says why: attach it if you report this.", "构建在完成前中断。原因见日志，报告问题时请附上。" } },
+            { "fail.other", new[] { "It stopped before the end. The log says why.", "在完成前中断。原因见日志。" } },
+            { "fail.start", new[] { "It couldn't be started. The log says why.", "无法启动。原因见日志。" } },
+            { "shaders.ask", new[] { "Delete the shader cache ({0} files, {1:0} MB)?\n\nThe game makes them again as you play, with some stutter at first. Saves and settings stay.", "删除着色器缓存（{0} 个文件，{1:0} MB）？\n\n游戏会在游玩时重新生成，起初会有些卡顿。存档和设置不受影响。" } },
             { "shaders.empty", new[] { "The shader cache is already empty.", "着色器缓存已经是空的。" } },
             { "shaders.done", new[] { "Shader cache cleared. The game compiles its shaders again as you play.", "已清除着色器缓存。游戏会在你游玩时重新编译着色器。" } },
             { "shaders.partly", new[] { "Some files couldn't be deleted: close the game and try again.", "部分文件无法删除：请关闭游戏后重试。" } },
             { "shaders.running", new[] { "The game is running: close it first.", "游戏正在运行：请先关闭游戏。" } },
             { "help.readme", new[] { "Read the FAQ", "常见问题" } },
             { "help.changes", new[] { "Changelog", "更新日志" } },
-            { "help.versions", new[] { "Version history", "版本历史" } },
-            { "help.discord", new[] { "Discord: mormonftp", "Discord：mormonftp" } },
+            { "help.discord", new[] { "Discord", "Discord" } },
             { "help.about", new[] { "An unofficial PC port of Gran Turismo 5 made by static recompilation. It needs your own copy of the game; nothing from the game is distributed.", "通过静态重编译制作的非官方《GT赛车5》PC 移植版。需要你自己拥有的游戏副本；不分发任何游戏内容。" } },
             { "on", new[] { "On", "开" } },
             { "off", new[] { "Off", "关" } },
@@ -348,23 +556,28 @@ namespace Gt5Launcher
     class Choice
     {
         public string Value, Label;
+        // The add-on this choice needs (a DLSS mode needs NVIDIA DLSS): without it the choice is greyed and can't be picked.
+        public Addon Needs;
         public Choice(string v, string l) { Value = v; Label = l; }
+        public bool Off { get { return Needs != null && !Needs.Present(); } }
         public override string ToString() { return Label; }
     }
 
     class Settings
     {
-        // Every key the launcher manages, with play.bat's default. "" = not set.
+        // Every key the launcher manages, with play.bat's default. "" = not set. (LD_WATCH and SPURS_EXTRA_SPUS no
+        // longer have rows, as in the game's menu: a value set before is kept, as the game keeps it.) The window
+        // starts borderless full screen, as the game's own table has it (gt5_settings_table.h).
         public static readonly string[][] Defaults = new[]
         {
             new[] { "PS3_VIDEO_MODE", "1080" }, new[] { "PS3_ASPECT", "auto" }, new[] { "PS3_WINDOW_SIZE", "" },
             new[] { "LD_WATCH", "" }, new[] { "SPURS_EXTRA_SPUS", "2" }, new[] { "PAD_BACKGROUND", "1" },
             new[] { "PAD_CURSOR_CLIP", "" }, new[] { "PS3_WHEEL", "" }, new[] { "PS3_WHEEL_RANGE", "" },
             new[] { "PS3_WHEEL_FFB", "" }, new[] { "PS3_WHEEL_FFB_INVERT", "" }, new[] { "PS3_LANG", "" },
-            new[] { "GT5_LAUNCH_WINDOW", "windowed" }, new[] { "GT5_LAUNCHER_LANG", "" },
+            new[] { "GT5_LAUNCH_WINDOW", "borderless" }, new[] { "GT5_LAUNCHER_LANG", "" },
             new[] { "GT5_LAUNCHER_HIDE", "1" }, new[] { "GT5_LAUNCHER_AUTOCHECK", "1" },
             new[] { "GT5_SPEED", "" }, new[] { "PS3_SKIP_INTRO", "1" }, new[] { "LD_WATCH_DRAW", "" },
-            new[] { "LD_FRAMEGEN", "" }, new[] { "LD_FRAMEGEN_MULT", "" }, new[] { "LD_RES_TARGET", "" }, new[] { "LD_AA", "" }, new[] { "GT5_RENDERER", "" }, new[] { "PS3_TEX_DUMP", "" },
+            new[] { "LD_FG_METHOD", "" }, new[] { "LD_FRAMEGEN", "" }, new[] { "LD_FRAMEGEN_MULT", "" }, new[] { "LD_RES_TARGET", "" }, new[] { "LD_AA", "" }, new[] { "GT5_RENDERER", "" }, new[] { "PS3_TEX_DUMP", "" },
             new[] { "PS3_MOUSE_STEER", "" }, new[] { "PS3_MOUSE_STEER_SENS", "" }, new[] { "PS3_MOUSE_STEER_CENTER", "" },
             new[] { "PS3_KEYS", "" },
             new[] { "PS3_COCKPIT_FOV", "" }, new[] { "PS3_COCKPIT_SEAT", "" }, new[] { "PS3_COCKPIT_HEIGHT", "" },
@@ -394,6 +607,37 @@ namespace Gt5Launcher
             foreach (var d in Defaults) V[d[0]] = d[1];
             try { foreach (var kv in Read(path)) V[kv.Key] = kv.Value; } catch { }
             Base = new Dictionary<string, string>(V, StringComparer.OrdinalIgnoreCase);
+            stamp = Stamp();
+        }
+
+        // The file's size and time when it was last read or written here. The game's own menu (F1) writes the same
+        // file while the launcher waits, so the launcher reads it again when the game has ended and whenever its
+        // window comes to the front (ChangedOnDisk, Reload).
+        string stamp;
+        string Stamp()
+        {
+            try { var f = new FileInfo(path); return f.Exists ? f.Length + "/" + f.LastWriteTimeUtc.Ticks : ""; } catch { return ""; }
+        }
+        public bool ChangedOnDisk() { return Stamp() != stamp; }
+
+        // The file as it is now: every key takes the file's value (or its default when the file has none), except one
+        // the launcher changed and hasn't written yet (there is none normally: each change is written at once).
+        // True when any value changed.
+        public bool Reload()
+        {
+            Dictionary<string, string> disk;
+            try { if (!File.Exists(path)) return false; disk = Read(path); } catch { return false; }
+            var now = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var d in Defaults) now[d[0]] = d[1];
+            foreach (var kv in disk) now[kv.Key] = kv.Value;
+            var next = new Dictionary<string, string>(now, StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in V) { string b; if (!Base.TryGetValue(kv.Key, out b) || b != kv.Value) next[kv.Key] = kv.Value; }
+            bool changed = next.Count != V.Count;
+            foreach (var kv in next) { string v; if (!V.TryGetValue(kv.Key, out v) || v != kv.Value) { changed = true; break; } }
+            V = next;
+            Base = now;
+            stamp = Stamp();
+            return changed;
         }
 
         static bool IsSpeedKey(string k)
@@ -505,6 +749,7 @@ namespace Gt5Launcher
             }
             File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
             Base = new Dictionary<string, string>(V, StringComparer.OrdinalIgnoreCase);
+            stamp = Stamp();
         }
     }
 
@@ -657,7 +902,9 @@ namespace Gt5Launcher
         public static readonly Color AccentHot = Color.FromArgb(236, 56, 62);
         public static readonly Color Blue = Color.FromArgb(64, 140, 230);
         public static readonly Color Line = Color.FromArgb(44, 48, 62);
-        public static Font F(float size, FontStyle st) { return new Font("Segoe UI", size, st, GraphicsUnit.Point); }
+        // Segoe UI has no Chinese: Windows then mixes fonts character by character, in different weights. In Chinese
+        // the whole launcher uses Microsoft YaHei UI (every Windows since 8 has it), as the update window already did.
+        public static Font F(float size, FontStyle st) { return new Font(T.Zh ? "Microsoft YaHei UI" : "Segoe UI", size, st, GraphicsUnit.Point); }
     }
 
     class FlatButton : Button
@@ -684,6 +931,8 @@ namespace Gt5Launcher
         [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int v, int size);
         static readonly Regex NinjaLine = new Regex(@"^\[(\d+)/(\d+)\]");
         static readonly Regex SwitchLine = new Regex(@"^Switching from (.+) to (.+)$");
+        static readonly Regex AddProgress = new Regex(@"^GT5_ADD (\w+) (\d+|-) ?(.*)$");
+        string addPrev;   // the step's words while an add-on runs
         readonly Paths P;
         readonly string relaunch;
         readonly string[] updArgs;
@@ -820,6 +1069,8 @@ namespace Gt5Launcher
                 proc.OutputDataReceived += Got;
                 proc.ErrorDataReceived += Got;
                 proc.Start();
+                // Below normal, and so is everything it starts (git, the compiler): the PC stays usable meanwhile.
+                try { proc.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
                 proc.StandardInput.Close();
                 proc.BeginOutputReadLine(); proc.BeginErrorReadLine();
             }
@@ -835,7 +1086,7 @@ namespace Gt5Launcher
 
         void Step(double l, double h, string text, double expect)
         {
-            lo = Math.Max(l, shown); hi = Math.Max(h, lo); step = text; sub = ""; secs = expect;
+            lo = Math.Max(l, shown); hi = Math.Max(h, lo); step = text; sub = ""; secs = expect; addPrev = null;
             within = 0; counted = false; stepT0 = DateTime.Now;
         }
 
@@ -843,8 +1094,8 @@ namespace Gt5Launcher
         {
             if (log != null) { try { log.WriteLine(l); } catch { } }
             tail.Add(l); if (tail.Count > 1500) tail.RemoveRange(0, 300); tailChanged = true;
+            // The script's own lines are read for the steps, never shown under the bar (Details has them all).
             string t = l.Trim();
-            if (t.Length > 0) raw = t;
             Match m = NinjaLine.Match(t);
             if (m.Success)
             {
@@ -859,6 +1110,17 @@ namespace Gt5Launcher
                 }
                 return;
             }
+            // The parts update.ps1 builds with the game or next to it (GT5\scripts\addon_common.ps1: "GT5_ADD phase
+            // percent words"): shown as what the step is doing, then the step's own words come back.
+            m = AddProgress.Match(t);
+            if (m.Success)
+            {
+                string ph = m.Groups[1].Value;
+                if (ph == "start") { addPrev = step; step = string.Format(T.Get("uw.addon"), m.Groups[3].Value.Trim()); sub = ""; }
+                else if (ph == "done" || ph == "skip" || ph == "fail") { if (addPrev != null) step = addPrev; addPrev = null; sub = ""; }
+                else if (addPrev != null && m.Groups[2].Value != "-") sub = m.Groups[2].Value + "%";
+                return;
+            }
             m = SwitchLine.Match(t);
             if (m.Success) { label = m.Groups[2].Value.Trim(); Step(0.02, 0.08, T.Get("uw.fetch"), 15); return; }
             if (t.StartsWith("Reinstalling ")) { label = t.Substring(13).Trim(); Step(0.02, 0.08, T.Get("uw.fetch"), 15); return; }
@@ -866,7 +1128,7 @@ namespace Gt5Launcher
             if (t.StartsWith("ps3recomp:")) { Step(0.08, 0.12, T.Get("uw.prep"), 40); return; }
             if (t.StartsWith("Re-lifting")) { relifted = true; Step(0.12, 0.55, T.Get("uw.relift"), 600); return; }
             if (t.StartsWith("Building (only what changed)")) { Step(relifted ? 0.55 : 0.12, 0.97, T.Get("uw.build"), 300); return; }
-            if (t.StartsWith("The build stopped. Trying again")) { step = T.Get("uw.retry"); counted = false; return; }
+            if (t.StartsWith("The build stopped. Trying again")) { counted = false; return; }   // a retry is Details' business
             if (t.StartsWith("update: ")) { failMsg = t.Substring(8); return; }
         }
 
@@ -903,17 +1165,20 @@ namespace Gt5Launcher
         {
             finished = true; doneAt = DateTime.Now;
             if (log != null) { try { log.WriteLine("update.ps1 ended with exit code " + code); } catch { } }
-            if (code != 0) { Fail(failMsg != "" ? failMsg : raw); return; }
+            if (code != 0)
+            {
+                // update.ps1's own words ("update: close the game first") are for the log; the window says it plainly.
+                string f = failMsg.ToLowerInvariant();
+                Fail(T.Get(f.Contains("close the game") ? "uw.f.game" : f.Contains("couldn't reach") || f.Contains("couldn't clone") ? "uw.f.net" : "uw.f.other"));
+                return;
+            }
             within = 1; shown = Math.Max(shown, 0.999);
             step = upToDate ? T.Get("uw.uptodate") : label != "" ? string.Format(T.Get("uw.done"), label) : T.Get("uw.donegen");
             sub = T.Get("uw.opening");
         }
 
         // Segoe UI has no Chinese: Windows then mixes fonts character by character.
-        static Font UF(float size, FontStyle st)
-        {
-            return T.Zh ? new Font("Microsoft YaHei UI", size, st, GraphicsUnit.Point) : Look.F(size, st);
-        }
+        static Font UF(float size, FontStyle st) { return Look.F(size, st); }
 
         void Fail(string why)
         {
@@ -956,7 +1221,7 @@ namespace Gt5Launcher
         {
             if (!finished && proc != null && !proc.HasExited && e.CloseReason == CloseReason.UserClosing)
             {
-                if (MessageBox.Show(this, T.Get("uw.stop"), T.Get("uw.title"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                if (MessageBox.Show(this, T.Get("uw.stop"), T.Get("uw.title"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
                 { e.Cancel = true; return; }
                 try
                 {
@@ -1083,6 +1348,885 @@ namespace Gt5Launcher
         }
     }
 
+    // ---- Add-ons: rows on the Display page that add something to the game -------------------------------
+    // One row each: a name, one line of small text (with an optional link), and one button: Add, or "Added" with
+    // Remove beside it. It is there when all its Files exist (read again each time the page is shown and after each
+    // run). Add and Remove run its script hidden, with the progress in the launcher (TaskStrip). NVIDIA DLSS is the
+    // first; AMD FSR 3 frame generation (add_fsr.ps1) and DLSS Frame Generation (add_dlss.ps1 again, plus one more
+    // file) are each one more Addon in LauncherForm.Addons() and their texts in T.
+    class Addon
+    {
+        public string Id;                              // "dlss"
+        public string ForKey;                          // the setting it serves (LD_AA): greyed with that setting's row
+        public string NameKey;                         // the row's label
+        public string NoteKey, NoteAddedKey;           // the small line before and after adding; [[...]] is the link
+        public string Link;                            // where that link goes (null: no link)
+        public string Script;                          // its script in GT5\scripts
+        public string[] AddArgs, RemoveArgs;           // the script's arguments for Add and for Remove
+        public string[] Files;                         // all there = added
+        public string AddTitleKey, RemoveTitleKey;     // the strip's title while it runs
+        public string RemoveAskKey, RemoveTextKey;     // the one question before Remove
+        public string AddedKey, NotAddedKey, RemovedKey, NotRemovedKey;   // the status line afterwards
+        public string FirstKey;                        // the status line when a choice that needs it is picked
+        public string Log;                             // GT5\logs\<Log>.log (Remove: <Log>-remove.log)
+        public string WatchPath, CleanOnStop;          // see HelperJob
+        public bool Present()
+        {
+            foreach (var f in Files) if (!File.Exists(f)) return false;
+            return true;
+        }
+    }
+
+    // ---- Helpers: scripts run with no window, their progress inside the launcher ---------------------------
+    // One helper run: the script, its arguments, and how the launcher tells that it worked. The add-ons, Vulkan,
+    // joining GT.VOL and installing .pkg files are each one of these, run and shown by the TaskStrip.
+    class HelperJob
+    {
+        public string TitleKey;                        // a few plain words: "Adding NVIDIA DLSS"
+        public string StartKey = "st.start";           // what the strip says before the script says more
+        public string Script;                          // the .ps1
+        public List<string> Args = new List<string>();
+        public Dictionary<string, string> Env = new Dictionary<string, string>();
+        public string[] DoneFiles;                     // all there at the end: it worked (null: exit code 0 says so)
+        public bool DoneWhenGone;                      // a removal: it worked when none of DoneFiles is left
+        public string Log;                             // GT5\logs\<Log>.log
+        public string DoneKey;                         // the sentence after "Done."
+        public string WatchPath;                       // a folder or file that grows while it downloads or joins: its size is the figure
+        public long WatchTotal;                        // that size when it's finished, if known (then the bar follows it)
+        public string CleanOnStop;                     // deleted when Cancel stops it while it downloads (a half fetch would stop the next try)
+        public bool AutoHide = true;                   // the strip goes away by itself a few seconds after "Done."
+        public Func<string, bool, string> Explain;     // (an output line, it worked) -> the text key for the end, or null
+        public Action<bool> Ended;                     // on the window's thread, once the end is shown
+    }
+
+    // A script run by powershell.exe with no window at all: CreateNoWindow, its output and errors read on two threads
+    // (the window never waits for it), stdin closed so nothing can wait for a key, and the whole process tree in a job
+    // object, so Cancel ends all of it (git, cmake, the compiler) and so does the launcher closing or crashing.
+    class HelperProcess
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        struct BasicLimits
+        {
+            public long PerProcessUserTimeLimit, PerJobUserTimeLimit; public uint LimitFlags;
+            public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize; public uint ActiveProcessLimit;
+            public UIntPtr Affinity; public uint PriorityClass, SchedulingClass;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        struct IoCounters { public ulong ReadOps, WriteOps, OtherOps, ReadBytes, WriteBytes, OtherBytes; }
+        [StructLayout(LayoutKind.Sequential)]
+        struct ExtendedLimits
+        {
+            public BasicLimits Basic; public IoCounters Io;
+            public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed;
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateJobObject(IntPtr attrs, string name);
+        [DllImport("kernel32.dll")] static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref ExtendedLimits info, int size);
+        [DllImport("kernel32.dll")] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+        [DllImport("kernel32.dll")] static extern bool TerminateJobObject(IntPtr job, uint code);
+        [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+
+        // Kind 0: a line. 1: text ended by a lone \r (a progress line that the next one writes over, as in a console).
+        // 2: that \r was followed by \n after all, so the text before it was a whole line.
+        public struct Item { public int Stream, Kind; public string Text; }
+        Process proc;
+        IntPtr job = IntPtr.Zero;
+        readonly object qlock = new object();
+        List<Item> queue = new List<Item>();
+        int open;
+        DateTime exitSeen = DateTime.MinValue;
+
+        public int Id { get { try { return proc.Id; } catch { return 0; } } }
+
+        // One argument as the command line takes it (quotes, and backslashes before a quote or the end doubled).
+        public static string Quote(string a)
+        {
+            if (a.Length > 0 && a.IndexOfAny(new[] { ' ', '\t', '"' }) < 0) return a;
+            var sb = new StringBuilder("\"");
+            int bs = 0;
+            foreach (char c in a)
+            {
+                if (c == '\\') { bs++; continue; }
+                if (c == '"') { sb.Append('\\', bs * 2 + 1); sb.Append('"'); bs = 0; continue; }
+                sb.Append('\\', bs); bs = 0; sb.Append(c);
+            }
+            sb.Append('\\', bs * 2); sb.Append('"');
+            return sb.ToString();
+        }
+
+        public string CommandLine(string script, IList<string> args)
+        {
+            var a = new StringBuilder("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + Quote(script));
+            foreach (var x in args) a.Append(' ').Append(Quote(x));
+            return a.ToString();
+        }
+
+        // Throws when powershell.exe can't be started.
+        public void Start(string script, IList<string> args, string dir, IDictionary<string, string> env)
+        {
+            var psi = new ProcessStartInfo("powershell.exe", CommandLine(script, args));
+            psi.WorkingDirectory = dir;
+            psi.UseShellExecute = false; psi.CreateNoWindow = true; psi.WindowStyle = ProcessWindowStyle.Hidden;
+            psi.RedirectStandardOutput = true; psi.RedirectStandardError = true; psi.RedirectStandardInput = true;
+            psi.StandardOutputEncoding = Encoding.UTF8; psi.StandardErrorEncoding = Encoding.UTF8;
+            psi.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";   // git never waits for a password
+            psi.EnvironmentVariables["GCM_INTERACTIVE"] = "never";   // nor opens a sign-in window
+            if (env != null) foreach (var kv in env) psi.EnvironmentVariables[kv.Key] = kv.Value;
+            proc = new Process { StartInfo = psi };
+            proc.Start();
+            // Below normal, inherited by what it starts (git, the compiler): the PC stays usable while it builds.
+            try { proc.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+            try
+            {
+                job = CreateJobObject(IntPtr.Zero, null);
+                var info = new ExtendedLimits();
+                info.Basic.LimitFlags = 0x2000;   // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                if (job != IntPtr.Zero && !(SetInformationJobObject(job, 9, ref info, Marshal.SizeOf(typeof(ExtendedLimits))) &&
+                                            AssignProcessToJobObject(job, proc.Handle)))
+                { CloseHandle(job); job = IntPtr.Zero; }
+            }
+            catch { job = IntPtr.Zero; }
+            try { proc.StandardInput.Close(); } catch { }
+            open = 2;
+            Read(proc.StandardOutput, 0);
+            Read(proc.StandardError, 1);
+        }
+
+        void Read(StreamReader r, int stream)
+        {
+            var th = new Thread(delegate ()
+            {
+                var buf = new char[4096];
+                var sb = new StringBuilder();
+                bool cr = false;
+                try
+                {
+                    int n;
+                    while ((n = r.Read(buf, 0, buf.Length)) > 0)
+                        for (int i = 0; i < n; i++)
+                        {
+                            char c = buf[i];
+                            if (cr) { cr = false; if (c == '\n') { Post(stream, 2, ""); continue; } }
+                            if (c == '\r') { Post(stream, 1, sb.ToString()); sb.Length = 0; cr = true; }
+                            else if (c == '\n') { Post(stream, 0, sb.ToString()); sb.Length = 0; }
+                            else sb.Append(c);
+                        }
+                }
+                catch { }
+                if (sb.Length > 0) Post(stream, 0, sb.ToString());
+                Interlocked.Decrement(ref open);
+            });
+            th.IsBackground = true;
+            th.Start();
+        }
+
+        void Post(int s, int k, string t) { lock (qlock) queue.Add(new Item { Stream = s, Kind = k, Text = t }); }
+
+        public List<Item> Take()
+        {
+            lock (qlock) { var q = queue; queue = new List<Item>(); return q; }
+        }
+
+        // Over: the script has exited and all its output is read (or 3 s after the exit, if something it left
+        // behind still holds the pipe).
+        public bool Ended
+        {
+            get
+            {
+                if (proc == null) return true;
+                bool exited;
+                try { exited = proc.HasExited; } catch { exited = true; }
+                if (!exited) return false;
+                if (exitSeen == DateTime.MinValue) exitSeen = DateTime.Now;
+                return Thread.VolatileRead(ref open) <= 0 || (DateTime.Now - exitSeen).TotalSeconds > 3;
+            }
+        }
+
+        public int ExitCode { get { try { return proc.ExitCode; } catch { return -1; } } }
+
+        // Ends the script and everything it started.
+        public void Stop()
+        {
+            if (job != IntPtr.Zero && TerminateJobObject(job, 1)) return;
+            try
+            {
+                var k = new ProcessStartInfo("taskkill.exe", "/T /F /PID " + proc.Id) { CreateNoWindow = true, UseShellExecute = false };
+                Process.Start(k).WaitForExit(5000);
+            }
+            catch { }
+            try { if (!proc.HasExited) proc.Kill(); } catch { }
+        }
+
+        public void Close()
+        {
+            if (job != IntPtr.Zero) { CloseHandle(job); job = IntPtr.Zero; }
+            try { proc.Dispose(); } catch { }
+        }
+    }
+
+    // ---- The task strip: questions and progress inside the launcher ---------------------------------------
+    // Before, the helpers (DLSS, Vulkan, joining GT.VOL, .pkg files) opened console windows over the launcher, with
+    // their own questions in them. Now they run with no window and this strip shows them, docked at the bottom of the
+    // page area: on every page, so the rest of the launcher stays usable while one runs. It asks (a question with two
+    // buttons), runs one HelperJob at a time, says in a few plain words what is happening with a bar that shows a
+    // real figure when the output has one (git's percentages, the build's [n/m], bytes of a download or a joined file;
+    // a moving bar when not), has the full text under Details and in GT5\logs\<name>.log, and Cancel. It ends with
+    // "Done." or one sentence of what went wrong, and "Open the log". A strip rather than a window of its own: it can't
+    // be lost behind the launcher or pop up over the game, and a long build doesn't hold the rest of the launcher.
+    class TaskStrip : Panel
+    {
+        enum Mode { Hidden, Ask, Note, Run, End, Confirm }
+        static readonly Regex GitLine = new Regex(@"^(remote:\s*)?(Receiving objects|Resolving deltas|Updating files|Checking out files|Counting objects|Compressing objects|Enumerating objects|Unpacking objects):\s+(\d+)%");
+        static readonly Regex GitSize = new Regex(@",\s*([\d.]+)\s*(KiB|MiB|GiB)");
+        static readonly Regex NinjaLine = new Regex(@"^\[(\d+)/(\d+)\]");
+        static readonly Regex BytesLine = new Regex(@"([\d.]+)\s*(MB|MiB)\s*(?:of|/)\s*([\d.]+)\s*(MB|MiB)", RegexOptions.IgnoreCase);
+        static readonly Regex AddProgress = new Regex(@"^GT5_ADD (\w+) (\d+|-) ?(.*)$");
+        bool addFmt;       // the script prints GT5_ADD lines: they lead the bar
+        string addEnd;     // the words of its last "fail" or "skip" line
+        const int Pad = 16;
+
+        public string Logs, Gt5;   // GT5\logs, and the folder the scripts run in
+        Mode mode = Mode.Hidden;
+        HelperJob job;
+        HelperProcess hp;
+        string titleKey = "", textKey = "", headKey = "", phase = "st.start", figure = "";
+        bool ok, stopped, cleaning;
+        double pct = -1, watchPct = -1, shown;
+        float marquee;
+        DateTime t0, endAt;
+        readonly List<string> lines = new List<string>();
+        readonly string[] live = new string[2];
+        bool linesChanged;
+        DateTime detailsT;
+        StreamWriter log;
+        string logPath;
+        Action yes, no, onStopped;
+        long watched = -1;
+        bool[] watchAlive;
+        readonly FlatButton[] btn = new FlatButton[3];
+        readonly Action[] act = new Action[3];
+        readonly TextBox details;
+        readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer();
+        readonly Font fTitle = Look.F(10.5f, FontStyle.Bold), fText = Look.F(9.5f, FontStyle.Regular), fBold = Look.F(9.5f, FontStyle.Bold);
+        int textY = 40, textH = 20, headW;
+
+        public TaskStrip()
+        {
+            Dock = DockStyle.Bottom; Visible = false; BackColor = Look.Panel; DoubleBuffered = true;
+            for (int i = 0; i < btn.Length; i++)
+            {
+                int k = i;
+                btn[i] = new FlatButton("", Look.NavHot, Look.NavHot) { Height = 30, Visible = false };
+                btn[i].Click += delegate { if (act[k] != null) act[k](); };
+                Controls.Add(btn[i]);
+            }
+            details = new TextBox
+            {
+                Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, WordWrap = true, Visible = false,
+                BackColor = Color.FromArgb(10, 11, 15), ForeColor = Look.Dim, BorderStyle = BorderStyle.None, Font = new Font("Consolas", 9f)
+            };
+            Controls.Add(details);
+            tick.Interval = 40;
+            tick.Tick += delegate { OnTick(); };
+            Resize += delegate { Arrange(); };
+        }
+
+        public TextBox Details { get { return details; } }
+        // A script runs (or its partial download is being removed): nothing else can start meanwhile.
+        public bool Busy { get { return mode == Mode.Run || mode == Mode.Confirm || cleaning; } }
+        public string Showing { get { return mode.ToString(); } }
+
+        // A question with two buttons; nothing runs until the first is pressed. A question still open is answered
+        // with its second button first.
+        public bool Ask(string title, string text, string yesKey, string noKey, Action onYes, Action onNo)
+        {
+            if (Busy) return false;
+            DropAsk();
+            mode = Mode.Ask; titleKey = title; textKey = text; yes = onYes; no = onNo;
+            Buttons(new[] { yesKey, noKey }, new[] { 1, 0 }, new Action[] {
+                delegate { var y = yes; yes = null; no = null; Close2(); if (y != null) y(); },
+                delegate { var n = no; yes = null; no = null; Close2(); if (n != null) n(); } });
+            Open();
+            return true;
+        }
+
+        // One calm sentence and Close (nothing was started: the game is running, say).
+        public void Note(string title, string sentence)
+        {
+            if (Busy) return;
+            DropAsk();
+            mode = Mode.Note; titleKey = title; textKey = sentence;
+            Buttons(new[] { "uw.close" }, new[] { 0 }, new Action[] { Close2 });
+            Open();
+        }
+
+        void DropAsk()
+        {
+            if (mode != Mode.Ask) return;
+            var n = no; yes = null; no = null;
+            if (n != null) n();
+        }
+
+        public bool Run(HelperJob j)
+        {
+            if (Busy) return false;
+            DropAsk();
+            job = j; mode = Mode.Run; titleKey = j.TitleKey; phase = j.StartKey; figure = "";
+            pct = -1; watchPct = -1; shown = 0; stopped = false; ok = false; onStopped = null; addFmt = false; addEnd = null;
+            lines.Clear(); live[0] = live[1] = null; linesChanged = true; watched = -1; t0 = DateTime.Now;
+            RunButtons();
+            StartLog();
+            hp = new HelperProcess();
+            if (log != null) { try { log.WriteLine("powershell.exe " + hp.CommandLine(j.Script, j.Args)); } catch { } }
+            try { hp.Start(j.Script, j.Args, Gt5, j.Env); }
+            catch (Exception e)
+            {
+                hp = null;
+                AddLine("powershell.exe could not be started: " + e.Message);
+                Open();
+                End(false, "st.failed", "fail.start");
+                return true;
+            }
+            if (j.WatchPath != null) StartWatch(j.WatchPath);
+            Open();
+            return true;
+        }
+
+        void RunButtons()
+        {
+            Buttons(new[] { details.Visible ? "uw.hide" : "uw.details", "st.cancel" }, new[] { 0, 0 }, new Action[] { ToggleDetails, Cancel });
+        }
+
+        // The launcher is closing while a script runs: ask here, in the strip.
+        public void AskClose(Action closeNow)
+        {
+            if (!Busy) { closeNow(); return; }
+            if (mode == Mode.Confirm) return;
+            mode = Mode.Confirm; textKey = "st.closeask";
+            Buttons(new[] { "st.stopclose", "st.keepgoing" }, new[] { 2, 0 }, new Action[] {
+                delegate { mode = Mode.Run; RunButtons(); onStopped = closeNow; Cancel(); Arrange(); Invalidate(); },
+                delegate { mode = Mode.Run; RunButtons(); Arrange(); Invalidate(); } });
+            Open();
+        }
+
+        // The launcher closes for another reason (Windows shutting down): end the script and all it started.
+        public void Kill() { if (hp != null) hp.Stop(); }
+
+        void Cancel()
+        {
+            if (hp == null || stopped) return;
+            stopped = true;
+            btn[1].Enabled = false;
+            AddLine("[launcher] stopped by the player");
+            hp.Stop();
+            Invalidate();
+        }
+
+        void Open()
+        {
+            Visible = true;
+            Arrange();
+            Invalidate();
+            tick.Start();
+        }
+
+        // Hides the strip (not while something runs).
+        public void Close2()
+        {
+            if (Busy) return;
+            mode = Mode.Hidden;
+            details.Visible = false;
+            Visible = false;
+            tick.Stop();
+        }
+
+        // Done and shown: hide now (Play goes on after joining GT.VOL, say).
+        public void HideIfDone() { if (mode == Mode.End && ok) Close2(); }
+
+        void StartLog()
+        {
+            CloseLog();
+            logPath = null;
+            try
+            {
+                Directory.CreateDirectory(Logs);
+                logPath = Path.Combine(Logs, job.Log + ".log");
+                log = new StreamWriter(logPath, false, new UTF8Encoding(false));
+                log.AutoFlush = true;
+                log.WriteLine("GT5 Launcher, " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + ": " + T.Get(job.TitleKey));
+            }
+            catch { log = null; }
+        }
+
+        void CloseLog()
+        {
+            if (log == null) return;
+            try { log.Dispose(); } catch { }
+            log = null;
+        }
+
+        void ShowLogFile()
+        {
+            if (logPath == null || !File.Exists(logPath)) return;
+            try { Process.Start(new ProcessStartInfo(logPath) { UseShellExecute = true }); }
+            catch
+            {
+                try { Process.Start(new ProcessStartInfo("notepad.exe", HelperProcess.Quote(logPath)) { UseShellExecute = true }); } catch { }
+            }
+        }
+
+        void ToggleDetails()
+        {
+            details.Visible = !details.Visible;
+            for (int i = 0; i < btn.Length; i++)
+                if (act[i] == (Action)ToggleDetails) { btn[i].Text = T.Get(details.Visible ? "uw.hide" : "uw.details"); FitButton(btn[i]); }
+            if (details.Visible) RefreshDetails();
+            Arrange();
+            Invalidate();
+        }
+
+        void RefreshDetails()
+        {
+            linesChanged = false;
+            detailsT = DateTime.Now;
+            var sb = new StringBuilder();
+            for (int i = Math.Max(0, lines.Count - 600); i < lines.Count; i++) sb.Append(lines[i]).Append("\r\n");
+            foreach (var l in live) if (l != null) sb.Append(l).Append("\r\n");
+            details.Text = sb.ToString();
+            details.SelectionStart = details.TextLength;
+            details.ScrollToCaret();
+        }
+
+        void AddLine(string l)
+        {
+            lines.Add(l);
+            if (lines.Count > 5000) lines.RemoveRange(0, 1000);
+            if (log != null) { try { log.WriteLine(l); } catch { } }
+            linesChanged = true;
+        }
+
+        void Take(HelperProcess.Item it)
+        {
+            int s = it.Stream;
+            if (it.Kind == 1) { live[s] = it.Text; Parse(it.Text); linesChanged = true; return; }
+            if (it.Kind == 2) { if (live[s] != null) { AddLine(live[s]); live[s] = null; } return; }
+            live[s] = null;   // a new line over a progress line: that one is gone, as in a console
+            AddLine(it.Text);
+            Parse(it.Text);
+        }
+
+        void Phase(string key)
+        {
+            if (phase == key) return;
+            phase = key; pct = -1; watchPct = -1; shown = 0; figure = "";
+        }
+
+        static string PhaseOf(string step)
+        {
+            string l = step.ToLowerInvariant();
+            if (l.Contains("fetching") || l.Contains("download")) return "st.download";
+            if (l.Contains("building gt5") || l.Contains("building the game")) return "st.buildgame";
+            if (l.Contains("configure") || l.Contains("turning")) return "st.prepare";
+            if (l.Contains("build")) return "st.build";
+            if (l.Contains("remov")) return "st.remove";
+            return "st.working";
+        }
+
+        static double Mb(double v, string unit)
+        {
+            return unit.StartsWith("G", StringComparison.OrdinalIgnoreCase) ? v * 1024 : unit.StartsWith("K", StringComparison.OrdinalIgnoreCase) ? v / 1024 : v;
+        }
+
+        // What the script is doing, from its own output: the "== step" lines the GT5 scripts print, git's progress,
+        // the build's [n/m] count, "x MB of y MB".
+        void Parse(string text)
+        {
+            string t = text.Trim();
+            if (t.Length == 0) return;
+            // The add scripts' own progress lines (GT5\scripts\addon_common.ps1): the phase, and the whole run's
+            // percent, which then leads the bar (git's and the build's own figures only fill in the words).
+            Match m = AddProgress.Match(t);
+            if (m.Success)
+            {
+                addFmt = true;
+                string ph = m.Groups[1].Value;
+                string key = ph == "fetch" ? "st.download" : ph == "check" ? "st.prepare" : ph == "build" ? "st.build" :
+                             ph == "game" ? "st.buildgame" : ph == "remove" ? "st.remove" : null;
+                if (key != null && key != phase) { phase = key; figure = ""; }
+                if (m.Groups[2].Value != "-") pct = Math.Min(100, double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture));
+                if (ph == "fail" || ph == "skip") addEnd = m.Groups[3].Value.Trim();
+                return;
+            }
+            if (addFmt)
+            {
+                m = NinjaLine.Match(t);
+                if (m.Success) figure = string.Format(T.Get("uw.files"), double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture), double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture));
+                return;
+            }
+            m = GitLine.Match(t);
+            if (m.Success)
+            {
+                if (m.Groups[1].Length > 0) { Phase("st.download"); return; }   // the server counting: no figure yet
+                string what = m.Groups[2].Value;
+                Phase(what == "Receiving objects" || what == "Unpacking objects" ? "st.download" : "st.unpack");
+                pct = double.Parse(m.Groups[3].Value, CultureInfo.InvariantCulture);
+                Match sz = GitSize.Match(t);
+                double v;
+                if (sz.Success && double.TryParse(sz.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out v))
+                    figure = string.Format(CultureInfo.InvariantCulture, "{0:0} MB", Mb(v, sz.Groups[2].Value));
+                return;
+            }
+            m = NinjaLine.Match(t);
+            if (m.Success)
+            {
+                double n = double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture), of = double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+                if (of > 0)
+                {
+                    if (phase != "st.build" && phase != "st.buildgame") Phase("st.build");
+                    pct = Math.Min(100, n * 100 / of);
+                    figure = string.Format(T.Get("uw.files"), n, of);
+                }
+                return;
+            }
+            m = BytesLine.Match(t);
+            if (m.Success)
+            {
+                double a, b;
+                if (double.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out a) &&
+                    double.TryParse(m.Groups[3].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out b) && b > 0)
+                {
+                    a = Mb(a, m.Groups[2].Value); b = Mb(b, m.Groups[4].Value);
+                    pct = Math.Min(100, a * 100 / b);
+                    figure = string.Format(CultureInfo.InvariantCulture, "{0:0} MB", a);
+                }
+                return;
+            }
+            if (t.StartsWith("== ")) { Phase(PhaseOf(t.Substring(3))); return; }
+            if (t.StartsWith("Installing ")) { Phase("st.install"); return; }
+            if (t.StartsWith("Copying ")) { Phase("st.copy"); return; }
+            if (t.IndexOf("joining them", StringComparison.OrdinalIgnoreCase) >= 0) { Phase("st.join"); return; }
+        }
+
+        // The size of WatchPath, on a thread of its own once a second (a folder being downloaded into can hold
+        // thousands of files).
+        void StartWatch(string path)
+        {
+            var alive = new[] { true };
+            watchAlive = alive;
+            var th = new Thread(delegate ()
+            {
+                while (alive[0])
+                {
+                    Interlocked.Exchange(ref watched, SizeOf(path));
+                    Thread.Sleep(1000);
+                }
+            });
+            th.IsBackground = true;
+            th.Start();
+        }
+
+        static long SizeOf(string path)
+        {
+            try
+            {
+                if (File.Exists(path)) return new FileInfo(path).Length;
+                if (!Directory.Exists(path)) return -1;
+                long n = 0;
+                foreach (var f in Directory.GetFiles(path, "*", SearchOption.AllDirectories)) { try { n += new FileInfo(f).Length; } catch { } }
+                return n;
+            }
+            catch { return -1; }
+        }
+
+        void OnTick()
+        {
+            if (hp != null)
+            {
+                foreach (var it in hp.Take()) Take(it);
+                if (job.WatchPath != null && pct < 0 && (phase == "st.download" || phase == "st.join"))
+                {
+                    long w = Interlocked.Read(ref watched);
+                    if (w > 0)
+                    {
+                        figure = string.Format(CultureInfo.InvariantCulture, "{0:0} MB", w / 1048576.0);
+                        if (job.WatchTotal > 0) watchPct = Math.Min(100, w * 100.0 / job.WatchTotal);
+                    }
+                }
+                if (hp.Ended)
+                {
+                    foreach (var it in hp.Take()) Take(it);
+                    Finish();
+                }
+            }
+            double bar = pct >= 0 ? pct : watchPct;
+            if (bar >= 0) shown += (bar / 100.0 - shown) * 0.2;
+            else marquee = (marquee + 0.01f) % 1.3f;
+            if (details.Visible && linesChanged && (DateTime.Now - detailsT).TotalMilliseconds > 250) RefreshDetails();
+            if (mode == Mode.End && ok && job != null && job.AutoHide && !details.Visible && (DateTime.Now - endAt).TotalSeconds > 6 &&
+                !RectangleToScreen(ClientRectangle).Contains(Cursor.Position))
+                Close2();
+            if (mode == Mode.Run || mode == Mode.Confirm) Invalidate();
+        }
+
+        void Finish()
+        {
+            if (watchAlive != null) watchAlive[0] = false;
+            for (int s = 0; s < 2; s++) if (live[s] != null) { AddLine(live[s]); live[s] = null; }
+            int code = hp.ExitCode;
+            hp.Close();
+            hp = null;
+            AddLine("[launcher] the script ended with exit code " + code + (stopped ? " (stopped)" : ""));
+            bool worked;
+            if (job.DoneFiles != null)
+            {
+                int there = 0;
+                foreach (var f in job.DoneFiles) if (File.Exists(f)) there++;
+                worked = job.DoneWhenGone ? there == 0 : there == job.DoneFiles.Length;
+            }
+            else worked = code == 0;
+            if (worked) { End(true, "st.done", Explained(true) ?? job.DoneKey); return; }
+            if (!stopped) { End(false, "st.failed", Explained(false) ?? ByPhase()); return; }
+            // Stopped while downloading: what was half fetched goes, so the next try starts clean.
+            string clean = job.CleanOnStop;
+            if (clean == null || phase != "st.download" || !Inside(clean, Gt5)) { End(false, "st.stopped", "st.again"); return; }
+            cleaning = true;
+            AddLine("[launcher] removing the part-downloaded " + clean);
+            var th = new Thread(delegate ()
+            {
+                DeleteTree(clean);
+                try { BeginInvoke((MethodInvoker)delegate { cleaning = false; End(false, "st.stopped", "st.again"); }); } catch { }
+            });
+            th.IsBackground = true;
+            th.Start();
+        }
+
+        static bool Inside(string path, string root)
+        {
+            try
+            {
+                string p = Path.GetFullPath(path).TrimEnd('\\'), r = Path.GetFullPath(root).TrimEnd('\\') + "\\";
+                return p.StartsWith(r, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        // git leaves its files read-only, which Directory.Delete won't remove; a process that was just ended can
+        // hold a file a moment longer.
+        static void DeleteTree(string dir)
+        {
+            for (int tries = 0; tries < 6 && Directory.Exists(dir); tries++)
+            {
+                try
+                {
+                    foreach (var f in Directory.GetFiles(dir, "*", SearchOption.AllDirectories)) { try { File.SetAttributes(f, FileAttributes.Normal); } catch { } }
+                    Directory.Delete(dir, true);
+                }
+                catch { Thread.Sleep(500); }
+            }
+        }
+
+        // The sentence for the end: the job's own reading of the output first, then what the GT5 scripts say
+        // when they stop (in their own words, which stay in Details and the log).
+        string Explained(bool worked)
+        {
+            int from = Math.Max(0, lines.Count - 60);
+            if (job.Explain != null)
+            {
+                if (worked) { for (int i = from; i < lines.Count; i++) { string k = job.Explain(lines[i].Trim(), true); if (k != null) return k; } }
+                else for (int i = lines.Count - 1; i >= from; i--) { string k = job.Explain(lines[i].Trim(), false); if (k != null) return k; }
+            }
+            if (worked) return null;
+            // The add scripts say why in their last GT5_ADD line (addon_common.ps1).
+            switch (addEnd ?? "")
+            {
+                case "Game running": return "fail.game";
+                case "No internet": return "fail.net";
+                case "Update first": return "fail.update";
+                case "No game build": return "fail.notbuilt";
+                case "No compiler": return "fail.tools";
+                case "Build failed": return "fail.build";
+                case "No NVIDIA RTX card": return "fail.nonvidia";
+            }
+            for (int i = lines.Count - 1; i >= from; i--)
+            {
+                string l = lines[i];
+                if (Has(l, "The game is running")) return "fail.game";
+                if (Has(l, "internet connection") || Has(l, "Could not resolve host") || Has(l, "unable to access") || Has(l, "Failed to connect")) return "fail.net";
+                if (Has(l, "update first")) return "fail.update";
+                if (Has(l, "no game build")) return "fail.notbuilt";
+                if (Has(l, "set up the compiler") || Has(l, "find clang-cl")) return "fail.tools";
+                if (Has(l, "Free some space") || Has(l, "not enough space")) return "fail.space";
+                if (Has(l, "No NVIDIA graphics card")) return "fail.nonvidia";
+            }
+            return null;
+        }
+
+        static bool Has(string l, string what) { return l.IndexOf(what, StringComparison.OrdinalIgnoreCase) >= 0; }
+
+        string ByPhase()
+        {
+            if (phase == "st.download") return "fail.net";
+            if (phase == "st.build" || phase == "st.buildgame" || phase == "st.prepare") return "fail.build";
+            return "fail.other";
+        }
+
+        void End(bool good, string head, string sentence)
+        {
+            CloseLog();
+            mode = Mode.End; ok = good; headKey = head; textKey = sentence; endAt = DateTime.Now;
+            if (good) shown = 1;
+            var keys = new List<string>(); var acts = new List<Action>();
+            if (logPath != null && File.Exists(logPath)) { keys.Add("st.log"); acts.Add(ShowLogFile); }
+            keys.Add(details.Visible ? "uw.hide" : "uw.details"); acts.Add(ToggleDetails);
+            keys.Add("uw.close"); acts.Add(Close2);
+            Buttons(keys.ToArray(), new int[keys.Count], acts.ToArray());
+            if (details.Visible) RefreshDetails();
+            Arrange();
+            Invalidate();
+            var j = job;
+            if (j != null && j.Ended != null) j.Ended(good);
+            if (onStopped != null) { var a = onStopped; onStopped = null; a(); }
+        }
+
+        // Styles: 0 plain, 1 blue (the answer that goes ahead), 2 red (stops something).
+        void Buttons(string[] keys, int[] styles, Action[] acts)
+        {
+            for (int i = 0; i < btn.Length; i++)
+            {
+                bool on = i < keys.Length;
+                act[i] = on ? acts[i] : null;
+                btn[i].Visible = on;
+                if (!on) continue;
+                var b = btn[i];
+                b.Text = T.Get(keys[i]); b.Enabled = true;
+                Color n = styles[i] == 1 ? Look.Blue : styles[i] == 2 ? Look.Accent : Look.NavHot;
+                Color h = styles[i] == 1 ? Color.FromArgb(90, 160, 240) : styles[i] == 2 ? Look.AccentHot : Color.FromArgb(52, 57, 74);
+                b.Normal = n; b.Hot = h; b.BackColor = n;
+                b.FlatAppearance.MouseOverBackColor = h; b.FlatAppearance.MouseDownBackColor = h;
+                b.Font = styles[i] == 1 ? Look.F(10f, FontStyle.Bold) : Look.F(10f, FontStyle.Regular);
+                FitButton(b);
+            }
+        }
+
+        static void FitButton(FlatButton b) { b.Width = Math.Max(90, TextRenderer.MeasureText(b.Text, b.Font).Width + 30); }
+
+        string Title()
+        {
+            if (mode == Mode.Confirm || mode == Mode.Run || mode == Mode.End) return T.Get(job != null ? job.TitleKey : titleKey);
+            return T.Get(titleKey);
+        }
+
+        // Places the text, buttons and Details for the mode, and sets the strip's height.
+        void Arrange()
+        {
+            int W = Math.Max(320, ClientSize.Width), y;
+            if (mode == Mode.Run)
+            {
+                PlaceButtons(W, 34);
+                y = 92;
+            }
+            else
+            {
+                headW = mode == Mode.End ? TextRenderer.MeasureText(T.Get(headKey), fBold).Width : 0;
+                int w = W - 2 * Pad - (headW > 0 ? headW + 4 : 0);
+                textY = 40;
+                textH = TextRenderer.MeasureText(T.Get(textKey), fText, new Size(w, 2000), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height;
+                int by = textY + textH + 12;
+                PlaceButtons(W, by);
+                y = by + 30 + 14;
+            }
+            if (details.Visible && (mode == Mode.Run || mode == Mode.End || mode == Mode.Confirm))
+            {
+                details.SetBounds(Pad, y - 4, W - 2 * Pad, 170);
+                y += 180;
+            }
+            else details.Visible = false;
+            if (Height != y)
+            {
+                Height = y;
+                // A new height set during the page area's own layout (this runs on Resize) isn't placed until the
+                // next one: without this the strip's bottom went under the edge of the page area.
+                if (IsHandleCreated) BeginInvoke((MethodInvoker)delegate { if (Parent != null) Parent.PerformLayout(); });
+            }
+        }
+
+        void PlaceButtons(int W, int y)
+        {
+            int total = 0;
+            foreach (var b in btn) if (b.Visible) total += b.Width + 8;
+            int x = W - Pad - total + 8;
+            foreach (var b in btn) if (b.Visible) { b.Location = new Point(x, y); x += b.Width + 8; }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            var g = e.Graphics;
+            int W = ClientSize.Width;
+            using (var pen = new Pen(Look.Line)) g.DrawLine(pen, 0, 0, W, 0);
+            var flags = TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis;
+            TextRenderer.DrawText(g, Title(), fTitle, new Rectangle(Pad, 11, W - 2 * Pad - 120, 24), Look.Text, flags);
+            if (mode == Mode.Run || mode == Mode.End)
+            {
+                var el = (mode == Mode.End ? endAt : DateTime.Now) - t0;
+                double bar = pct >= 0 ? pct : watchPct;
+                string right = (mode == Mode.Run && bar >= 0 ? ((int)bar).ToString(CultureInfo.InvariantCulture) + "%    " : "") +
+                               string.Format(CultureInfo.InvariantCulture, "{0}:{1:00}", (int)el.TotalMinutes, el.Seconds);
+                TextRenderer.DrawText(g, right, fText, new Rectangle(W - Pad - 160, 12, 160, 22), Look.Dim, flags | TextFormatFlags.Right);
+            }
+            if (mode == Mode.Run)
+            {
+                string now = T.Get(stopped ? "st.stopping" : phase);
+                TextRenderer.DrawText(g, now, fText, new Point(Pad, 39), Look.Text, TextFormatFlags.NoPrefix);
+                if (figure != "" && !stopped)
+                {
+                    int nw = TextRenderer.MeasureText(g, now, fText, new Size(1000, 30), TextFormatFlags.NoPrefix).Width;
+                    TextRenderer.DrawText(g, "·  " + figure, fText, new Point(Pad + nw + 4, 39), Look.Dim, TextFormatFlags.NoPrefix);
+                }
+                DrawBar(g, Pad, 74, W - 2 * Pad, 6);
+                return;
+            }
+            var wrap = TextFormatFlags.NoPrefix | TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl;
+            int x = Pad;
+            if (mode == Mode.End)
+            {
+                TextRenderer.DrawText(g, T.Get(headKey), fBold, new Point(Pad, textY), headKey == "st.failed" ? Look.AccentHot : Look.Text, TextFormatFlags.NoPrefix);
+                x += headW + 4;
+            }
+            TextRenderer.DrawText(g, T.Get(textKey), fText, new Rectangle(x, textY, W - Pad - x, textH + 4), Look.Text, wrap);
+        }
+
+        void DrawBar(Graphics g, float x, float y, float w, float h)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var b = new SolidBrush(Color.FromArgb(40, 44, 56))) Round(g, b, x, y, w, h);
+            double bar = pct >= 0 ? pct : watchPct;
+            if (stopped) return;
+            using (var b = new LinearGradientBrush(new RectangleF(x, y, w, h), Look.Blue, Color.FromArgb(120, 190, 255), 0f))
+            {
+                if (bar >= 0) { float fw = (float)(w * Math.Max(0, Math.Min(1, shown))); if (fw > 1) Round(g, b, x, y, fw, h); }
+                else
+                {
+                    // No figure: a piece of the bar moving along it.
+                    float seg = w * 0.22f, sx = x + (marquee - 0.22f) * w;
+                    float a = Math.Max(x, sx), z = Math.Min(x + w, sx + seg);
+                    if (z - a > 1) Round(g, b, a, y, z - a, h);
+                }
+            }
+        }
+
+        static void Round(Graphics g, Brush b, float x, float y, float w, float h)
+        {
+            if (w < h) w = h;
+            using (var p = new GraphicsPath())
+            {
+                p.AddArc(x, y, h, h, 90, 180);
+                p.AddArc(x + w - h, y, h, h, 270, 180);
+                p.CloseFigure();
+                g.FillPath(b, p);
+            }
+        }
+    }
+
     // ---- The window -----------------------------------------------------------------------------------
     class LauncherForm : Form
     {
@@ -1107,6 +2251,33 @@ namespace Gt5Launcher
         volatile bool running;
         string latestTag = "";
         Image logo;
+        // Helpers (add-ons, Vulkan, GT.VOL, .pkg): their questions and progress, at the bottom of the page area.
+        TaskStrip strip;
+        readonly Dictionary<string, ComboBox> combos = new Dictionary<string, ComboBox>();
+        readonly Dictionary<string, AddonRow> addonRows = new Dictionary<string, AddonRow>();
+        List<Addon> addons = new List<Addon>();
+        string busyAddon;     // the add-on whose script runs now
+        bool busyRemove;       // ... to remove it
+        bool comboQuiet;       // a list or tick box being set by the launcher itself (nothing saved, nothing asked)
+        bool closeNow;         // "Stop and close" was pressed
+        GpuInfo Gpu;           // what this PC's graphics cards can run (NVIDIA DLSS needs an RTX card)
+        // Each setting's row, by its key (label, list or tick box, help line; an add-on row joins the row of the
+        // setting it serves): a row can be greyed as a whole, and hidden as a whole with the rows below moving up.
+        class Row { public string Key; public Panel Page; public int Top, Bottom; public readonly List<Control> Ctl = new List<Control>(); }
+        readonly Dictionary<string, Row> rows = new Dictionary<string, Row>();
+        // Every page control's place as the page was built (rows hidden above it move it up by their height).
+        readonly Dictionary<Control, int> builtTop = new Dictionary<Control, int>();
+        // Each list, tick box and number set again from the settings (after the game's own menu changed the file).
+        readonly List<Action> refreshers = new List<Action>();
+        Action playRefresh;
+        // Settings the Vulkan renderer does nothing with yet: their rows are greyed while Vulkan is chosen, with one
+        // line under Renderer. The rows the game's own menu hides on Vulkan (rsx_vulkan_backend.c, vk_menu_start, after
+        // the Vulkan menu's first stage); take a key out when Vulkan gains that feature.
+        static readonly string[] VulkanLacks = { "LD_RES_TARGET", "LD_AA", "LD_DLSS_PRESET", "LD_DLSS_SCALE", "LD_SHADOWS",
+                                                 "LD_FG_METHOD", "LD_FRAMEGEN_MULT", "LD_PRESENT_SYNC", "PS3_TEX_DUMP" };
+        // The smallest window (its inside): the widest page row (the add-on rows, 700) beside the page list, and
+        // room for a few rows above Play.
+        const int MinClientW = 960, MinClientH = 540;
 
         readonly bool shots;
         public void SaveScreenshots(string dir)
@@ -1123,22 +2294,12 @@ namespace Gt5Launcher
             }
         }
 
-        // First start on this install: laptops and small CPUs start at 720p, easier on their graphics chip.
-        // Speed stays at every frame: drawing half the frames only helps when the graphics card is the
-        // limit, and on a player's 6-core desktop it gained nothing (discussion #1). Everything stays changeable.
-        void AutoPick()
-        {
-            int n = Environment.ProcessorCount;
-            var bs = SystemInformation.PowerStatus.BatteryChargeStatus;
-            bool laptop = (bs & BatteryChargeStatus.NoSystemBattery) == 0 && bs != BatteryChargeStatus.Unknown;
-            if (n <= 8 || (laptop && n <= 12)) S.Set("PS3_VIDEO_MODE", "720");
-        }
-
+        // (A first start used to pick 720p from the processor count: a graphics choice made from the CPU, while the
+        // Play page went on saying 1080p. Every install now starts with the game's own defaults.)
         public LauncherForm(bool screenshots)
         {
             shots = screenshots;
             S = new Settings(P.Settings);
-            if (S.Fresh) AutoPick();
             // v0.1.20-v0.1.22 chose 30 fps by themselves for small CPUs and laptops; it rarely helps, so
             // those installs go back to every frame once (it can be chosen again on the Display page).
             if (S.Get("GT5_LAUNCHER_REV") == "")
@@ -1153,24 +2314,81 @@ namespace Gt5Launcher
             T.Zh = S.Get("GT5_LAUNCHER_LANG") == "zh";
             Text = "Gran Turismo 5 — PC";
             BackColor = Look.Bg; ForeColor = Look.Text;
-            FormBorderStyle = FormBorderStyle.FixedSingle; MaximizeBox = false;
+            // A window like any other: its border sizes it, it maximises, and it opens where it was left. The
+            // smallest size still shows a whole row of settings (the pages scroll up and down).
+            FormBorderStyle = FormBorderStyle.Sizable; MaximizeBox = true;
             AutoScaleMode = AutoScaleMode.Dpi;
             ClientSize = new Size(980, 620);
+            MinimumSize = SizeFromClientSize(new Size(MinClientW, MinClientH));
             StartPosition = FormStartPosition.CenterScreen;
+            if (!shots) LoadPlacement();
+            Gpu = GpuInfo.Read();
+            Normalize();
             Font = Look.F(9.5f, FontStyle.Regular);
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             try { if (File.Exists(P.Icon0)) logo = Image.FromFile(P.Icon0); } catch { }
             DoubleBuffered = true;
+            strip = new TaskStrip();   // after the language is known: its fonts are made with it
+            strip.Logs = P.Logs; strip.Gt5 = P.Gt5;
+            DarkScroll(strip.Details);
             Build();
             ShowPage("nav.play");
-            // After the window exists: the check answers on the UI thread through BeginInvoke.
-            Shown += delegate { if (S.Get("GT5_LAUNCHER_AUTOCHECK") != "0" && !shots) CheckForUpdates(false); };
+            // After the window exists: the check answers on the UI thread through BeginInvoke. Unticked ("" or "0")
+            // means no check: the tick box writes "1" or nothing.
+            Shown += delegate { if (S.Get("GT5_LAUNCHER_AUTOCHECK") == "1" && !shots) CheckForUpdates(false); };
+            // The game's own menu (F1) writes the same settings: read them again whenever the launcher comes to the front.
+            Activated += delegate { if (!shots) ReloadSettings(); };
+        }
+
+        // Values this launcher can't show as they are, put the way it writes them. At start and after each read.
+        void Normalize()
+        {
+            bool changed = false;
+            // Settings this PC's graphics card can't use, from another PC or an older launcher: back to their default.
+            if (!Gpu.Rtx && S.Get("LD_AA") != "") { S.Set("LD_AA", ""); changed = true; }
+            if (S.Get("LD_FG_METHOD") == "dlss" && !(Gpu.Rtx && Gpu.RtxFrameGen)) { S.Set("LD_FG_METHOD", ""); changed = true; }
+            // One Resolution. The game is always told 1080p (its mode with the sharp HUD) and the renderer scales from
+            // there; an older "720p mode" setting becomes the 720p choice.
+            if (S.Get("PS3_VIDEO_MODE") == "720") { S.Set("PS3_VIDEO_MODE", "1080"); if (S.Get("LD_RES_TARGET") == "") S.Set("LD_RES_TARGET", "720"); changed = true; }
+            // Vulkan saved as the renderer but not in gt5.exe (an older launcher's choice, or a build that left it
+            // out): DirectX 12, which is what play.bat starts then anyway.
+            if (S.Get("GT5_RENDERER") == "vulkan" && !VulkanBuilt()) { S.Set("GT5_RENDERER", ""); changed = true; }
+            if (NormalizeFrameGen()) changed = true;
+            if (changed) SaveQuiet();
+        }
+
+        // The settings file again, when it changed since the launcher last read or wrote it (the game's F1 menu writes
+        // it too): every list and tick box shows what is in it now.
+        void ReloadSettings()
+        {
+            if (S == null || !S.ChangedOnDisk() || !S.Reload()) return;
+            Normalize();
+            bool zh = S.Get("GT5_LAUNCHER_LANG") == "zh";
+            if (zh != T.Zh) { T.Zh = zh; string pg = page; Build(); ShowPage(pg); return; }
+            RefreshControls();
+        }
+
+        void RefreshControls()
+        {
+            comboQuiet = true;
+            try { foreach (var a in refreshers) a(); }
+            finally { comboQuiet = false; }
+            if (keyMap != null) { keyMap = KeyBinds.Parse(S.Get("PS3_KEYS")); ShowKeys(); }
+            ApplyRows();
+            if (playRefresh != null) playRefresh();
         }
 
         // -- layout --
         void Build()
         {
-            Controls.Clear(); pages.Clear(); navButtons.Clear();
+            Controls.Clear(); pages.Clear(); navButtons.Clear(); combos.Clear(); addonRows.Clear(); rows.Clear();
+            builtTop.Clear(); refreshers.Clear(); playRefresh = null; keyMap = null;
+            // The pages of the Build before (the launcher's language changed) go. They used to stay in the page area,
+            // and the one that was showing kept covering the new pages.
+            var old = new List<Control>();
+            foreach (Control c in content.Controls) if (c != strip) old.Add(c);
+            content.Controls.Clear();
+            foreach (var c in old) c.Dispose();
             var header = new Panel { Dock = DockStyle.Top, Height = 118, BackColor = Look.Bg };
             header.Paint += PaintHeader;
             var title = new Label { Text = "GRAN TURISMO 5", Font = Look.F(22f, FontStyle.Bold), ForeColor = Look.Text, AutoSize = true, BackColor = Color.Transparent, Location = new Point(logo != null ? 230 : 28, 26) };
@@ -1202,17 +2420,174 @@ namespace Gt5Launcher
             content.Dock = DockStyle.Fill; content.BackColor = Look.Bg; content.Padding = new Padding(28, 18, 28, 10);
             Controls.Add(content); Controls.Add(nav); Controls.Add(bottom); Controls.Add(header);
 
+            addons = Addons();
             pages["nav.play"] = BuildPlayPage();
             pages["nav.display"] = BuildDisplayPage();
             pages["nav.controls"] = BuildControlsPage();
             pages["nav.game"] = BuildGamePage();
             pages["nav.updates"] = BuildUpdatesPage();
             pages["nav.help"] = BuildHelpPage();
-            foreach (var p in pages.Values) { p.Dock = DockStyle.Fill; p.Visible = false; p.AutoScroll = true; DarkScroll(p); content.Controls.Add(p); }
+            foreach (var p in pages.Values)
+            {
+                foreach (Control c in p.Controls) builtTop[c] = c.Top;   // where each one was put, before any row hides
+                p.Dock = DockStyle.Fill; p.Visible = false;
+                // Up and down only: the pages are never wider than the window, but when the task strip below made a
+                // page shorter, WinForms added a horizontal scroll bar that then stayed.
+                p.HorizontalScroll.Maximum = 0; p.HorizontalScroll.Visible = false;
+                p.AutoScroll = true;
+                DarkScroll(p); content.Controls.Add(p);
+            }
+            // The strip is docked first (last in the list), so the page fills what's left above it.
+            content.Controls.Add(strip);
+            strip.SendToBack();
             DarkScroll(notes);
             RefreshVersion();
             PlaceHeaderRight(header);
             bottom.Width = ClientSize.Width;
+            ApplyRows();
+            RefreshPlayButton();
+        }
+
+        // -- the window's size and place, kept in .gt5\launcher-window.txt ("x y width height max") --
+        string PlacementFile { get { return Path.Combine(P.Root ?? P.Gt5, ".gt5", "launcher-window.txt"); } }
+
+        void LoadPlacement()
+        {
+            try
+            {
+                var f = File.ReadAllText(PlacementFile).Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                if (f.Length < 4) return;
+                var r = new Rectangle(int.Parse(f[0], CultureInfo.InvariantCulture), int.Parse(f[1], CultureInfo.InvariantCulture),
+                                      int.Parse(f[2], CultureInfo.InvariantCulture), int.Parse(f[3], CultureInfo.InvariantCulture));
+                r.Width = Math.Max(r.Width, MinimumSize.Width); r.Height = Math.Max(r.Height, MinimumSize.Height);
+                // Only where it can be seen and dragged: its title bar on a screen there now (a second screen may be gone).
+                var bar = new Rectangle(r.X + 40, r.Y, Math.Max(1, r.Width - 80), 30);
+                bool seen = false;
+                foreach (var s in Screen.AllScreens) if (s.WorkingArea.IntersectsWith(bar)) seen = true;
+                if (!seen) return;
+                StartPosition = FormStartPosition.Manual;
+                Bounds = r;
+                if (f.Length > 4 && f[4] == "max") WindowState = FormWindowState.Maximized;
+            }
+            catch { }
+        }
+
+        void SavePlacement()
+        {
+            if (shots) return;
+            try
+            {
+                var r = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+                if (r.Width < 100 || r.Height < 100) return;
+                Directory.CreateDirectory(Path.GetDirectoryName(PlacementFile));
+                File.WriteAllText(PlacementFile, string.Format(CultureInfo.InvariantCulture, "{0} {1} {2} {3}{4}", r.X, r.Y, r.Width, r.Height,
+                                  WindowState == FormWindowState.Maximized ? " max" : ""));
+            }
+            catch { }
+        }
+
+        // -- rows: greyed for the renderer chosen, hidden while they mean nothing (as in the game's menu) --
+        // The controls added to page p since `from` belong to the row of `key`, which spans y0..y1 of the page.
+        void RowControls(string key, Panel p, int from, int y0, int y1)
+        {
+            Row r;
+            if (!rows.TryGetValue(key, out r)) { rows[key] = r = new Row { Key = key, Page = p, Top = y0, Bottom = y1 }; }
+            r.Top = Math.Min(r.Top, y0); r.Bottom = Math.Max(r.Bottom, y1);
+            for (int i = from; i < p.Controls.Count; i++) r.Ctl.Add(p.Controls[i]);
+        }
+
+        // Vulkan chosen (and in this gt5.exe): its row is greyed for each setting it does nothing with yet.
+        bool RowOff(string key)
+        {
+            return key != null && VulkanChosen() && Array.IndexOf(VulkanLacks, key) >= 0;
+        }
+        bool VulkanChosen() { return S.Get("GT5_RENDERER") == "vulkan" && VulkanBuilt(); }
+
+        static bool IsOn(string v)
+        {
+            v = (v ?? "").Trim().ToLowerInvariant();
+            return v != "" && v != "0" && v != "off" && v != "no" && v != "false";
+        }
+        // Frame generation as the game reads it (rsx_framegen.c): LD_FRAMEGEN set, or a multiplier of 2 or more.
+        bool FgOn()
+        {
+            int m;
+            return IsOn(S.Get("LD_FRAMEGEN")) || (int.TryParse(S.Get("LD_FRAMEGEN_MULT"), out m) && m >= 2);
+        }
+        // AMD's and NVIDIA's generators make one frame between two (2x): the one named, or the one Auto takes here
+        // (rsx_framegen.c, fg_method_auto: NVIDIA's where it runs and is added, then AMD's when added, else built-in).
+        bool FgOneFrame()
+        {
+            string m = S.Get("LD_FG_METHOD").ToLowerInvariant();
+            if (m == "fsr" || m == "dlss") return true;
+            if (m != "") return false;
+            var dlss = addons.Find(delegate (Addon a) { return a.Id == "dlss"; });
+            var fsr = addons.Find(delegate (Addon a) { return a.Id == "fsr"; });
+            return (dlss != null && Gpu.RtxFrameGen && dlss.Present()) || (fsr != null && fsr.Present());
+        }
+
+        // A row that means nothing while another setting has some value is not shown, as in the game's menu
+        // (gt5_menu_ui.cpp, row_idle_reason): nothing greyed out, no reasons to read.
+        bool RowIdle(string key)
+        {
+            switch (key)
+            {
+                case "renderer.note": return !VulkanChosen();
+                case "LD_FG_METHOD": return !FgOn();
+                case "LD_FRAMEGEN_MULT": return !FgOn() || FgOneFrame();
+                case "PS3_WINDOW_SIZE":
+                    {
+                        string w = S.Get("GT5_LAUNCH_WINDOW");
+                        return w != "" && !w.Equals("windowed", StringComparison.OrdinalIgnoreCase);
+                    }
+                case "PS3_MOUSE_STEER_SENS": case "PS3_MOUSE_STEER_CENTER": return !IsOn(S.Get("PS3_MOUSE_STEER"));
+                case "PS3_WHEEL_RANGE": case "PS3_WHEEL_FFB": case "PS3_WHEEL_FFB_INVERT":
+                    {
+                        string w = S.Get("PS3_WHEEL").Trim().ToLowerInvariant();
+                        return w == "off" || w == "0" || w == "no" || IsOn(S.Get("PS3_MOUSE_STEER"));
+                    }
+            }
+            return false;
+        }
+
+        // Every row as the settings are now: hidden or shown, greyed or not, and the rows below a hidden one moved up.
+        void ApplyRows()
+        {
+            var addonCtl = new HashSet<Control>();
+            foreach (var a in addonRows.Values) { addonCtl.Add(a.Add); addonCtl.Add(a.Tick); addonCtl.Add(a.Added); addonCtl.Add(a.Remove); }
+            foreach (var r in rows.Values)
+            {
+                bool hide = RowIdle(r.Key), off = RowOff(r.Key);
+                foreach (var c in r.Ctl)
+                {
+                    if (hide) c.Visible = false;
+                    else if (!addonCtl.Contains(c)) c.Visible = true;   // Add or Added/Remove: ShowAddonRow
+                    if (!(c is FlatButton)) c.Enabled = !off;            // add-on buttons: ShowAddonRow
+                }
+            }
+            foreach (var a in addonRows.Values) { Row r; if (!rows.TryGetValue(a.A.ForKey ?? "", out r) || !RowIdle(r.Key)) ShowAddonRow(a); }
+            foreach (var p in pages.Values) Relayout(p);
+            foreach (var cb in combos.Values) cb.Invalidate();
+        }
+
+        // Each control at its built place, less the height of every hidden row above it on its page. A page that has
+        // been scrolled counts from its scroll position (a hidden control isn't moved when the page scrolls).
+        void Relayout(Panel p)
+        {
+            var hidden = new List<Row>();
+            foreach (var r in rows.Values) if (r.Page == p && RowIdle(r.Key)) hidden.Add(r);
+            int sy = p.AutoScrollPosition.Y;
+            p.SuspendLayout();
+            foreach (Control c in p.Controls)
+            {
+                int b;
+                if (!builtTop.TryGetValue(c, out b)) continue;
+                int up = 0;
+                foreach (var r in hidden) if (r.Top <= b && !r.Ctl.Contains(c)) up += r.Bottom - r.Top;
+                int top = b - up + sy;
+                if (c.Top != top) c.Top = top;
+            }
+            p.ResumeLayout();
         }
 
         void PlaceHeaderRight(Panel header)
@@ -1268,72 +2643,179 @@ namespace Gt5Launcher
         }
         int AddHelp(Panel p, string text, int y, int x)
         {
+            if (string.IsNullOrEmpty(text)) return y + 6;   // nothing to say: the label is enough
             var l = new Label { Text = text, ForeColor = Look.Dim, Font = Look.F(8.75f, FontStyle.Regular), Location = new Point(x, y), MaximumSize = new Size(700 - x, 0), AutoSize = true };
             p.Controls.Add(l);
             return y + l.PreferredHeight + 12;
         }
+        // Frame generation as older versions wrote it (a multiplier alone meant "on", and LD_FRAMEGEN could name
+        // the generator), put the way the game's menu writes it: LD_FRAMEGEN = 1 for on with a multiplier of 2 or
+        // more, LD_FG_METHOD for the generator (empty = automatic). On stays on and off stays off. True: changed.
+        bool NormalizeFrameGen()
+        {
+            string on = S.Get("LD_FRAMEGEN"), mult = S.Get("LD_FRAMEGEN_MULT"), how = S.Get("LD_FG_METHOD");
+            bool multOn = mult == "2" || mult == "3" || mult == "4", changed = false;
+            if (on != "" && on != "1")
+            {
+                if (how == "" && (on == "2" || on == "fsr" || on == "dlss")) S.Set("LD_FG_METHOD", on);
+                S.Set("LD_FRAMEGEN", IsOn(on) || on == "2" || on == "fsr" || on == "dlss" ? "1" : ""); on = S.Get("LD_FRAMEGEN"); changed = true;
+            }
+            if (on == "" && multOn) { S.Set("LD_FRAMEGEN", "1"); on = "1"; changed = true; }
+            if (on == "1" && !multOn) { S.Set("LD_FRAMEGEN_MULT", "2"); changed = true; }
+            return changed;
+        }
+
+        // A value the list doesn't have (written by hand, or by a newer game menu): shown as it is, not as the first choice.
+        static string Unlisted(string key, string v)
+        {
+            if (key == "LD_AA" && v.Equals("dlss_c", StringComparison.OrdinalIgnoreCase)) return T.Get("aa.c");
+            Match m = Regex.Match(v, @"^(\d+)\s*[xX]\s*(\d+)$");
+            return m.Success ? m.Groups[1].Value + " x " + m.Groups[2].Value : v;
+        }
+        // Two spellings of one value: a target of 1080 lines is the game's own 1080p mode (scale 1), an empty screen
+        // shape is Auto.
+        static string Same(string key, string v)
+        {
+            if (key == "LD_RES_TARGET" && v == "1080") return "";
+            if (key == "PS3_ASPECT" && v == "") return "auto";
+            return v;
+        }
+        static int SelectValue(ComboBox cb, string key, string cur)
+        {
+            cur = Same(key, cur);
+            for (int i = 0; i < cb.Items.Count; i++) if (string.Equals(Same(key, ((Choice)cb.Items[i]).Value), cur, StringComparison.OrdinalIgnoreCase)) return i;
+            if (cur == "") return 0;
+            cb.Items.Add(new Choice(cur, Unlisted(key, cur)));
+            return cb.Items.Count - 1;
+        }
+
         int AddCombo(Panel p, string labelKey, string helpKey, string key, Choice[] choices, int y)
+        {
+            int c0 = p.Controls.Count, y0 = y;
+            y = AddComboRow(p, labelKey, helpKey, key, choices, y);
+            RowControls(key, p, c0, y0, y);
+            return y;
+        }
+        int AddComboRow(Panel p, string labelKey, string helpKey, string key, Choice[] choices, int y)
         {
             p.Controls.Add(new Label { Text = T.Get(labelKey), AutoSize = true, Location = new Point(0, y + 4), ForeColor = Look.Text });
             var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Look.Panel, ForeColor = Look.Text, Location = new Point(250, y), Width = 300,
                                     DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 22 };
             cb.DrawItem += DrawDarkItem;
             foreach (var c in choices) cb.Items.Add(c);
-            string cur = S.Get(key);
-            int sel = 0;
-            for (int i = 0; i < choices.Length; i++) if (string.Equals(choices[i].Value, cur, StringComparison.OrdinalIgnoreCase)) sel = i;
-            cb.SelectedIndex = sel;
+            var prev = new[] { SelectValue(cb, key, S.Get(key)) };
+            cb.SelectedIndex = prev[0];
+            combos[key] = cb;
+            refreshers.Add(delegate { prev[0] = SelectValue(cb, key, S.Get(key)); if (cb.SelectedIndex != prev[0]) cb.SelectedIndex = prev[0]; });
             cb.SelectedIndexChanged += delegate
             {
-                // Vulkan picked but not built into gt5.exe yet: offer the one-time build, or go back to DirectX 12.
-                if (key == "GT5_RENDERER" && ((Choice)cb.SelectedItem).Value == "vulkan" && !VulkanBuilt() && !AddVulkan(cb))
-                { cb.SelectedIndex = 0; return; }
-                // A DLSS mode picked but the plug-in isn't next to gt5.exe yet: offer to add it, or go back to Off.
-                if (key == "LD_AA" && ((Choice)cb.SelectedItem).Value != "" && !DlssBuilt() && !AddDlss(cb))
-                { cb.SelectedIndex = 0; return; }
-                S.Set(key, ((Choice)cb.SelectedItem).Value); SaveQuiet();
+                if (comboQuiet) return;
+                var ch = (Choice)cb.SelectedItem;
+                // A choice whose add-on isn't there (a DLSS mode without NVIDIA DLSS) is greyed: picking it asks
+                // nothing; the choice goes back and the add-on's row is pointed at.
+                if (ch.Off) { PutBack(cb, prev[0]); PointAt(ch.Needs); return; }
+                prev[0] = cb.SelectedIndex;
+                // Frame generation is one switch, as in the game's menu: On gives 2x unless a multiplier is chosen,
+                // Off clears both.
+                if (key == "LD_FRAMEGEN")
+                {
+                    int m;
+                    if (ch.Value == "") S.Set("LD_FRAMEGEN_MULT", "");
+                    else if (!int.TryParse(S.Get("LD_FRAMEGEN_MULT"), out m) || m < 2) S.Set("LD_FRAMEGEN_MULT", "2");
+                }
+                S.Set(key, ch.Value); SaveQuiet();
                 if (key == "GT5_LAUNCHER_LANG")   // the launcher's own language: redraw everything in it
+                {
                     BeginInvoke((MethodInvoker)delegate { T.Zh = S.Get(key) == "zh"; string pg = page; Build(); ShowPage(pg); if (latestTag != "") CheckForUpdates(false); });
+                    return;
+                }
+                // Rows that depend on this one appear or go, other lists follow (Frame generation sets the multiplier).
+                BeginInvoke((MethodInvoker)RefreshControls);
             };
             p.Controls.Add(cb);
             y += 34;
             return helpKey != null ? AddHelp(p, T.Get(helpKey), y - 2, 250) : y + 6;
         }
         // A number typed or stepped with the arrows (Up/Down, the mouse wheel); the default value saves as nothing.
-        int AddNumber(Panel p, string labelKey, string helpKey, string key, decimal min, decimal max, decimal step, decimal def, string unit, int y)
+        int AddNumber(Panel p, string labelKey, string helpKey, string key, decimal min, decimal max, decimal step, decimal def, int decimals, string unit, int y)
         {
+            int c0 = p.Controls.Count, y0 = y;
             p.Controls.Add(new Label { Text = T.Get(labelKey), AutoSize = true, Location = new Point(0, y + 4), ForeColor = Look.Text });
-            var n = new NumericUpDown { Minimum = min, Maximum = max, Increment = step, DecimalPlaces = 1, BackColor = Look.Panel, ForeColor = Look.Text,
+            var n = new NumericUpDown { Minimum = min, Maximum = max, Increment = step, DecimalPlaces = decimals, BackColor = Look.Panel, ForeColor = Look.Text,
                                         BorderStyle = BorderStyle.FixedSingle, Location = new Point(250, y), Width = 90, TextAlign = HorizontalAlignment.Right };
-            decimal cur;
-            string s = S.Get(key).Trim().Replace(',', '.');
-            if (s == "" || !decimal.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out cur)) cur = def;
-            n.Value = Math.Max(min, Math.Min(max, cur));
-            n.ValueChanged += delegate { S.Set(key, n.Value == def ? "" : n.Value.ToString("0.#", CultureInfo.InvariantCulture)); SaveQuiet(); };
+            Func<decimal> stored = delegate
+            {
+                decimal cur;
+                string s = S.Get(key).Trim().Replace(',', '.');
+                if (s == "" || !decimal.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out cur)) cur = def;
+                return Math.Max(min, Math.Min(max, cur));
+            };
+            n.Value = stored();
+            n.ValueChanged += delegate
+            {
+                if (comboQuiet) return;
+                S.Set(key, n.Value == def ? "" : n.Value.ToString(decimals > 0 ? "0.#" : "0", CultureInfo.InvariantCulture)); SaveQuiet();
+            };
+            refreshers.Add(delegate { decimal v = stored(); if (n.Value != v) n.Value = v; });
             p.Controls.Add(n);
             p.Controls.Add(new Label { Text = unit, AutoSize = true, Location = new Point(346, y + 4), ForeColor = Look.Dim });
             y += 34;
-            return helpKey != null ? AddHelp(p, T.Get(helpKey), y - 2, 250) : y + 6;
+            y = helpKey != null ? AddHelp(p, T.Get(helpKey), y - 2, 250) : y + 6;
+            RowControls(key, p, c0, y0, y);
+            return y;
         }
         int AddCheck(Panel p, string labelKey, string helpKey, string key, string onValue, int y)
         {
+            int c0 = p.Controls.Count, y0 = y;
             var c = new CheckBox { Text = T.Get(labelKey), AutoSize = true, Location = new Point(0, y), ForeColor = Look.Text, Checked = S.Get(key) == onValue };
-            c.CheckedChanged += delegate { S.Set(key, c.Checked ? onValue : ""); SaveQuiet(); };
+            c.CheckedChanged += delegate
+            {
+                if (comboQuiet) return;
+                S.Set(key, c.Checked ? onValue : ""); SaveQuiet();
+                BeginInvoke((MethodInvoker)RefreshControls);   // rows that depend on it (mouse steering's speed)
+            };
+            refreshers.Add(delegate { bool on = S.Get(key) == onValue; if (c.Checked != on) c.Checked = on; });
             p.Controls.Add(c);
             y += 30;
-            return helpKey != null ? AddHelp(p, T.Get(helpKey), y - 4, 20) : y + 4;
+            y = helpKey != null ? AddHelp(p, T.Get(helpKey), y - 4, 20) : y + 4;
+            RowControls(key, p, c0, y0, y);
+            return y;
         }
+        // A heading or a line of its own that no setting owns, hidden by RowIdle(key) like a row.
+        void Own(string key, Panel p, int c0, int y0, int y1) { RowControls(key, p, c0, y0, y1); }
         void SaveQuiet() { try { S.Save(); } catch { } }
 
-        // Dark dropdowns: Windows draws DropDownList boxes in light colours unless they're drawn by hand.
+        // A combo set back by the launcher, without saving or asking anything.
+        void PutBack(ComboBox cb, int i)
+        {
+            comboQuiet = true;
+            try { cb.SelectedIndex = i; } finally { comboQuiet = false; }
+        }
+
+        // Sets a setting's combo to the choice with this value, as if picked (saved), or just the setting when it
+        // has no combo now.
+        void SetChoice(string key, string value)
+        {
+            ComboBox cb;
+            if (combos.TryGetValue(key, out cb) && !cb.IsDisposed)
+                for (int i = 0; i < cb.Items.Count; i++)
+                    if (((Choice)cb.Items[i]).Value == value) { if (cb.SelectedIndex != i) cb.SelectedIndex = i; return; }
+            S.Set(key, value); SaveQuiet();
+        }
+
+        // Dark dropdowns: Windows draws DropDownList boxes in light colours unless they're drawn by hand. A choice
+        // whose add-on isn't there is drawn greyed.
         static void DrawDarkItem(object sender, DrawItemEventArgs e)
         {
             var cb = (ComboBox)sender;
             bool hot = (e.State & DrawItemState.Selected) != 0 && (e.State & DrawItemState.ComboBoxEdit) == 0;
-            using (var b = new SolidBrush(hot ? Look.Accent : Look.Panel)) e.Graphics.FillRectangle(b, e.Bounds);
+            var ch = e.Index >= 0 ? cb.Items[e.Index] as Choice : null;
+            bool off = (ch != null && ch.Off) || !cb.Enabled;
+            // The highlighted choice in blue, as in the game's menu (red is kept for a real failure).
+            using (var b = new SolidBrush(hot ? (off ? Look.NavHot : Look.Blue) : Look.Panel)) e.Graphics.FillRectangle(b, e.Bounds);
             if (e.Index >= 0)
                 TextRenderer.DrawText(e.Graphics, cb.Items[e.Index].ToString(), cb.Font, new Rectangle(e.Bounds.X + 6, e.Bounds.Y, e.Bounds.Width - 6, e.Bounds.Height),
-                                      Look.Text, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+                                      off ? Color.FromArgb(98, 103, 118) : Look.Text, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
         }
 
         [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int v, int size);
@@ -1355,67 +2837,150 @@ namespace Gt5Launcher
             y = AddHeading(p, T.Get("nav.play"), y);
             var summary = new Label { ForeColor = Look.Text, AutoSize = true, Location = new Point(0, y), MaximumSize = new Size(700, 0), Font = Look.F(10.5f, FontStyle.Regular) };
             p.Controls.Add(summary);
-            // Below the settings: what would stop the game (not built, GT.VOL missing or in pieces).
-            var warn = new Label { ForeColor = Color.FromArgb(240, 180, 70), AutoSize = true, Location = new Point(0, y + 134), MaximumSize = new Size(700, 0), Font = Look.F(10f, FontStyle.Bold) };
-            p.Controls.Add(warn);
-            Action refresh = delegate { summary.Text = Summary(); warn.Text = Warning(); };
+            // Under the settings: how to reach the game's own settings, and what would stop the game (not installed,
+            // its data missing or in pieces), in plain text: Play is greyed while it can't start.
+            var menu = new Label { ForeColor = Look.Dim, AutoSize = true, Location = new Point(0, y + 150), MaximumSize = new Size(700, 0), Font = Look.F(10f, FontStyle.Regular) };
+            var warn = new Label { ForeColor = Look.Text, AutoSize = true, Location = new Point(0, y + 186), MaximumSize = new Size(700, 0), Font = Look.F(10f, FontStyle.Regular) };
+            p.Controls.Add(menu); p.Controls.Add(warn);
+            Action refresh = delegate { summary.Text = Summary(); menu.Text = string.Format(T.Get("menukey"), MenuKeys()); warn.Text = Warning(); RefreshPlayButton(); };
             p.VisibleChanged += delegate { if (p.Visible) refresh(); };
+            playRefresh = refresh;
             refresh();
-            y += 134 + 64;
-            y = AddHelp(p, T.Get("keys"), y, 0);
-            y = AddHelp(p, T.Get("help.about"), y + 6, 0);
             return p;
         }
 
+        // The languages of the game's own list (gt5_settings_table.h, k_ch_lang).
+        static Choice[] LangChoices()
+        {
+            return new[] {
+                new Choice("", T.Get("lang.system")), new Choice("en", "English (US)"), new Choice("en-gb", "English (UK)"),
+                new Choice("fr", "Français"), new Choice("es", "Español"), new Choice("de", "Deutsch"), new Choice("it", "Italiano"),
+                new Choice("nl", "Nederlands"), new Choice("pt", "Português"), new Choice("pt-br", "Português (Brasil)"),
+                new Choice("ru", "Русский"), new Choice("pl", "Polski"), new Choice("tr", "Türkçe"), new Choice("fi", "Suomi"),
+                new Choice("sv", "Svenska"), new Choice("da", "Dansk"), new Choice("no", "Norsk"), new Choice("ja", "日本語"),
+                new Choice("ko", "한국어"), new Choice("zh-t", "中文（繁體）"), new Choice("zh-s", "中文（简体）") };
+        }
+        static string LabelOf(Choice[] list, string v)
+        {
+            foreach (var c in list) if (string.Equals(c.Value, v, StringComparison.OrdinalIgnoreCase)) return c.Label;
+            return v;
+        }
+
+        // The menu key (GT5_MENU_KEY, F1 when not set) and the controller's buttons for it (GT5_MENU_PAD).
+        string MenuKeys()
+        {
+            string k = S.Get("GT5_MENU_KEY").Trim();
+            k = k == "" ? "F1" : KeyBinds.Pretty(KeyBinds.Canon(k) ?? k);
+            string pad = S.Get("GT5_MENU_PAD").Trim().ToLowerInvariant();
+            if (pad == "off") return k;
+            return k + " (" + (pad == "l3r3" ? "L3 + R3" : "Select + Start") + ")";
+        }
+
+        // What the game will start with, as it reads the settings.
         string Summary()
         {
-            string res = S.Get("PS3_VIDEO_MODE") == "720" ? "720p" : "1080p";
-            string shape = S.Get("PS3_ASPECT"); if (shape == "" || shape == "auto") shape = T.Get("shape.auto");
-            string win = S.Get("GT5_LAUNCH_WINDOW") == "borderless" ? T.Get("window.borderless") : S.Get("GT5_LAUNCH_WINDOW") == "max" ? T.Get("window.max") : T.Get("window.windowed");
-            string wheel = S.Get("PS3_MOUSE_STEER") == "1" ? T.Get("mouse.short") : S.Get("PS3_WHEEL") == "off" ? T.Get("off") : T.Get("wheel.on");
+            bool vk = VulkanChosen();
+            // Vulkan draws the game's own 1080p mode for now (Resolution is greyed there).
+            string t = Same("LD_RES_TARGET", S.Get("LD_RES_TARGET"));
+            string res = vk || t == "" ? "1080p" : t == "720" ? "720p" : t == "1440" ? "1440p" : t == "2160" ? "4K" : t == "2880" ? "5K" : t;
+            string wm = S.Get("GT5_LAUNCH_WINDOW").ToLowerInvariant();
+            string win = wm == "borderless" ? T.Get("window.borderless") : wm == "max" ? T.Get("window.max") : T.Get("window.windowed");
+            string size = S.Get("PS3_WINDOW_SIZE");
+            if (wm != "borderless" && wm != "max" && size != "") win += ", " + Unlisted("PS3_WINDOW_SIZE", size);
+            string wheel = IsOn(S.Get("PS3_MOUSE_STEER")) ? T.Get("mouse.short") : S.Get("PS3_WHEEL").ToLowerInvariant() == "off" ? T.Get("off") : T.Get("wheel.on");
             var sb = new StringBuilder();
+            sb.AppendLine(string.Format("{0}:  {1}", T.Get("renderer"), T.Get(vk ? "renderer.vk" : "renderer.dx12")));
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("res"), res));
-            sb.AppendLine(string.Format("{0}:  {1}", T.Get("shape"), shape));
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("window"), win));
-            string sp = S.Get("GT5_SPEED");
-            sb.AppendLine(string.Format("{0}:  {1}", T.Get("speed"), T.Get(sp == "30" ? "speed.30" : "speed.full")));
+            sb.AppendLine(string.Format("{0}:  {1}", T.Get("speed"), T.Get(S.Get("GT5_SPEED") == "30" ? "speed.30" : "speed.full")));
             sb.AppendLine(string.Format("{0}:  {1}", T.Get("wheel"), wheel));
-            sb.AppendLine(string.Format("{0}:  {1}", T.Get("lang"), S.Get("PS3_LANG") == "" ? T.Get("lang.system") : S.Get("PS3_LANG")));
+            sb.AppendLine(string.Format("{0}:  {1}", T.Get("lang"), LabelOf(LangChoices(), S.Get("PS3_LANG"))));
             return sb.ToString();
         }
 
         string Warning()
         {
             if (!File.Exists(P.Exe)) return T.Get("notbuilt");
+            if (!File.Exists(P.Elf)) return T.Get("noelf");
             if (!File.Exists(P.Vol)) return T.Get(P.VolInPieces() ? "volparts.page" : "novol");
             return "";
+        }
+
+        // Play only when the game can start (and nothing else runs): a missing part is said on the Play page.
+        bool CanStart() { return File.Exists(P.Exe) && File.Exists(P.Elf) && (File.Exists(P.Vol) || (P.VolInPieces() && File.Exists(P.FixFiles))); }
+        void RefreshPlayButton()
+        {
+            if (playButton == null || playButton.IsDisposed) return;
+            playButton.Enabled = !running && CanStart();
         }
 
         Panel BuildDisplayPage()
         {
             var p = NewPage(); int y = 0;
             y = AddHeading(p, T.Get("nav.display"), y);
-            y = AddCombo(p, "renderer", "renderer.help", "GT5_RENDERER", new[] { new Choice("", T.Get("renderer.dx12")), new Choice("vulkan", T.Get("renderer.vk")) }, y);
-            y = AddCombo(p, "res", "res.help", "PS3_VIDEO_MODE", new[] { new Choice("1080", T.Get("res.1080")), new Choice("720", T.Get("res.720")) }, y);
-            y = AddCombo(p, "rres", "rres.help", "LD_RES_TARGET", new[] { new Choice("", T.Get("rres.same")), new Choice("1080", "1080p"), new Choice("1440", "1440p"), new Choice("2160", "4K (2160p)"), new Choice("2880", "5K (2880p)") }, y);
-            y = AddCombo(p, "aa", "aa.help", "LD_AA", new[] { new Choice("", T.Get("aa.off")), new Choice("dlaa", T.Get("aa.dlaa")), new Choice("dlss_q", T.Get("aa.q")), new Choice("dlss_b", T.Get("aa.b")), new Choice("dlss_p", T.Get("aa.p")) }, y);
-            y = AddCombo(p, "speed", "speed.help", "GT5_SPEED", new[] { new Choice("", T.Get("speed.full")), new Choice("30", T.Get("speed.30")) }, y);
-            y = AddCombo(p, "shape", "shape.help", "PS3_ASPECT", new[] { new Choice("auto", T.Get("shape.auto")), new Choice("16:9", "16:9"), new Choice("21:9", "21:9"), new Choice("32:9", "32:9") }, y);
+            // The renderers this gt5.exe has: Vulkan is built in by setup and updates (build\SDL2.dll says so); a game
+            // built without it (its libraries couldn't be had) lists DirectX 12 alone until the next update adds it.
+            if (VulkanBuilt())
+            {
+                y = AddCombo(p, "renderer", null, "GT5_RENDERER", new[] { new Choice("", T.Get("renderer.dx12")), new Choice("vulkan", T.Get("renderer.vk")) }, y);
+                // While Vulkan is chosen, one line says why some rows below are greyed.
+                int c0 = p.Controls.Count, y0 = y;
+                y = AddHelp(p, T.Get("renderer.dx12only"), y - 4, 250) + 4;
+                Own("renderer.note", p, c0, y0, y);
+            }
+            else
+            {
+                p.Controls.Add(new Label { Text = T.Get("renderer"), AutoSize = true, Location = new Point(0, y + 4), ForeColor = Look.Text });
+                p.Controls.Add(new Label { Text = T.Get("renderer.dx12"), AutoSize = true, Location = new Point(256, y + 4), ForeColor = Look.Text });
+                y += 40;
+            }
+            // The rows in the game's order (its Display page, then its Performance page's Frame rate). One Resolution:
+            // the game is always told 1080p (its mode with the sharp HUD) and the renderer scales from there.
+            y = AddCombo(p, "res", null, "LD_RES_TARGET", new[] { new Choice("720", "720p"), new Choice("", "1080p"), new Choice("1440", "1440p"), new Choice("2160", "4K"), new Choice("2880", "5K") }, y);
+            // Anti-aliasing (NVIDIA DLSS), on a PC with an NVIDIA RTX card only. It never asks: without the add-on its
+            // modes are greyed, and the row under it adds it. (The game's other entries can't be picked anywhere yet.)
+            var dlss = addons.Find(delegate (Addon a) { return a.Id == "dlss"; });
+            if (dlss != null)
+            {
+                y = AddCombo(p, "aa", null, "LD_AA", new[] { new Choice("", T.Get("aa.off")), new Choice("dlss_q", T.Get("aa.q")) { Needs = dlss },
+                    new Choice("dlss_b", T.Get("aa.b")) { Needs = dlss }, new Choice("dlss_p", T.Get("aa.p")) { Needs = dlss }, new Choice("dlss_u", T.Get("aa.u")) { Needs = dlss },
+                    new Choice("dlaa", T.Get("aa.dlaa")) { Needs = dlss } }, y);
+                y = AddAddonRow(p, dlss, y);   // part of the Anti-aliasing row (Addon.ForKey)
+            }
+            // Shadows: DirectX 12 draws the sun's shadow map at 2x (High, the default) or 4x with soft edges.
+            y = AddCombo(p, "shadows", null, "LD_SHADOWS", new[] { new Choice("standard", T.Get("shadows.standard")), new Choice("", T.Get("shadows.high")), new Choice("ultra", T.Get("shadows.ultra")) }, y);
+            p.VisibleChanged += delegate { if (p.Visible) RefreshAddons(); };
+            // Frame generation, as in the game's menu: one switch; the generator (automatic unless one is named;
+            // NVIDIA's and AMD's each need their add-on) and the multiplier only while it is on.
+            var fsr = addons.Find(delegate (Addon a) { return a.Id == "fsr"; });
+            y = AddCombo(p, "framegen", null, "LD_FRAMEGEN", new[] { new Choice("", T.Get("fg.off")), new Choice("1", T.Get("fg.on")) }, y);
+            // NVIDIA's generator only on a card that runs it (an RTX 40 series or newer).
+            var gens = new List<Choice> { new Choice("", T.Get("fgmethod.auto")) };
+            if (dlss != null && Gpu.RtxFrameGen) gens.Add(new Choice("dlss", "NVIDIA DLSS") { Needs = dlss });
+            gens.Add(new Choice("fsr", "AMD FSR 3") { Needs = fsr });
+            gens.Add(new Choice("2", T.Get("fgmethod.builtin")));
+            y = AddCombo(p, "fgmethod", null, "LD_FG_METHOD", gens.ToArray(), y);
+            y = AddAddonRow(p, fsr, y);   // part of the Generator row (Addon.ForKey)
+            // 3x and 4x: the built-in generator (the others make one frame between two: the row goes, as in the game).
+            y = AddCombo(p, "fgmult", null, "LD_FRAMEGEN_MULT", new[] { new Choice("2", "2x"), new Choice("3", "3x"), new Choice("4", "4x") }, y);
             y = AddCombo(p, "window", "window.help", "GT5_LAUNCH_WINDOW", new[] { new Choice("windowed", T.Get("window.windowed")), new Choice("max", T.Get("window.max")), new Choice("borderless", T.Get("window.borderless")) }, y);
-            y = AddCombo(p, "size", "size.help", "PS3_WINDOW_SIZE", new[] { new Choice("", T.Get("size.default")), new Choice("1280x720", "1280 x 720"), new Choice("1600x900", "1600 x 900"), new Choice("1920x1080", "1920 x 1080"), new Choice("2560x1440", "2560 x 1440"), new Choice("2560x1080", "2560 x 1080 (21:9)"), new Choice("3440x1440", "3440 x 1440 (21:9)"), new Choice("3840x2160", "3840 x 2160") }, y);
-            y = AddCheck(p, "watch", "watch.help", "LD_WATCH", "1", y);
-            y = AddCombo(p, "wdraw", "wdraw.help", "LD_WATCH_DRAW", new[] { new Choice("", T.Get("wdraw.2")), new Choice("3", T.Get("wdraw.3")), new Choice("4", T.Get("wdraw.4")) }, y);
-            y = AddCheck(p, "framegen", "framegen.help", "LD_FRAMEGEN", "1", y);
-            y = AddCombo(p, "fgmult", "fgmult.help", "LD_FRAMEGEN_MULT", new[] { new Choice("", T.Get("fgmult.off")), new Choice("2", "2x"), new Choice("3", "3x"), new Choice("4", "4x") }, y);
-            y = AddCheck(p, "texdump", "texdump.help", "PS3_TEX_DUMP", "1", y);
-            y = AddCombo(p, "spus", "spus.help", "SPURS_EXTRA_SPUS", new[] { new Choice("0", "0"), new Choice("1", "1"), new Choice("2", "2"), new Choice("3", "3"), new Choice("4", "4") }, y);
-            // Cockpit view (GT5\src\gt5_cockpit.cpp): "" = the game's own camera.
-            p.Controls.Add(new Label { Text = T.Get("cockpit"), Font = Look.F(11f, FontStyle.Bold), ForeColor = Look.Text, AutoSize = true, Location = new Point(0, y + 8) });
-            y += 40;
-            y = AddCombo(p, "cfov", "cfov.help", "PS3_COCKPIT_FOV", CockpitChoices(new[] { -10, -5, 5, 10, 15, 20, 25, 30, 40 }, "cfov.wider", "cfov.narrower"), y);
-            y = AddCombo(p, "cseat", "cseat.help", "PS3_COCKPIT_SEAT", CockpitChoices(new[] { -30, -20, -10, -5, 5, 10, 20, 30 }, "cseat.fwd", "cseat.back"), y);
-            y = AddCombo(p, "cheight", null, "PS3_COCKPIT_HEIGHT", CockpitChoices(new[] { -10, -5, 5, 10 }, "cheight.up", "cheight.down"), y);
+            y = AddCombo(p, "size", "size.help", "PS3_WINDOW_SIZE", WindowSizes(), y);
+            y = AddCombo(p, "shape", "shape.help", "PS3_ASPECT", new[] { new Choice("auto", T.Get("shape.auto")), new Choice("16:9", "16:9"), new Choice("21:9", "21:9"), new Choice("32:9", "32:9") }, y);
+            // Frame rate: 30 fps is the game's own 30 frames a second (its Performance page).
+            y = AddCombo(p, "speed", null, "GT5_SPEED", new[] { new Choice("", T.Get("speed.full")), new Choice("30", T.Get("speed.30")) }, y);
             return p;
+        }
+
+        // The game's window sizes that fit on one of this PC's screens (a size larger than every screen can't be shown).
+        static Choice[] WindowSizes()
+        {
+            int mw = 0, mh = 0;
+            foreach (var s in Screen.AllScreens) { mw = Math.Max(mw, s.Bounds.Width); mh = Math.Max(mh, s.Bounds.Height); }
+            var l = new List<Choice> { new Choice("", T.Get("size.default")) };
+            foreach (var z in new[] { new[] { "1280", "720", "" }, new[] { "1600", "900", "" }, new[] { "1920", "1080", "" }, new[] { "2560", "1440", "" },
+                                      new[] { "2560", "1080", " (21:9)" }, new[] { "3440", "1440", " (21:9)" }, new[] { "3840", "2160", "" } })
+                if (mw == 0 || (int.Parse(z[0]) <= mw && int.Parse(z[1]) <= mh)) l.Add(new Choice(z[0] + "x" + z[1], z[0] + " x " + z[1] + z[2]));
+            return l.ToArray();
         }
 
         // "As in the game", then each step labelled with the text for its direction.
@@ -1431,6 +2996,8 @@ namespace Gt5Launcher
         {
             var p = NewPage(); int y = 0;
             y = AddHeading(p, T.Get("nav.controls"), y);
+            // A controller's triggers while driving (cellPad.c, PAD_TRIGGERS): throttle and brake, or as on a PS3 pad.
+            y = AddCombo(p, "triggers", null, "PAD_TRIGGERS", new[] { new Choice("", T.Get("triggers.drive")), new Choice("ps3", T.Get("triggers.ps3")) }, y);
             y = AddCheck(p, "padbg", null, "PAD_BACKGROUND", "1", y);
             y = AddCheck(p, "clip", null, "PAD_CURSOR_CLIP", "1", y);
             y = AddCombo(p, "wheel", "wheel.help", "PS3_WHEEL", new[] { new Choice("", T.Get("wheel.on")), new Choice("off", T.Get("wheel.off")) }, y + 8);
@@ -1440,7 +3007,7 @@ namespace Gt5Launcher
             y = AddCombo(p, "ffb", null, "PS3_WHEEL_FFB", ffb.ToArray(), y);
             y = AddCheck(p, "ffbinv", null, "PS3_WHEEL_FFB_INVERT", "1", y);
             y = AddCheck(p, "mouse", "mouse.help", "PS3_MOUSE_STEER", "1", y + 10);
-            y = AddNumber(p, "msens", "msens.help", "PS3_MOUSE_STEER_SENS", 1m, 1000m, 0.5m, 100m, "%", y);
+            y = AddNumber(p, "msens", "msens.help", "PS3_MOUSE_STEER_SENS", 1m, 1000m, 0.5m, 100m, 1, "%", y);
             y = AddCombo(p, "mcenter", "mcenter.help", "PS3_MOUSE_STEER_CENTER", new[] { new Choice("", T.Get("off")), new Choice("50", T.Get("mcenter.slow")), new Choice("100", T.Get("mcenter.mid")), new Choice("200", T.Get("mcenter.fast")) }, y);
             y = AddKeyRows(p, y + 14);
             return p;
@@ -1555,7 +3122,7 @@ namespace Gt5Launcher
                 foreach (var k in keyMap[kv.Key]) names.Add(KeyBinds.Pretty(k));
                 bool wait = kv.Key == keyWait;
                 kv.Value.Text = wait ? T.Get("kb.press") : names.Count == 0 ? T.Get("kb.none") : string.Join("  /  ", names.ToArray());
-                kv.Value.Normal = wait ? Look.Accent : Look.Panel;
+                kv.Value.Normal = wait ? Look.Blue : Look.Panel;   // waiting for a key: blue, not a failure's red
                 kv.Value.BackColor = kv.Value.Normal;
                 kv.Value.ForeColor = names.Count == 0 && !wait ? Look.Dim : Look.Text;
             }
@@ -1565,31 +3132,36 @@ namespace Gt5Launcher
         {
             var p = NewPage(); int y = 0;
             y = AddHeading(p, T.Get("nav.game"), y);
-            y = AddCombo(p, "lang", "lang.help", "PS3_LANG", new[] {
-                new Choice("", T.Get("lang.system")), new Choice("en", "English (US)"), new Choice("en-gb", "English (UK)"),
-                new Choice("fr", "Français"), new Choice("es", "Español"), new Choice("de", "Deutsch"), new Choice("it", "Italiano"),
-                new Choice("nl", "Nederlands"), new Choice("pt", "Português"), new Choice("pt-br", "Português (Brasil)"),
-                new Choice("ru", "Русский"), new Choice("pl", "Polski"), new Choice("tr", "Türkçe"), new Choice("fi", "Suomi"),
-                new Choice("sv", "Svenska"), new Choice("da", "Dansk"), new Choice("no", "Norsk"), new Choice("ja", "日本語"),
-                new Choice("ko", "한국어"), new Choice("zh-t", "中文（繁體）"), new Choice("zh-s", "中文（简体）") }, y);
+            // In the game's order (its Game page): the cockpit view, the language, the opening movie.
+            // Cockpit view (GT5\src\gt5_cockpit.cpp): "" = the game's own camera.
+            p.Controls.Add(new Label { Text = T.Get("cockpit"), Font = Look.F(11f, FontStyle.Bold), ForeColor = Look.Text, AutoSize = true, Location = new Point(0, y + 2) });
+            y += 34;
+            y = AddCombo(p, "cfov", "cfov.help", "PS3_COCKPIT_FOV", CockpitChoices(new[] { -10, -5, 5, 10, 15, 20, 25, 30, 40 }, "cfov.wider", "cfov.narrower"), y);
+            y = AddCombo(p, "cseat", "cseat.help", "PS3_COCKPIT_SEAT", CockpitChoices(new[] { -30, -20, -10, -5, 5, 10, 20, 30 }, "cseat.fwd", "cseat.back"), y);
+            y = AddCombo(p, "cheight", null, "PS3_COCKPIT_HEIGHT", CockpitChoices(new[] { -10, -5, 5, 10 }, "cheight.up", "cheight.down"), y);
+            y = AddCombo(p, "lang", "lang.help", "PS3_LANG", LangChoices(), y + 8);
             y = AddCheck(p, "intro", "intro.help", "PS3_SKIP_INTRO", "1", y + 4);
-            y = AddHeading(p, T.Get("mods"), y + 8);
+            // Sound, as on the game's Sound page (cellAudio.c): the volume of what reaches the speakers, 0-100 % in steps
+            // of 5 (100 = nothing written), and quiet while another window is in front.
+            y = AddHeading(p, T.Get("sound"), y + 10);
+            y = AddNumber(p, "volume", null, "GT5_VOLUME", 0m, 100m, 5m, 100m, 0, "%", y);
+            y = AddCheck(p, "bgmute", null, "GT5_MUTE_BACKGROUND", "1", y);
+            // Mods built from GT5\mods: a tick each (GT5_MOD_<NAME>, 1 / 0). The section only when there is one. The
+            // unlock-fps example is not offered: the game never goes past 60 with it (and its text says otherwise).
             var mods = LoadMods();
-            if (mods.Count == 0) y = AddHelp(p, T.Get("mods.none"), y, 0);
+            if (mods.Count > 0) y = AddHeading(p, T.Get("mods"), y + 10);
             foreach (var m in mods)
             {
-                string cur = S.Get(m.Switch);
-                bool on = cur == "" ? m.Default : cur == "1";
-                var c = new CheckBox { Text = m.Name, AutoSize = true, Location = new Point(0, y), ForeColor = Look.Text, Checked = on };
+                var c = new CheckBox { Text = m.Name, AutoSize = true, Location = new Point(0, y), ForeColor = Look.Text };
                 var mod = m;
-                c.CheckedChanged += delegate { S.Set(mod.Switch, c.Checked ? "1" : "0"); SaveQuiet(); };
-                p.Controls.Add(c); y += 28;
-                if (m.Description != "") y = AddHelp(p, m.Description, y - 4, 20);
+                Func<bool> stored = delegate { string cur = S.Get(mod.Switch); return cur == "" ? mod.Default : cur == "1"; };
+                c.Checked = stored();
+                c.CheckedChanged += delegate { if (comboQuiet) return; S.Set(mod.Switch, c.Checked ? "1" : "0"); SaveQuiet(); };
+                refreshers.Add(delegate { bool on = stored(); if (c.Checked != on) c.Checked = on; });
+                p.Controls.Add(c); y += 30;
             }
-            y = AddHeading(p, T.Get("ui"), y + 10);
+            y = AddHeading(p, T.Get("launcher"), y + 10);
             y = AddCombo(p, "ui", null, "GT5_LAUNCHER_LANG", new[] { new Choice("", "English"), new Choice("zh", "中文（简体）") }, y);
-            var restart = new Label { Text = "", ForeColor = Look.Dim, AutoSize = true, Location = new Point(560, y - 36) };
-            p.Controls.Add(restart);
             y = AddCheck(p, "hide", null, "GT5_LAUNCHER_HIDE", "1", y);
             y = AddCheck(p, "autocheck", null, "GT5_LAUNCHER_AUTOCHECK", "1", y);
             return p;
@@ -1611,7 +3183,11 @@ namespace Gt5Launcher
                         var d = js.Deserialize<Dictionary<string, object>>(File.ReadAllText(f));
                         object o;
                         string name = d.TryGetValue("name", out o) && o != null ? o.ToString() : Path.GetFileName(dir);
-                        var m = new ModInfo { Name = name, Description = d.TryGetValue("description", out o) && o != null ? o.ToString() : "" };
+                        if (name.Equals("unlock-fps", StringComparison.OrdinalIgnoreCase)) continue;
+                        // The ones the port ships have a few words of their own; another shows its name (its own
+                        // description is for MODDING.md readers, not a row's caption).
+                        string label = T.Get("mod." + name.ToLowerInvariant());
+                        var m = new ModInfo { Name = label != "mod." + name.ToLowerInvariant() ? label : name, Description = "" };
                         m.Default = d.TryGetValue("default", out o) && o is bool && (bool)o;
                         m.Switch = "GT5_MOD_" + name.Replace("-", "_").ToUpperInvariant();
                         list.Add(m);
@@ -1636,12 +3212,30 @@ namespace Gt5Launcher
             updateButton = new FlatButton(T.Get("upd.now"), Look.Blue, Color.FromArgb(90, 160, 240)) { Location = new Point(162, y), Size = new Size(170, 38), Font = Look.F(10.5f, FontStyle.Bold) };
             updateButton.Click += delegate { RunUpdate(); };
             p.Controls.Add(check); p.Controls.Add(updateButton);
+            SetUpdateButton(latestTag != "" && Newer(latestTag, P.InstalledVersion()));
             y += 50;
-            y = AddHelp(p, T.Get("upd.howto"), y, 0);
             p.Controls.Add(new Label { Text = T.Get("upd.notes"), AutoSize = true, Location = new Point(0, y + 4), Font = Look.F(10.5f, FontStyle.Bold), ForeColor = Look.Text });
             notes = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = Look.Panel, ForeColor = Look.Text, BorderStyle = BorderStyle.None, Location = new Point(0, y + 32), Size = new Size(700, 170), Font = Look.F(9f, FontStyle.Regular) };
             p.Controls.Add(notes);
+            // The release notes take the room the window gives them (at least as before).
+            var nb = notes;
+            p.Resize += delegate
+            {
+                if (nb.IsDisposed) return;
+                nb.Width = Math.Min(1100, Math.Max(700, p.ClientSize.Width - 4));   // wider than that is hard to read
+                nb.Height = Math.Max(170, p.ClientSize.Height - (nb.Top - p.AutoScrollPosition.Y) - 8);
+            };
             return p;
+        }
+
+        // Update now is the blue button to press only when a newer release is there; otherwise it is greyed.
+        void SetUpdateButton(bool newer)
+        {
+            if (updateButton == null || updateButton.IsDisposed) return;
+            updateButton.Enabled = newer;
+            updateButton.Normal = newer ? Look.Blue : Look.Panel;
+            updateButton.BackColor = updateButton.Normal;
+            updateButton.ForeColor = newer ? Look.Text : Look.Dim;
         }
 
         Panel BuildHelpPage()
@@ -1650,8 +3244,9 @@ namespace Gt5Launcher
             y = AddHeading(p, T.Get("nav.help"), y);
             string[][] links = {
                 new[] { "help.save", "save" }, new[] { "help.logs", "logs" }, new[] { "help.report", "https://github.com/MormonFTP-hub/gt5-recomp/issues/new/choose" },
-                new[] { "help.readme", "https://github.com/MormonFTP-hub/gt5-recomp#faq" }, new[] { "help.versions", "https://github.com/MormonFTP-hub/gt5-recomp/blob/main/VERSIONS.md" },
+                new[] { "help.readme", "https://github.com/MormonFTP-hub/gt5-recomp#faq" },
                 new[] { "help.changes", "https://github.com/MormonFTP-hub/gt5-recomp/blob/main/CHANGELOG.md" },
+                new[] { "help.discord", "https://discord.gg/xvhGcuD7Kk" },
                 new[] { "help.shaders", "shaders" }, new[] { "help.pkg", "pkg" },
             };
             foreach (var l in links)
@@ -1661,8 +3256,7 @@ namespace Gt5Launcher
                 b.Click += delegate { HelpAction(target); };
                 p.Controls.Add(b); y += 48;
             }
-            y = AddHelp(p, T.Get("help.discord"), y + 6, 0);
-            y = AddHelp(p, T.Get("help.about"), y, 0);
+            y = AddHelp(p, T.Get("help.about"), y + 6, 0);
             return p;
         }
 
@@ -1674,32 +3268,27 @@ namespace Gt5Launcher
                 if (what == "shaders") { ClearShaderCache(); return; }
                 if (what == "pkg")
                 {
-                    // install_pkg.ps1 does the work through RPCS3, in a console window of its own.
-                    if (GameRunning() || running) { MessageBox.Show(this, T.Get("pkg.running"), "GT5"); return; }
-                    string script = Path.Combine(Path.Combine(P.Gt5, "scripts"), "install_pkg.ps1");
-                    if (!File.Exists(script)) { MessageBox.Show(this, T.Get("pkg.missing"), "GT5"); return; }
+                    if (strip.Busy) { status.Text = T.Get("busy"); return; }
+                    if (GameRunning() || running) { strip.Note("help.pkg", "fail.game"); return; }
+                    if (!File.Exists(PkgScript())) { strip.Note("help.pkg", "fail.update"); return; }
                     var dlg = new OpenFileDialog();
                     dlg.Filter = "PS3 packages (*.pkg)|*.pkg"; dlg.Multiselect = true; dlg.Title = T.Get("help.pkg");
                     if (dlg.ShowDialog(this) != DialogResult.OK || dlg.FileNames.Length == 0) return;
-                    var a = new StringBuilder("-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"");
-                    foreach (var f in dlg.FileNames) a.Append(" \"" + f + "\"");
-                    var psi = new ProcessStartInfo("powershell.exe", a.ToString());
-                    psi.UseShellExecute = true; psi.WorkingDirectory = P.Gt5;
-                    Process.Start(psi);
+                    InstallPkg(dlg.FileNames);
                     return;
                 }
                 if (what == "save")
                 {
                     string desk = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                     var saved = new List<string>();
-                    foreach (var n in new[] { "play.err", "play.prev.err", "play.out" })
+                    foreach (var n in new[] { "play.err", "play.prev.err", "play.out", "update.log" })
                     {
                         string src = Path.Combine(P.Logs, n);
                         if (!File.Exists(src)) continue;
                         string dst = Path.Combine(desk, "gt5-" + n + ".txt");
                         File.Copy(src, dst, true); saved.Add(Path.GetFileName(dst));
                     }
-                    MessageBox.Show(this, saved.Count == 0 ? "GT5\\logs is empty: start the game once first." : string.Format(T.Get("help.saved"), string.Join(", ", saved.ToArray())), "GT5");
+                    MessageBox.Show(this, saved.Count == 0 ? T.Get("help.nologs") : string.Format(T.Get("help.saved"), string.Join(", ", saved.ToArray())), "GT5");
                     return;
                 }
                 Process.Start(what);
@@ -1738,8 +3327,9 @@ namespace Gt5Launcher
         {
             string v = P.InstalledVersion();
             if (v.StartsWith("development build")) v = T.Get("devbuild") + " " + v.Substring("development build".Length).Trim();
-            versionLabel.Text = T.Get("version") + ": " + (v == "" ? "?" : v);
-            if (installedLabel != null) installedLabel.Text = T.Get("upd.installed") + ":  " + (v == "" ? "?" : v);
+            // No version recorded (a copy not made by the installer): nothing, rather than a question mark.
+            versionLabel.Text = v == "" ? "" : T.Get("version") + ": " + v;
+            if (installedLabel != null) installedLabel.Text = v == "" ? "" : T.Get("upd.installed") + ":  " + v;
         }
 
         static int[] ParseVersion(string s)
@@ -1760,6 +3350,9 @@ namespace Gt5Launcher
         static string PlainText(string md)
         {
             string s = (md ?? "").Replace("\r\n", "\n");
+            // The release's footer (how to update by hand, from ship.ps1) is for the GitHub page: the launcher has its button.
+            int foot = s.IndexOf("\n---\n**Updating:**", StringComparison.Ordinal);
+            if (foot >= 0) s = s.Substring(0, foot);
             s = Regex.Replace(s, "\\[([^\\]]+)\\]\\([^)]+\\)", "$1");          // [text](link) -> text
             s = Regex.Replace(s, "(?m)^#{1,6}\\s*", "");                        // headings
             s = s.Replace("**", "").Replace("`", "");
@@ -1798,16 +3391,18 @@ namespace Gt5Launcher
                         string inst = P.InstalledVersion();
                         if (err != "")
                         {
-                            latestLabel.Text = T.Get("upd.latest") + ":  " + string.Format(T.Get("upd.failed"), err);
+                            // The reason (a .NET message, English) goes nowhere a player reads: a few plain words.
+                            latestLabel.Text = T.Get("upd.latest") + ":  " + T.Get("upd.failed");
                             return;
                         }
                         DateTime when;
                         string d2 = DateTime.TryParse(date, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out when) ? when.ToString("d MMM yyyy", CultureInfo.InvariantCulture) : "";
                         bool newer = Newer(tag, inst);
-                        latestLabel.Text = T.Get("upd.latest") + ":  " + tag + (d2 != "" ? "  (" + d2 + ")" : "") + "   " + (newer ? string.Format(T.Get("upd.available"), tag) : T.Get("upd.uptodate"));
+                        latestLabel.Text = T.Get("upd.latest") + ":  " + tag + (d2 != "" ? "  (" + d2 + ")" : "") + "   " + (newer ? "" : T.Get("upd.uptodate"));
                         notes.Text = PlainText(body);
                         updateBadge.Text = string.Format(T.Get("upd.available"), tag);
                         updateBadge.Visible = newer;
+                        SetUpdateButton(newer);
                         PlaceHeaderRight((Panel)updateBadge.Parent);
                         if (showPage) ShowPage("nav.updates");
                     });
@@ -1834,134 +3429,359 @@ namespace Gt5Launcher
         // does and removes it when it doesn't).
         bool VulkanBuilt() { return File.Exists(Path.Combine(Path.GetDirectoryName(P.Exe), "SDL2.dll")); }
 
-        // Runs scripts\add_vulkan.ps1 in its own window. True when it started; the renderer combo goes back to
-        // DirectX 12 by itself if the build doesn't end with Vulkan in.
-        bool AddVulkan(ComboBox cb)
+        // -- helpers: scripts run hidden, shown in the task strip --
+
+        // One helper at a time; no Play while it runs (it may be rebuilding gt5.exe or putting files next to it).
+        void StartJob(HelperJob j)
         {
-            string script = Path.Combine(P.Gt5, "scripts", "add_vulkan.ps1");
-            if (!File.Exists(script) || !File.Exists(P.Exe)) { MessageBox.Show(this, T.Get("notbuilt"), "GT5"); return false; }
-            if (GameRunning() || running) { MessageBox.Show(this, T.Get("upd.running"), "GT5"); return false; }
-            if (MessageBox.Show(this, T.Get("vk.add"), "GT5", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
-            Process pr;
-            try
+            var inner = j.Ended;
+            j.Ended = delegate (bool ok)
             {
-                var psi = new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"");
-                psi.WorkingDirectory = P.Gt5; psi.UseShellExecute = true;
-                pr = Process.Start(psi);
-            }
-            catch (Exception e) { MessageBox.Show(this, e.Message, "GT5"); return false; }
-            running = true;   // no Play while gt5.exe is rebuilt
-            playButton.Enabled = false; cb.Enabled = false;
-            status.Text = T.Get("vk.adding");
-            var th = new Thread(delegate ()
-            {
-                try { pr.WaitForExit(); } catch { }
-                try
-                {
-                    BeginInvoke((MethodInvoker)delegate
-                    {
-                        running = false; playButton.Enabled = true; cb.Enabled = true;
-                        if (VulkanBuilt()) status.Text = T.Get("vk.added");
-                        else { status.Text = T.Get("vk.failed"); cb.SelectedIndex = 0; }
-                    });
-                }
-                catch { }
-            });
-            th.IsBackground = true; th.Start();
-            return true;
+                running = false;
+                RefreshPlayButton();
+                if (inner != null) inner(ok);
+                if (playRefresh != null) playRefresh();   // joining the game's data may have made Play possible
+            };
+            running = true;
+            playButton.Enabled = false;
+            status.Text = T.Get(j.TitleKey) + "...";
+            strip.Run(j);
+            RefreshAddons();
         }
 
-        // build\gt5_upscale_dlss.dll next to gt5.exe: scripts\add_dlss.ps1 built the DLSS plug-in there.
-        bool DlssBuilt() { return File.Exists(Path.Combine(Path.GetDirectoryName(P.Exe), "gt5_upscale_dlss.dll")); }
-
-        // Runs scripts\add_dlss.ps1 in its own window (it shows NVIDIA's licence and asks). True when it
-        // started; the combo goes back to Off by itself if the plug-in isn't there when it ends.
-        bool AddDlss(ComboBox cb)
+        // The window closes while a helper runs: ask in the strip first (it would go on with no window at all);
+        // when Windows closes it, the helper is ended with it.
+        protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            string script = Path.Combine(P.Gt5, "scripts", "add_dlss.ps1");
-            if (!File.Exists(script) || !File.Exists(P.Exe)) { MessageBox.Show(this, T.Get("notbuilt"), "GT5"); return false; }
-            if (GameRunning() || running) { MessageBox.Show(this, T.Get("upd.running"), "GT5"); return false; }
-            if (MessageBox.Show(this, T.Get("dlss.add"), "GT5", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
-            Process pr;
+            if (strip.Busy && !closeNow)
+            {
+                if (e.CloseReason == CloseReason.UserClosing)
+                {
+                    e.Cancel = true;
+                    strip.AskClose(delegate { closeNow = true; BeginInvoke((MethodInvoker)delegate { Close(); }); });
+                    return;
+                }
+                strip.Kill();
+            }
+            SavePlacement();
+            base.OnFormClosing(e);
+        }
+
+        // The add-ons on the Display page. A new one (AMD FSR 3 frame generation with add_fsr.ps1; DLSS Frame
+        // Generation: add_dlss.ps1 again plus its one more file) is one more entry here, a Choice's Needs if a list
+        // has choices that need it, and its texts in T.
+        List<Addon> Addons()
+        {
+            string scripts = Path.Combine(P.Gt5, "scripts"), build = Path.GetDirectoryName(P.Exe);
+            var list = new List<Addon>();
+            // NVIDIA DLSS: add_dlss.ps1 fetches NVIDIA's SDK at a fixed release and builds the small plug-in. The row's
+            // own line says that adding it accepts NVIDIA's licence, with the link, so Add is the acceptance: the
+            // script runs with -Accept and asks nothing. GT5_DLSS_SDK=<folder> passes -SdkDir: a copy of the same SDK
+            // release already on this PC, used instead of fetching.
+            string dlssScript = Path.Combine(scripts, "add_dlss.ps1");
+            var dlssArgs = new List<string> { "-Accept", "-NoPause" };
+            string sdk = Environment.GetEnvironmentVariable("GT5_DLSS_SDK");
+            if (!string.IsNullOrEmpty(sdk) && Directory.Exists(sdk)) { dlssArgs.Add("-SdkDir"); dlssArgs.Add(sdk); }
+            // Only on a PC with an NVIDIA RTX card: DLSS runs on no other, so elsewhere it isn't offered at all.
+            if (Gpu.Rtx) list.Add(new Addon
+            {
+                Id = "dlss", ForKey = "LD_AA", NameKey = "dlss.name", NoteKey = "dlss.note", NoteAddedKey = "dlss.note.added", Link = DlssLicence(dlssScript),
+                Script = dlssScript, AddArgs = dlssArgs.ToArray(), RemoveArgs = new[] { "-Remove", "-NoPause" },
+                Files = new[] { Path.Combine(build, "gt5_upscale_dlss.dll"), Path.Combine(build, "nvngx_dlss.dll") },
+                AddTitleKey = "dlss.title.add", RemoveTitleKey = "dlss.title.remove", RemoveAskKey = "dlss.ask.remove", RemoveTextKey = "dlss.ask.remove.text",
+                AddedKey = "dlss.added", NotAddedKey = "dlss.notadded", RemovedKey = "dlss.removed", NotRemovedKey = "dlss.notremoved",
+                FirstKey = "dlss.first", Log = "add_dlss",
+                WatchPath = Path.Combine(P.Gt5, "deps", "dlss", "DLSS", ".git"), CleanOnStop = Path.Combine(P.Gt5, "deps", "dlss"),
+            });
+            // AMD FSR 3 (frame generation): add_fsr.ps1 fetches AMD's FidelityFX SDK at a fixed release, checks its
+            // two DLLs and builds the small plug-in. No licence to accept.
+            list.Add(new Addon
+            {
+                Id = "fsr", ForKey = "LD_FG_METHOD", NameKey = "fsr.name", NoteKey = "fsr.note", NoteAddedKey = "fsr.note.added", Link = null,
+                Script = Path.Combine(scripts, "add_fsr.ps1"), AddArgs = new[] { "-NoPause" }, RemoveArgs = new[] { "-Remove", "-NoPause" },
+                Files = new[] { Path.Combine(build, "gt5_upscale_fsr.dll"), Path.Combine(build, "amd_fidelityfx_loader_dx12.dll"), Path.Combine(build, "amd_fidelityfx_framegeneration_dx12.dll") },
+                AddTitleKey = "fsr.title.add", RemoveTitleKey = "fsr.title.remove", RemoveAskKey = "fsr.ask.remove", RemoveTextKey = "fsr.ask.remove.text",
+                AddedKey = "fsr.added", NotAddedKey = "fsr.notadded", RemovedKey = "fsr.removed", NotRemovedKey = "fsr.notremoved",
+                FirstKey = "fsr.first", Log = "add_fsr",
+                WatchPath = Path.Combine(P.Gt5, "deps", "fsr", "FidelityFX-SDK", ".git"), CleanOnStop = Path.Combine(P.Gt5, "deps", "fsr"),
+            });
+            return list;
+        }
+
+        // NVIDIA's licence for the DLSS release add_dlss.ps1 fetches. The tag is read from the script's own pin
+        // ($Pin = @{ ... Tag = 'v310.9.16' ... }), so the link always names the release the script fetches; this
+        // constant, the same tag, is only for a script that can't be read.
+        const string DlssTag = "v310.9.16";
+        static string DlssLicence(string script)
+        {
+            string tag = DlssTag;
             try
             {
-                var psi = new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"");
-                psi.WorkingDirectory = P.Gt5; psi.UseShellExecute = true;
-                pr = Process.Start(psi);
+                var m = Regex.Match(File.ReadAllText(script), @"\$Pin\s*=\s*@\{[^}]*?\bTag\s*=\s*'([^']+)'");
+                if (m.Success) tag = m.Groups[1].Value;
             }
-            catch (Exception e) { MessageBox.Show(this, e.Message, "GT5"); return false; }
-            running = true;   // no Play while the plug-in is put next to gt5.exe
-            playButton.Enabled = false; cb.Enabled = false;
-            status.Text = T.Get("dlss.adding");
-            var th = new Thread(delegate ()
+            catch { }
+            return "https://github.com/NVIDIA/DLSS/blob/" + tag + "/LICENSE.txt";
+        }
+
+        // One add-on row: the name, Add (or a tick, "Added" and Remove), and the small line under it with its link.
+        class AddonRow
+        {
+            public Addon A;
+            public Label Name, Tick, Added;
+            public FlatButton Add, Remove;
+            public LinkLabel Note;
+        }
+
+        int AddAddonRow(Panel p, Addon a, int y)
+        {
+            int c0 = p.Controls.Count, y0 = y;
+            y = AddAddonRowControls(p, a, y);
+            if (a.ForKey != null) RowControls(a.ForKey, p, c0, y0, y);
+            return y;
+        }
+        int AddAddonRowControls(Panel p, Addon a, int y)
+        {
+            var r = new AddonRow { A = a };
+            r.Name = new Label { Text = T.Get(a.NameKey), AutoSize = true, Location = new Point(0, y + 6), ForeColor = Look.Text };
+            p.Controls.Add(r.Name);
+            r.Add = new FlatButton(T.Get("addon.add"), Look.Blue, Color.FromArgb(90, 160, 240)) { Location = new Point(250, y), Size = new Size(120, 30), Font = Look.F(10f, FontStyle.Bold) };
+            r.Add.Click += delegate { AddonAdd(a); };
+            r.Tick = new Label { Text = "✓", AutoSize = true, Location = new Point(250, y + 4), ForeColor = Look.Blue, Font = Look.F(11f, FontStyle.Bold) };
+            r.Added = new Label { Text = T.Get("addon.added"), AutoSize = true, Location = new Point(250 + 20, y + 6), ForeColor = Look.Text, Font = Look.F(10f, FontStyle.Regular) };
+            r.Remove = new FlatButton(T.Get("addon.remove"), Look.Panel, Look.NavHot) { Size = new Size(110, 28), Font = Look.F(9.5f, FontStyle.Regular) };
+            r.Remove.Location = new Point(r.Added.Left + r.Added.PreferredWidth + 18, y + 1);
+            r.Remove.Click += delegate { AddonRemove(a); };
+            // Sized by hand: a LinkLabel's own AutoSize cut the Chinese line short of its last characters.
+            r.Note = new LinkLabel
             {
-                try { pr.WaitForExit(); } catch { }
-                try
-                {
-                    BeginInvoke((MethodInvoker)delegate
-                    {
-                        running = false; playButton.Enabled = true; cb.Enabled = true;
-                        if (DlssBuilt()) status.Text = T.Get("dlss.added");
-                        else { status.Text = T.Get("dlss.failed"); cb.SelectedIndex = 0; }
-                    });
-                }
-                catch { }
+                AutoSize = false, Size = new Size(450, 20), Location = new Point(250, y + 38), ForeColor = Look.Dim, Font = Look.F(8.75f, FontStyle.Regular),
+                LinkColor = Look.Blue, ActiveLinkColor = Color.FromArgb(120, 190, 255), VisitedLinkColor = Look.Blue, LinkBehavior = LinkBehavior.HoverUnderline
+            };
+            r.Note.LinkClicked += delegate { OpenLink(a.Link); };
+            p.Controls.Add(r.Add); p.Controls.Add(r.Tick); p.Controls.Add(r.Added); p.Controls.Add(r.Remove); p.Controls.Add(r.Note);
+            addonRows[a.Id] = r;
+            ShowAddonRow(r);
+            // The same height before and after adding, so nothing below moves.
+            int h = Math.Max(NoteHeight(a.NoteKey, r.Note.Font), NoteHeight(a.NoteAddedKey, r.Note.Font));
+            return y + 38 + h + 20;
+        }
+
+        static string NoLink(string s) { return s.Replace("[[", "").Replace("]]", ""); }
+        static int NoteHeight(string key, Font f)
+        {
+            return TextRenderer.MeasureText(NoLink(T.Get(key)), f, new Size(450, 2000), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height;
+        }
+
+        void SetNote(AddonRow r, string key)
+        {
+            string s = T.Get(key);
+            int a0 = s.IndexOf("[["), a1 = s.IndexOf("]]");
+            if (a0 >= 0 && a1 > a0 && r.A.Link != null)
+            {
+                r.Note.Text = NoLink(s);
+                r.Note.LinkArea = new LinkArea(a0, a1 - a0 - 2);
+            }
+            else { r.Note.Text = NoLink(s); r.Note.LinkArea = new LinkArea(0, 0); }
+            r.Note.Height = NoteHeight(key, r.Note.Font) + 16;   // a line to spare: its wrapping can differ from the measure
+        }
+
+        void OpenLink(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return;
+            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch (Exception e) { status.Text = e.Message; }
+        }
+
+        // The row as the files are now: Add; Adding...; a tick, Added and Remove; Removing...
+        void ShowAddonRow(AddonRow r)
+        {
+            // Inside a row that is hidden now (Generator while frame generation is off): nothing of it shows.
+            Row row;
+            if (r.A.ForKey != null && rows.TryGetValue(r.A.ForKey, out row) && RowIdle(row.Key))
+            {
+                r.Add.Visible = r.Tick.Visible = r.Added.Visible = r.Remove.Visible = false;
+                return;
+            }
+            bool have = r.A.Present(), mine = busyAddon == r.A.Id && strip.Busy, any = strip.Busy;
+            bool adding = mine && !busyRemove, removing = mine && busyRemove;
+            bool showAdd = adding || (!have && !removing);
+            // Placed from the name on the left, which is shown with its row: a hidden control isn't moved when the
+            // page scrolls, and Remove came back far below its row.
+            int top = r.Name.Top - 6;
+            r.Add.Location = new Point(250, top);
+            r.Tick.Location = new Point(250, top + 4);
+            r.Added.Location = new Point(270, top + 6);
+            r.Remove.Location = new Point(270 + r.Added.PreferredWidth + 18, top + 1);
+            r.Note.Location = new Point(250, top + 38);
+            bool off = RowOff(r.A.ForKey);   // the renderer chosen does nothing with it yet
+            r.Add.Visible = showAdd;
+            r.Add.Text = T.Get(adding ? "addon.adding" : "addon.add");
+            r.Add.Enabled = !any && !off;
+            r.Add.BackColor = off ? Look.NavHot : Look.Blue;   // greyed with its row: not the blue of a button to press
+            r.Tick.Visible = r.Added.Visible = r.Remove.Visible = !showAdd;
+            r.Remove.Text = T.Get(removing ? "addon.removing" : "addon.remove");
+            r.Remove.Enabled = !any && !off;
+            SetNote(r, have && !adding ? r.A.NoteAddedKey : r.A.NoteKey);
+        }
+
+        // Every time the Display page is shown and after every helper: the rows from the files as they are, and a
+        // choice whose add-on is gone (a DLSS mode after Remove) back to the list's first choice.
+        void RefreshAddons()
+        {
+            // Vulkan saved as the renderer but not in gt5.exe (an older launcher's choice, or a build that left it
+            // out): DirectX 12, which is what play.bat starts then anyway.
+            if (S.Get("GT5_RENDERER") == "vulkan" && !VulkanBuilt()) { S.Set("GT5_RENDERER", ""); SaveQuiet(); }
+            foreach (var cb in new List<ComboBox>(combos.Values))
+            {
+                var ch = cb.SelectedItem as Choice;
+                if (ch != null && ch.Off && cb.Items.Count > 0) cb.SelectedIndex = 0;
+                cb.Invalidate();
+            }
+            // The rows again: which add-on is there decides what Auto generates (and so the Multiplier row).
+            RefreshControls();
+        }
+
+        // A greyed choice was picked: the status line says what to do, and the add-on's button is pointed at.
+        void PointAt(Addon a)
+        {
+            status.Text = T.Get(a.FirstKey);
+            AddonRow r;
+            if (!addonRows.TryGetValue(a.Id, out r)) return;
+            var b = r.Add.Visible ? r.Add : r.Remove;
+            BeginInvoke((MethodInvoker)delegate
+            {
+                if (b.IsDisposed) return;
+                Panel pg;
+                if (pages.TryGetValue("nav.display", out pg)) pg.ScrollControlIntoView(b);
+                if (Form.ActiveForm == this) b.Focus();   // never takes the focus from another program
+                b.FlatAppearance.BorderSize = 2; b.FlatAppearance.BorderColor = Color.White;
+                var t = new System.Windows.Forms.Timer { Interval = 1500 };
+                t.Tick += delegate { t.Stop(); t.Dispose(); if (!b.IsDisposed) b.FlatAppearance.BorderSize = 0; };
+                t.Start();
             });
-            th.IsBackground = true; th.Start();
-            return true;
+        }
+
+        // Add: the click is the go-ahead (and for DLSS the acceptance of NVIDIA's licence, as the row's line says).
+        void AddonAdd(Addon a)
+        {
+            if (strip.Busy) { status.Text = T.Get("busy"); return; }
+            if (running || GameRunning()) { strip.Note(a.NameKey, "fail.game"); return; }
+            if (!File.Exists(P.Exe)) { strip.Note(a.NameKey, "fail.notbuilt"); return; }
+            if (!File.Exists(a.Script)) { strip.Note(a.NameKey, "fail.update"); return; }
+            var j = new HelperJob { TitleKey = a.AddTitleKey, Script = a.Script, DoneFiles = a.Files, Log = a.Log, DoneKey = a.AddedKey,
+                                    WatchPath = a.WatchPath, CleanOnStop = a.CleanOnStop };
+            j.Args.AddRange(a.AddArgs);
+            j.Ended = delegate (bool ok) { busyAddon = null; RefreshAddons(); status.Text = T.Get(ok ? a.AddedKey : a.NotAddedKey); };
+            busyAddon = a.Id; busyRemove = false;
+            StartJob(j);
+        }
+
+        // Remove: one question, then its script with RemoveArgs; it worked when its files are gone.
+        void AddonRemove(Addon a)
+        {
+            if (strip.Busy) { status.Text = T.Get("busy"); return; }
+            strip.Ask(a.RemoveAskKey, a.RemoveTextKey, "addon.remove", "ask.keep", delegate
+            {
+                if (running || GameRunning()) { strip.Note(a.NameKey, "fail.game"); return; }
+                if (!File.Exists(a.Script)) { strip.Note(a.NameKey, "fail.update"); return; }
+                var j = new HelperJob { TitleKey = a.RemoveTitleKey, StartKey = "st.remove", Script = a.Script, DoneFiles = a.Files, DoneWhenGone = true,
+                                        Log = a.Log + "-remove", DoneKey = a.RemovedKey };
+                j.Args.AddRange(a.RemoveArgs);
+                j.Ended = delegate (bool ok) { busyAddon = null; RefreshAddons(); status.Text = T.Get(ok ? a.RemovedKey : a.NotRemovedKey); };
+                busyAddon = a.Id; busyRemove = true;
+                StartJob(j);
+            }, null);
+        }
+
+        string PkgScript() { return Path.Combine(P.Gt5, "scripts", "install_pkg.ps1"); }
+
+        // install_pkg.ps1 does the work through RPCS3 (its own window, minimized, answered by the script) and
+        // update_exe.ps1; before, it ran in a console window of its own and waited for Enter at the end.
+        void InstallPkg(string[] files)
+        {
+            var j = new HelperJob { TitleKey = "pkg.title", Script = PkgScript(), Log = "install_pkg", DoneKey = "pkg.done", AutoHide = false };
+            j.Args.AddRange(files);
+            j.Env["GT5_PKG_NOPAUSE"] = "1";
+            j.Explain = delegate (string l, bool worked)
+            {
+                if (worked)
+                {
+                    if (l.StartsWith("Next: run setup")) return "pkg.next";
+                    if (l.StartsWith("DLC: the vouchers")) return "pkg.dlc";
+                    return null;
+                }
+                if (l.Contains("RPCS3 wasn't found")) return "pkg.norpcs3";
+                if (l.Contains("None of those is a PS3 package") || l.Contains("No .pkg files")) return "pkg.notpkg";
+                if (l.StartsWith("Not installed:")) return "pkg.some";
+                return null;
+            };
+            j.Ended = delegate (bool ok) { status.Text = T.Get(ok ? "pkg.done" : "pkg.notdone"); };
+            StartJob(j);
         }
 
         void RunUpdate()
         {
-            if (GameRunning() || running) { MessageBox.Show(this, T.Get("upd.running"), "GT5"); return; }
-            if (!File.Exists(P.Update) || !Directory.Exists(Path.Combine(P.Root, ".git"))) { MessageBox.Show(this, T.Get("upd.nogit"), "GT5"); return; }
-            // The update window: a copy of this exe, since the launcher closes so the build can replace it.
-            string copy = Path.Combine(Path.GetTempPath(), "GT5Updater.exe");
-            try
+            if (strip.Busy) { status.Text = T.Get("busy"); return; }
+            if (GameRunning() || running) { strip.Note("upd.now", "upd.running"); return; }
+            if (!File.Exists(P.Update) || !Directory.Exists(Path.Combine(P.Root, ".git"))) { strip.Note("upd.now", "upd.nogit"); return; }
+            // The update window: a copy of this exe, since the launcher closes so the build can replace it. A copy
+            // still open from an earlier update can't be written over: then a copy under another name (this used to
+            // fall back to update.ps1 in a console window).
+            Exception err = null;
+            for (int i = 0; i < 6; i++)
             {
-                File.Copy(Application.ExecutablePath, copy, true);
-                var w = new ProcessStartInfo(copy, string.Format("--update-window \"{0}\" \"{1}\"", P.Root, Application.ExecutablePath));
-                w.WorkingDirectory = P.Root; w.UseShellExecute = false;
-                Process.Start(w);
-                Close();
-                return;
+                string copy = Path.Combine(Path.GetTempPath(), i == 0 ? "GT5Updater.exe" : "GT5Updater-" + i + ".exe");
+                try
+                {
+                    File.Copy(Application.ExecutablePath, copy, true);
+                    var w = new ProcessStartInfo(copy, string.Format("--update-window \"{0}\" \"{1}\"", P.Root, Application.ExecutablePath));
+                    w.WorkingDirectory = P.Root; w.UseShellExecute = false;
+                    Process.Start(w);
+                    Close();
+                    return;
+                }
+                catch (Exception e) { err = e; }
             }
-            catch { }   // a copy still open from an earlier update, say: the console as before
-            try
-            {
-                // The launcher closes, so update.ps1 can rebuild it; update.ps1 opens it again at the end.
-                var psi = new ProcessStartInfo("powershell.exe",
-                    string.Format("-NoProfile -ExecutionPolicy Bypass -File \"{0}\" -Relaunch \"{1}\"", P.Update, Application.ExecutablePath));
-                psi.WorkingDirectory = P.Root; psi.UseShellExecute = true;
-                Process.Start(psi);
-                Close();
-            }
-            catch (Exception e) { MessageBox.Show(this, e.Message, "GT5"); }
+            MessageBox.Show(this, err != null ? err.Message : "GT5Updater.exe", "GT5");
         }
 
         // -- play --
         public void PlayNow() { Play(); }
         void Play()
         {
+            if (strip.Busy) { status.Text = T.Get("busy"); return; }
             if (running || GameRunning()) { status.Text = T.Get("already"); return; }
-            if (!File.Exists(P.Exe)) { MessageBox.Show(this, T.Get("notbuilt"), "GT5"); return; }
-            if (!File.Exists(P.Elf)) { MessageBox.Show(this, T.Get("noelf"), "GT5"); return; }
+            // Play is greyed while the game can't start, and the Play page says why (--play gets here anyway).
+            if (!CanStart()) { status.Text = Warning(); ShowPage("nav.play"); return; }
             if (!File.Exists(P.Vol) && P.VolInPieces() && File.Exists(P.FixFiles))
             {
-                if (MessageBox.Show(this, T.Get("volparts"), "GT5", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
-                try
+                // GT.VOL in pieces: asked in the strip, joined by fix_game_files.ps1 with no window (the bar follows the
+                // joined file's size), then Play goes on by itself.
+                long total = 0;
+                try { foreach (var f in Directory.GetFiles(Path.GetDirectoryName(P.Vol), Path.GetFileName(P.Vol) + ".666*")) total += new FileInfo(f).Length; } catch { }
+                strip.Ask("vol.ask", "vol.text", "vol.join", "ask.notnow", delegate
                 {
-                    var fix = Process.Start(new ProcessStartInfo("powershell.exe",
-                        "-NoProfile -ExecutionPolicy Bypass -File \"" + P.FixFiles + "\""));
-                    Cursor = Cursors.WaitCursor;
-                    while (!fix.WaitForExit(200)) Application.DoEvents();
-                }
-                catch (Exception e) { MessageBox.Show(this, e.Message, "GT5"); }
-                finally { Cursor = Cursors.Default; }
+                    var j = new HelperJob { TitleKey = "vol.title", StartKey = "st.join", Script = P.FixFiles, Log = "fix_game_files", DoneKey = "vol.done",
+                                            DoneFiles = new[] { P.Vol }, WatchPath = P.Vol + ".joining", WatchTotal = total };
+                    j.Ended = delegate (bool ok)
+                    {
+                        if (!ok) { status.Text = T.Get("vol.failed"); return; }
+                        BeginInvoke((MethodInvoker)delegate { strip.HideIfDone(); Play(); });
+                    };
+                    StartJob(j);
+                }, null);
+                return;
             }
-            if (!File.Exists(P.Vol)) { MessageBox.Show(this, T.Get("novol"), "GT5"); return; }
-            try { S.Save(); } catch (Exception e) { MessageBox.Show(this, "settings.bat: " + e.Message, "GT5"); return; }
+            // Every change was written when it was made; this only catches one the file couldn't take then (it was open).
+            SaveQuiet();
             Process cmd;
+            // Processors the install's check found calculating wrongly (pc-check.ps1, .gt5\pc-check.json) are left out
+            // of the game as they were out of the build: the launcher's own processor set, inherited by play.bat and
+            // gt5.exe, for the moment it starts them.
+            Process me = Process.GetCurrentProcess();
+            IntPtr wasAff = IntPtr.Zero;
+            long good = GoodProcessors();
+            if (good != 0) { try { wasAff = me.ProcessorAffinity; me.ProcessorAffinity = new IntPtr(good); } catch { wasAff = IntPtr.Zero; } }
             try
             {
                 var psi = new ProcessStartInfo("cmd.exe", "/c \"\"" + P.PlayBat + "\"\"");
@@ -1969,12 +3789,17 @@ namespace Gt5Launcher
                 psi.WindowStyle = ProcessWindowStyle.Hidden;
                 cmd = Process.Start(psi);
             }
-            catch (Exception e) { MessageBox.Show(this, e.Message, "GT5"); return; }
+            catch { status.Text = T.Get("nostart"); return; }
+            finally { if (wasAff != IntPtr.Zero) { try { me.ProcessorAffinity = wasAff; } catch { } } }
             running = true;
             playButton.Text = T.Get("running"); playButton.Enabled = false;
             status.Text = T.Get("started");
             string mode = S.Get("GT5_LAUNCH_WINDOW");
-            bool hide = S.Get("GT5_LAUNCHER_HIDE") != "0";
+            // The game places its own window (borderless at the desktop's size, a maximized window, or its last place)
+            // when it makes it, on DirectX 12. The Vulkan window doesn't yet: there the launcher still sets the mode.
+            bool place = VulkanChosen();
+            // Ticked = "1"; unticked writes nothing (before, unticking did nothing: the test was for "0").
+            bool hide = S.Get("GT5_LAUNCHER_HIDE") == "1";
             DateTime start = DateTime.Now;
             var th = new Thread(delegate ()
             {
@@ -1999,33 +3824,76 @@ namespace Gt5Launcher
                     if (hwnd != IntPtr.Zero)
                     {
                         if (hide) try { BeginInvoke((MethodInvoker)delegate { WindowState = FormWindowState.Minimized; }); } catch { }
-                        Thread.Sleep(600);
-                        ApplyWindowMode(hwnd, mode);
+                        if (place) { Thread.Sleep(600); ApplyWindowMode(hwnd, mode); }
                     }
                     try { game.WaitForExit(); } catch { }
                 }
-                try { cmd.WaitForExit(); } catch { }
-                bool quick = (DateTime.Now - start).TotalSeconds < 25;
-                // A game that ends without writing why (a crash its own handler couldn't report, or a
-                // virus scanner stopping it) is usually in Windows' own records: put that where a report
-                // will carry it.
-                string why = WindowsSaysWhy(start);
-                if (why != null)
-                    try { File.AppendAllText(Path.Combine(P.Logs, "play.err"), "\r\n[launcher] Windows says: " + why + "\r\n"); } catch { }
+                // gt5.exe is play.bat's last command, so cmd's exit code is the game's.
+                int code = int.MinValue;
+                try { cmd.WaitForExit(); code = cmd.ExitCode; } catch { }
+                // The game's own ends: 0 (the player quit), 20 (its graphics couldn't start) and 21 (they stopped while it
+                // ran): for 20 and 21 the game has already said so in a message of its own, so nothing more is said here.
+                bool own = code == 0 || code == 20 || code == 21 || code == int.MinValue;
+                // Any other end (a crash its own handler couldn't report, or a virus scanner stopping it) is usually in
+                // Windows' own records: that goes where a report will carry it, not on the screen.
+                string why = own ? null : WindowsSaysWhy(start);
+                try
+                {
+                    var tail = "\r\n[launcher] the game ended with exit code " + (code == int.MinValue ? "?" : code.ToString(CultureInfo.InvariantCulture)) +
+                               (why != null ? "; Windows says: " + why : "") + "\r\n";
+                    if (!own) File.AppendAllText(Path.Combine(P.Logs, "play.err"), tail);
+                }
+                catch { }
                 try
                 {
                     BeginInvoke((MethodInvoker)delegate
                     {
                         running = false;
-                        playButton.Text = T.Get("play"); playButton.Enabled = true;
+                        playButton.Text = T.Get("play");
                         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
                         Activate();
-                        status.Text = why != null ? string.Format(T.Get("crashed"), why) : quick ? T.Get("quickexit") : T.Get("stopped");
+                        status.Text = T.Get(own ? "stopped" : "crashed");
+                        // The game's own menu (F1) may have changed settings: every list shows the file as it is now.
+                        ReloadSettings();
+                        RefreshPlayButton();
                     });
                 }
                 catch { }
             });
             th.IsBackground = true; th.Start();
+        }
+
+        // The processor set the install's check left (pc-check.ps1 writes .gt5\pc-check.json: this processor's name,
+        // the count, and the ones that failed), as an affinity mask; 0 = all of them (no record, a record for another
+        // processor, nothing failed, more than 64, or too few left).
+        long GoodProcessors()
+        {
+            try
+            {
+                string f = Path.Combine(P.Root ?? P.Gt5, ".gt5", "pc-check.json");
+                if (!File.Exists(f)) return 0;
+                var d = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(f));
+                object o;
+                int n = Environment.ProcessorCount;
+                if (n > 64 || !d.TryGetValue("logical", out o) || Convert.ToInt32(o, CultureInfo.InvariantCulture) != n) return 0;
+                string cpu = "";
+                try
+                {
+                    using (var k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0"))
+                        if (k != null) cpu = Convert.ToString(k.GetValue("ProcessorNameString")).Trim();
+                }
+                catch { }
+                if (d.TryGetValue("processor", out o) && o != null && cpu != "" && !string.Equals(Convert.ToString(o).Trim(), cpu, StringComparison.OrdinalIgnoreCase)) return 0;
+                if (!d.TryGetValue("bad", out o) || o == null) return 0;
+                var bad = new List<int>();
+                var arr = o as System.Collections.IEnumerable;
+                if (arr != null && !(o is string)) foreach (var x in arr) bad.Add(Convert.ToInt32(x, CultureInfo.InvariantCulture));
+                else bad.Add(Convert.ToInt32(o, CultureInfo.InvariantCulture));   // ConvertTo-Json writes a list of one as a number
+                long mask = 0; int left = 0;
+                for (int i = 0; i < n; i++) if (!bad.Contains(i)) { mask |= 1L << i; left++; }
+                return bad.Count == 0 || left < 2 ? 0 : mask;
+            }
+            catch { return 0; }
         }
 
         // Why Windows ended the game, when it recorded it while the game ran: an Application Error for

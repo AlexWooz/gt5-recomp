@@ -75,12 +75,14 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
 That's all, and it all happens in that one window: the steps, a progress bar, and what went wrong if
 something does. Nothing is installed into Windows. It downloads this code and, into the install folder,
 its own copies of Git (38 MB, only when the PC has none), Python (17 MB) and the compiler tools
-(about 1.5 GB, into the install folder: **no Visual Studio is installed or changed**; Microsoft's
-libraries in it come under Microsoft's licence, which the installer shows and asks you to accept), unlocks your game's executable and the system software (with the port's own small tool; RPCS3 is fetched
+(about 1.5 GB, into the install folder: **no Visual Studio is installed or changed**), unlocks your game's executable and the system software (with the port's own small tool; RPCS3 is fetched
 only if that fails, as a tool:
 the game itself runs natively as `gt5.exe`, not in an emulator), builds the game (about an hour the
-first time) and puts **Gran Turismo 5 (PC)** on your desktop, which opens the [launcher](#launcher).
-Nothing from the game is ever uploaded or shared.
+first time) with both renderers (DirectX 12 and Vulkan), adds AMD FSR 3 frame generation and, on a PC with
+an NVIDIA RTX card, NVIDIA DLSS, and puts **Gran Turismo 5 (PC)** on your desktop, which opens the
+[launcher](#launcher). Nothing from the game is ever uploaded or shared. Some of what it downloads comes
+under another company's licence (Microsoft's C++ libraries in the compiler tools, when it fetches those;
+NVIDIA DLSS): the line by the **Install** button names them, with links, and pressing Install accepts them.
 
 Rather do it by hand? See [Setup](#setup). On Linux? See [Linux](#linux).
 
@@ -95,14 +97,20 @@ Rather do it by hand? See [Setup](#setup). On Linux? See [Linux](#linux).
 **Gran Turismo 5 (PC)** on your desktop (or `GT5Launcher.exe` in your `gt5-recomp` folder) opens the
 launcher: every setting in one window, then **Play**. No more editing `play.bat`.
 
-- **Display:** 1080p or 720p, **Speed** (30 fps draws every other frame; it only helps when the graphics
-  card is the limit, the window title then shows both numbers, e.g. `FPS: 15 (game 30)`), screen shape
-  (ultrawide), **borderless full screen**, maximized or a window size, watch mode, SPU threads, and the
-  [cockpit view](#cockpit-view) (field of view, seat position).
-- **Controls:** steering wheel on/off, wheel rotation, force feedback strength and direction, pad in the
-  background, mouse clipping, [mouse steering](#mouse-steering).
-- **Game:** the game's language (as far as your disc has it), your mods from `GT5\mods`, the launcher's
+- **Display:** the renderer, resolution, anti-aliasing (NVIDIA DLSS, on an RTX card), shadows, frame
+  generation, **borderless full screen** (the default), a maximized window or a window size, screen shape
+  (ultrawide) and the frame rate (60 or 30 fps). The rows say what the game's own menu says; a row that
+  means nothing with another setting's value is left out, as in the game (no Multiplier while frame
+  generation is off), and with Vulkan chosen the rows it can't do yet are greyed.
+- **Controls:** the controller's triggers (throttle and brake, or as on a PS3 pad), steering wheel on/off,
+  wheel rotation, force feedback strength and direction, pad in the background, mouse clipping,
+  [mouse steering](#mouse-steering), keyboard keys.
+- **Game:** the [cockpit view](#cockpit-view) (field of view, seat position), the game's language (as far as
+  your disc has it), the volume and muting in the background, your mods from `GT5\mods`, the launcher's
   own language (English or 中文).
+
+The game's own settings menu (**F1** in the game, or **Select + Start** held on a controller) has the same
+settings and writes the same file; the launcher reads it again when the game ends.
 - **Updates:** shows your version and the newest one with what's new, and **Update now** does the
   whole update for you in its own window (your newest Photo Mode pictures behind it, a car on the
   progress bar, **Details** for the full text) and opens the launcher again.
@@ -213,10 +221,19 @@ To play the previous build right away instead, copy `GT5\build\gt5.previous.exe`
 
 ## 🎮 Controls
 
-A DualSense, DualShock 4 or XInput pad works, and so does the keyboard, with a pad connected or without one:
-Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
-An arrow-key tap moves one place in the menus, and in a race Left/Right steer at full lock straight away
-(they push the left stick; `PS3_KEYS_ARROWS` under [Switches](#switches) has the details).
+A DualSense, DualShock 4 or XInput pad works, and so does the keyboard, with a pad connected or without one.
+
+**On a pad, while you drive** (new): the right trigger is the throttle and the left the brake, both
+by how far you pull them; the bumpers shift up and down; the left stick press looks back and the right
+one works the lights. The face buttons still accelerate (✕ / A) and brake (□ / X) fully. It follows
+the buttons you set in the game's own options (with throttle on R2 there, R2 stays the throttle). At
+the menus, in replays and in the in-game menu the pad is laid out as a PS3 pad. The in-game menu's
+Controls page has **Triggers**: *As on a PS3 pad* puts everything back (R2 / L2 shift, ✕ / □ on and
+off). Every pad gets the same small round dead zone on its sticks.
+
+**Keyboard**: Z = Cross, X = Circle, A = Square, S = Triangle, arrow keys = D-pad, Enter = Start, Tab = Select.
+An arrow-key tap moves one place in the menus, and in a race Left/Right steer as the D-pad does on a PS3
+pad, eased in by the game (`PS3_KEYS_ARROWS` under [Switches](#switches) has the other ways).
 Esc quits the game, after asking (`set "PS3_ESC_CONFIRM=0"` in `play.bat` quits at once).
 
 <a id="keyboard-keys"></a>
@@ -336,13 +353,13 @@ especially: the port was tuned on one desktop with an NVIDIA card.
 | Force feedback? | 🧪 New, with wheel support, also untried on a real wheel |
 | Widescreen (16:9)? | ✅ Yes, GT5 is a 16:9 game |
 | Ultrawide (21:9, 32:9)? | ✅ New: a wider view, with the HUD kept 16:9 in the middle |
-| Wider cockpit view, seat position? | ✅ New: the launcher's Display > Cockpit view ([more](#cockpit-view)) |
+| Wider cockpit view, seat position? | ✅ New: the launcher's Game > Cockpit view ([more](#cockpit-view)) |
 | Which controllers? | ✅ DualSense, DualShock 4, Xbox pads, keyboard; new: [keys of your choice](#keyboard-keys), [steering with the mouse](#mouse-steering) |
 | US copy (BCUS98114)? | ✅ Yes, players have raced on it |
 | Version 1.02, or a game update (2.xx)? | 🧪 New: game updates run: 2.17 (the last) tested on the US and European releases, 2.01 on the Asian one, 2.11 with the Master Mod on the US one by a player ([how to set one up](#game-updates)); 1.02 untried |
 | Settings without editing files? | ✅ New: the [launcher](#launcher) |
 | Full screen? | ✅ New: borderless full screen in the launcher (Alt+Enter is switched off since v0.1.17: it used to freeze the picture) |
-| Vulkan instead of DirectX 12? | 🧪 New: the launcher's Display > Renderer, experimental and slower than DirectX 12 for now ([more](#faq)) |
+| Vulkan instead of DirectX 12? | 🧪 The launcher's Display > Renderer: built in, slower than DirectX 12 for now ([more](#faq)) |
 | Higher than 1080p (4K)? | ⚠️ The game's top mode is its 1080p one (races drawn at 1728x972), scaled up to your window; drawing above that isn't there yet |
 | Japanese or Asian release (BCJS, BCAS)? | ✅ Hong Kong / Asia (BCAS20108) runs, reported by a player, and its disc 01.00 and update 2.01 race in tests too; Japanese untried, please report |
 | Slow PC or laptop? | 🛠️ Laptops now use their dedicated graphics card. On most PCs the CPU sets the pace (the game's own threads), so the launcher's **Speed: 30 fps** rarely helps: it's for a graphics card at its limit. **On a laptop:** plug it in and set Windows' power mode to *Best performance* (and the maker's performance mode, e.g. in HP Command Center or Lenovo Vantage): a tester's i5-1135G7 ran into its power limit 88% of the time, which held its cores at 2.9 GHz instead of 4.2, while its graphics were only 30% busy. Speed-ups for 4-6 core CPUs are being worked on |
@@ -436,7 +453,7 @@ the picture stays 16:9 for now, and `logs\play.err` says so in a `[widescreen]` 
 <a id="cockpit-view"></a>
 **Q: Can I widen the cockpit view, or move the seat?**
 
-**A: Yes, new: the [launcher](#launcher)'s Display page, under Cockpit view.** On a PS3 the view from
+**A: Yes, new: the [launcher](#launcher)'s Game page, under Cockpit view.** On a PS3 the view from
 the driver's seat is fixed: GT5 shows every car's cockpit at 52.4° from the top of the screen to the
 bottom, with the eye where the car's own data puts the driver. The port can widen (or narrow) that view
 and move the eye forward, back, up or down. Only the cockpit view changes: the chase, bumper and roof
@@ -472,17 +489,18 @@ and spreads it sideways. Rendering above the PS3's resolutions is on the list.
 
 **Q: Can I use Vulkan instead of DirectX 12?**
 
-**A: Yes, as an experiment: the [launcher](#launcher)'s Display > Renderer.** DirectX 12 is the port's main
-renderer and stays the default. Vulkan is the renderer the Linux build and the Android work use. On
-Windows it's slower for now (see the numbers in [CHANGELOG.md](CHANGELOG.md), 15 Nov), some effects may
-look different, and frame generation and the F9 watch-mode key are DirectX 12 only. The first time you
-pick Vulkan, the launcher offers to add it to your `gt5.exe`: it
-fetches the source code of SDL2 and glslang (about 60 MB, from GitHub, checked against the exact
-releases) and rebuilds the game's runtime with them, 10 to 20 minutes in a window that shows the
-progress; the game's generated code isn't rebuilt. Without the launcher: run
-`powershell -File GT5\scripts\add_vulkan.ps1` once, then `set "GT5_RENDERER=vulkan"` in
-`GT5\settings.bat`. `add_vulkan.ps1 -Remove` builds `gt5.exe` without it again. Vulkan's shaders are kept
-in `GT5\shadercache` (cleared by ClearShaders.bat with the rest).
+**A: Yes: the [launcher](#launcher)'s Display > Renderer.** DirectX 12 is the port's main renderer and stays
+the default. Vulkan is the renderer the Linux build and the Android work use. On Windows it's slower for
+now (see the numbers in [CHANGELOG.md](CHANGELOG.md), 15 Nov), some effects may look different, and some
+settings do nothing with it yet (render resolution, DLSS, the frame generator and multiplier, texture dumps:
+the launcher greys them while Vulkan is chosen). The game is built with both renderers: setup (so the
+installer) fetches the source code of SDL2 and glslang (about 60 MB, from GitHub, checked against the exact
+releases) and builds them before the game's first build, and an update does the same for an install made
+before that. If they can't be had (no internet at that moment, say), the game is built with DirectX 12
+alone, the launcher doesn't list Vulkan, and the next update tries again. By hand: `add_vulkan.ps1
+-Prepare` gets them for the next build, `add_vulkan.ps1` also rebuilds `gt5.exe` with Vulkan now, and
+`add_vulkan.ps1 -Remove` builds it without (and setup and updates then leave it out until you add it
+again). Vulkan's shaders are kept in `GT5\shadercache` (cleared by ClearShaders.bat with the rest).
 
 **Q: Which controllers work?**
 
@@ -1037,8 +1055,12 @@ so the launcher's settings win. Some useful ones:
 | `PS3_MOUSE_STEER=1` | Steer with the mouse in races (left button throttle, right brake). Its other settings are under [Mouse steering](#mouse-steering). |
 | `PS3_COCKPIT_FOV=20` | The cockpit view 20° wider (negative: narrower); `PS3_COCKPIT_SEAT` and `PS3_COCKPIT_HEIGHT` move the eye (cm forward, cm up). See [Cockpit view](#cockpit-view). |
 | `PS3_KEYS=cross:W,square:Space,...` | Your own keyboard keys, `button:key` pairs (the launcher's Controls page writes it). Button and key names are under [Your own keys](#keyboard-keys). |
-| `PS3_KEYS_ARROWS=split` | Where the arrow keys go. `split` (the default without mouse steering or a wheel): Left/Right push the left stick, Up/Down press the d-pad, so a tap moves one place in the menus and Left/Right steer at full lock at once. With mouse steering or a wheel the default follows the game: d-pad only at the menus, d-pad and stick in a race. `dpad`: always the d-pad only (GT5 then eases into the steering); `both`: always both (a menu tap moves two places). |
+| `PS3_KEYS_ARROWS=split` | Where the arrow keys go. By default (without mouse steering or a wheel) the d-pad only: a tap moves one place in the menus, and in a race GT5 eases into the steering as it does with a PS3 pad's d-pad. `split`: Left/Right push the left stick (full lock at once), Up/Down press the d-pad, as before 18 Nov. With mouse steering or a wheel the default follows the game: d-pad only at the menus, d-pad and stick in a race. `both`: always both (a menu tap moves two places). |
 | `PS3_KEYS_WITH_PAD=0` | The keyboard is off while a pad is connected (by default both work together). |
+| `PAD_TRIGGERS=ps3` | A pad's triggers as on a PS3 pad while driving too (R2 / L2), the face buttons on and off for throttle and brake. The in-game menu's **Triggers** setting writes it. By default, while the game drives a car, the right trigger feeds the pressure of the button the game accelerates with and the left trigger that of the brake button (read from the game's own button assignment, so a layout changed in its options is followed), the bumpers press its shift buttons, and what the bumpers pressed before moves to the stick presses. `PAD_TRACE=2` logs what the game reads: `[pad] the game reads throttle 50%`. |
+| `PAD_STICK_DEADZONE=8` | The round dead zone in the middle of every pad's sticks, in percent (0-30; default 8). A worn stick that drifts may want 12 or 15. `old`: XInput pads 24 % on each axis, other pads none, as before 18 Nov. |
+| `PAD_MENU_ALL_PADS=0` | The in-game menu reads only the first connected controller, as before; by default it reads every pad and the wheel's buttons. |
+| `PAD_RUMBLE_GUARD=0` | The pad's motors left as the game sets them. By default they stop while the in-game menu is open, when the game stops for half a second (the quit question) and when it ends. `PAD_DS_RUMBLE=0`: a DualSense or DualShock 4 read directly doesn't rumble (it does by default over USB, and a DualShock 4 over Bluetooth). |
 | `LD_WATCH=1` (or **F9** in the game) | Watch mode for B-Spec races and replays: draws every other frame while the race keeps full speed, draws nothing while minimized, and lowers the game's priority. Off unless you turn it on; with `LD_WATCH=1` it comes on after 10 s without input and goes off when you touch the controls. |
 | `PAD_CURSOR_CLIP=1` | Keep the mouse inside the window while the controller is in use (the old behaviour). By default the mouse is free, and only the mouse movement and clicks Steam makes from the controller are ignored. |
 | `GCM_DRAIN_STAT=1` | Timing lines every 5 s in `logs\play.err`. |
@@ -1047,7 +1069,7 @@ so the launcher's settings win. Some useful ones:
 | `RSX_SHADER_CACHE_DIR=<dir>` | Where compiled shaders are cached (default `scratch\rsx_shader_cache_v2`). |
 | `LD_ASYNC_SHADERS=0` | Compile new shaders one at a time on the graphics thread, as before 13 Nov, instead of on up to 8 threads alongside it. |
 | `GT5_MOD_<NAME>=1` | Turns on a game-code mod from `GT5\mods` (see [MODDING.md](MODDING.md)). |
-| `PS3_TEX_DUMP=1` | Writes every texture the game shows to `GT5\textures\dump` (DDS and PNG), for making texture packs (also a tick box on the launcher's Display page). See [MODDING.md](MODDING.md#2-textures-and-hd-texture-packs). DirectX 12 only for now. |
+| `PS3_TEX_DUMP=1` | Writes every texture the game shows to `GT5\textures\dump` (DDS and PNG), for making texture packs. See [MODDING.md](MODDING.md#2-textures-and-hd-texture-packs). DirectX 12 only for now. |
 | `PS3_TEX_REPLACE=0` | Don't use the texture files in `GT5\textures\replace` (an HD texture pack); they're used whenever there are any. |
 
 Most speed-ups in the patch can be switched off one by one to rule them out when something looks

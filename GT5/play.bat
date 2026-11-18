@@ -8,11 +8,6 @@ set "PS3_HDD0_ROOT=%HERE%hdd0"
 set "PS3_HDD1_ROOT=%HERE%hdd1"
 set "RSX_LIVE_DRAW=1"
 set "PS3_TITLE=Gran Turismo 5"
-REM The port's version in the window title (update.ps1 notes it in .gt5\version.txt).
-set "GT5_VER=none"
-if exist "%HERE%..\.gt5\version.txt" set /p GT5_VER=<"%HERE%..\.gt5\version.txt"
-if "%GT5_VER:~0,18%"=="development build " set "GT5_VER=%GT5_VER:~18%"
-if "%GT5_VER:~0,1%"=="v" set "PS3_TITLE=Gran Turismo 5 (recomp %GT5_VER%)"
 set "PS3_VERBOSE=0"
 set "PS3_DEV_FLASH=%HERE%dev_flash"
 REM An SPU job manager polls for work while the game loads; it is not stuck.
@@ -21,11 +16,6 @@ REM Seven job managers want an SPU each. A PC can spare them; the PS3 had to tak
 set "SPURS_EXTRA_SPUS=2"
 REM GT5's SPU jobs fill holes in the GPU command stream, slowly during loads. Wait for them.
 set "GCM_PARK_GRACE_MS=600000"
-REM A few timing lines every 5 s in logs\play.err, to see how a real session runs.
-set "GCM_DRAIN_STAT=1"
-set "LD_GPU_WORK=1"
-REM What the game received from the controller, also in logs\play.err.
-set "PAD_TRACE=1"
 REM The controller keeps working if another window takes focus (an untitled one did mid-race).
 set "PAD_BACKGROUND=1"
 REM Watch mode, for B-Spec races, replays and anything you only watch. OFF unless you turn it on.
@@ -82,9 +72,8 @@ for /d %%G in ("%PS3_HDD0_ROOT%\game\*") do if exist "%%G\USRDIR\vou\*.edat" set
 REM The launcher (GT5Launcher.exe in the install folder) saves its settings in settings.bat; they win
 REM over the lines above. Without the launcher there's no settings.bat and the lines above count.
 if exist "%HERE%settings.bat" call "%HERE%settings.bat"
-REM Renderer: DirectX 12 unless GT5_RENDERER=vulkan (the launcher's Display > Renderer). Vulkan needs its
-REM parts built in once (scripts\add_vulkan.ps1, which the launcher runs; then build\SDL2.dll is there).
-REM It's experimental on Windows: frame generation and the F9 watch-mode key are DirectX 12 only.
+REM Renderer: DirectX 12 unless GT5_RENDERER=vulkan (Display > Renderer in the launcher or the F1 menu).
+REM Vulkan is built in at install and by updates (then build\SDL2.dll is there).
 if /i not "%GT5_RENDERER%"=="vulkan" goto renderer_set
 if not exist "%HERE%build\SDL2.dll" goto renderer_set
 set "RSX_LIVE_DRAW="
@@ -96,7 +85,6 @@ set "PS3RECOMP_VK_NO_READBACK=1"
 set "PS3RECOMP_SPIRV_CACHE=%HERE%shadercache"
 REM Present every flip: the DirectX 12 engine's "nothing new to show" test doesn't apply to Vulkan.
 set "LD_SKIP_EMPTY_PRESENT=0"
-set "PS3_TITLE=%PS3_TITLE% - Vulkan"
 if not exist "%HERE%shadercache" mkdir "%HERE%shadercache"
 :renderer_set
 if not exist "%HERE%hdd0" mkdir "%HERE%hdd0"

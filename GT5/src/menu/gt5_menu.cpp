@@ -1,22 +1,35 @@
-// gt5_menu.cpp - the in-game settings menu: window messages, the controller, fonts and Direct3D 12.
-// What is drawn is in gt5_menu_ui.cpp; the API is in gt5_menu.h. UTF-8.
+// gt5_menu.cpp - the in-game settings menu, the part every renderer shares: window messages, the
+// controller, fonts, sizes, the window's mode, saving. What is drawn is in gt5_menu_ui.cpp; the drawing
+// itself in one file per renderer (gt5_menu_dx12.cpp, gt5_menu_vk.cpp); the API is in gt5_menu.h and
+// gt5_menu_vk.h. UTF-8.
 //
-// Dear ImGui's Win32 platform backend isn't used: it takes the window's client area for the display
-// and reads XInput itself, while here the menu is laid out in the back buffer's pixels (the swap chain
-// is stretched to the window, so the mouse is scaled to match) and the controller comes from the
-// port's own pad code (which also reads DualSense and DualShock 4). The few messages it needs are
-// handled below. The Direct3D 12 renderer backend (imgui_impl_dx12) is used as it is.
+// Sizes. The player sees the picture the menu is drawn into (the D3D12 frame, the Vulkan swap chain's
+// image) stretched to the window, whatever the two sizes are. So the menu is laid out in the window's own
+// pixels (Dear ImGui's display is the client area, from WM_SIZE, and its sizes follow the monitor's
+// scaling, from WM_DPICHANGED) and drawn into that picture with its pixels per window pixel as Dear
+// ImGui's framebuffer scale. Once the picture is stretched back, the text is the size it was laid out
+// at, on any window, frame or monitor; and Dear ImGui 1.92 rasterises the glyphs at that framebuffer
+// density, so they are as sharp as the picture can hold them.
+//
+// Dear ImGui's Win32 platform backend isn't used: it reads XInput itself, while here the controller
+// comes from the port's own pad code (which also reads DualSense and DualShock 4). The few messages it
+// needs are handled below. Both renderers' windows have an HWND on Windows (the Vulkan one is SDL's,
+// its window procedure subclassed by the runtime, rsx_vulkan_win32.c), so this code serves both; a
+// platform without Win32 messages would feed the same handlers from its own events.
 #include "gt5_menu_internal.h"
 
-#include <d3dcompiler.h>
 #include <shellapi.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "imgui_impl_dx12.h"
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
 
 volatile long g_gt5_menu_captured;   // gt5_menu.h; `long` there so that plain C on any platform can read it
+volatile long g_gt5_menu_pause_want; // gt5_menu.h: the menu or the quit question is open ([win] GT5_MENU_PAUSE)
 
 namespace gt5m {
 
@@ -26,8 +39,6 @@ namespace {
 
 // ---- state -----------------------------------------------------------------------------------------
 
-enum { SRV_SLOTS = 64, LIST_RING = 4 };
-
 struct FontFile { HANDLE file = INVALID_HANDLE_VALUE; HANDLE map = nullptr; void* data = nullptr; size_t size = 0; };
 
 struct State {
@@ -35,28 +46,9 @@ struct State {
     HWND hwnd = nullptr;
     char version[96] = "";
     char title[160] = "";
-    // Direct3D 12
-    ID3D12Device* dev = nullptr;
-    ID3D12CommandQueue* queue = nullptr;
-    DXGI_FORMAT fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+    // the renderer: the size of the picture the menu is drawn into, and its backend's NewFrame
     unsigned w = 0, h = 0;
-    bool no_overlay = false;
-    ID3D12DescriptorHeap* srv_heap = nullptr;
-    UINT srv_step = 0;
-    bool srv_used[SRV_SLOTS] = {};
-    ID3D12DescriptorHeap* rtv_heap = nullptr;
-    ID3D12Resource* overlay = nullptr;
-    ID3D12RootSignature* rs = nullptr;
-    ID3D12PipelineState* pso = nullptr;
-    ID3D12CommandAllocator* alloc[LIST_RING] = {};
-    UINT64 alloc_fence[LIST_RING] = {};
-    ID3D12GraphicsCommandList* list = nullptr;
-    ID3D12Fence* fence = nullptr;
-    UINT64 fence_v = 0;
-    HANDLE fence_ev = nullptr;
-    unsigned ring = 0, ring_k = 0;
-    SRWLOCK overlay_lock = SRWLOCK_INIT;      // composite (shared) against a change of size (exclusive)
-    volatile LONG overlay_visible = 0;
+    void (*new_frame)() = nullptr;
     // fonts
     ImFont* font = nullptr;
     FontFile font_main, font_sym, font_cjk, font_kr;
@@ -87,15 +79,30 @@ struct State {
     SRWLOCK stats_lock = SRWLOCK_INIT;
     gt5_menu_stats stats = {};
     bool have_stats = false;
+    // notices (gt5_menu_notice)
+    SRWLOCK notice_lock = SRWLOCK_INIT;
+    struct Notice { char en[96]; char zh[96]; unsigned ms; ULONGLONG until; bool on; } notice[GT5_NOTICE_COUNT] = {};
+    volatile LONG notices_on = 0;          // any notice is waiting or showing
+    bool notices_allowed = true;           // GT5_NOTICES
     // time
     LARGE_INTEGER qpf = {}, last = {};
     float applied_scale = 0.0f;
+    // what the player sees: the window's client area in its own pixels, and the monitor's scaling
+    int client_w = 0, client_h = 0;
+    UINT dpi = 96;
+    bool have_frame = false;              // a frame has been laid out (for the tests)
+    // [win]
+    ULONGLONG last_frame_tick = 0;        // GetTickCount64 at the last frame a renderer could draw the menu into (core_build_frame): is the picture still coming?
+    int hint_state = 0;                   // the first-start hint: 0 not decided yet, 1 to show, -1 not
+    double hint_first = 0;                // now_s() at the first frame it could be shown in
 };
 State s;
 
 void update_captured()
 {
-    InterlockedExchange(&g_gt5_menu_captured, (ui.open || s.chord_hold || s.release_wait) ? 1 : 0);
+    InterlockedExchange(&g_gt5_menu_captured, (ui.open || ui.quit || s.chord_hold || s.release_wait) ? 1 : 0);
+    // [win] the game holds still while the menu or the quit question is open (cellPad.c, GT5_MENU_PAUSE)
+    InterlockedExchange(&g_gt5_menu_pause_want, (ui.open || ui.quit) ? 1 : 0);
 }
 
 // ---- settings the menu itself goes by ------------------------------------------------------------------
@@ -112,6 +119,11 @@ void refresh_settings()
     s.chord_mask = !_stricmp(b, "off") ? 0 : !_stricmp(b, "l3r3") ? (unsigned short)((1 << 1) | (1 << 2))
                                                                 : (unsigned short)((1 << 0) | (1 << 3));
     s.osd = gt5_setting_bool("GT5_OSD", 0) != 0;
+    s.notices_allowed = gt5_setting_bool("GT5_NOTICES", 1) != 0;
+    // Menu size: Normal is no value at all. The first menu had an "Automatic" (no value) next to a
+    // "Normal" of 100: that 100 is Normal now, and is written as such.
+    gt5_setting_stored("GT5_MENU_SCALE", b, sizeof b);
+    if (!strcmp(b, "100")) gt5_setting_set("GT5_MENU_SCALE", "");
     const int sc = gt5_setting_int("GT5_MENU_SCALE", 100);
     s.user_scale = (sc >= 50 && sc <= 300) ? (float)sc / 100.0f : 1.0f;
     gt5_setting_str("GT5_MENU_LANG", b, sizeof b);
@@ -125,7 +137,8 @@ void refresh_settings()
 // Japanese, Korean) only once such text is about to be drawn. The files are mapped, not read: Windows
 // pages in the parts the rasteriser touches, so a 20 MB font collection costs what its used glyphs cost.
 // Glyphs are rasterised as they are first drawn (Dear ImGui 1.92's dynamic atlas), at whatever size
-// the menu has, so no glyph ranges are set and a change of size needs no rebuild here.
+// the menu has and at the frame's pixels per window pixel (the framebuffer scale set in build_frame),
+// so no glyph ranges are set and a change of size, window or frame needs no rebuild here.
 
 bool map_font(const wchar_t* name, FontFile* f)
 {
@@ -189,175 +202,6 @@ void fonts_fallback()
     if (map_first(&s.font_kr, krs, 2, nullptr)) add_font(s.font_kr, "korean", s.font);
 }
 
-// ---- Direct3D 12 -------------------------------------------------------------------------------------
-
-D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu(unsigned slot)
-{
-    D3D12_CPU_DESCRIPTOR_HANDLE h = s.srv_heap->GetCPUDescriptorHandleForHeapStart();
-    h.ptr += (SIZE_T)slot * s.srv_step;
-    return h;
-}
-D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu(unsigned slot)
-{
-    D3D12_GPU_DESCRIPTOR_HANDLE h = s.srv_heap->GetGPUDescriptorHandleForHeapStart();
-    h.ptr += (UINT64)slot * s.srv_step;
-    return h;
-}
-// Slot 0 is the overlay's; Dear ImGui's textures (the font atlas) take the others.
-void srv_alloc(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* cpu, D3D12_GPU_DESCRIPTOR_HANDLE* gpu)
-{
-    for (unsigned i = 1; i < SRV_SLOTS; i++)
-        if (!s.srv_used[i]) { s.srv_used[i] = true; *cpu = srv_cpu(i); *gpu = srv_gpu(i); return; }
-    *cpu = srv_cpu(SRV_SLOTS - 1); *gpu = srv_gpu(SRV_SLOTS - 1);   // never reached: one or two textures exist
-}
-void srv_free(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE cpu, D3D12_GPU_DESCRIPTOR_HANDLE)
-{
-    const SIZE_T base = s.srv_heap->GetCPUDescriptorHandleForHeapStart().ptr;
-    const unsigned i = (unsigned)((cpu.ptr - base) / s.srv_step);
-    if (i > 0 && i < SRV_SLOTS) s.srv_used[i] = false;
-}
-
-ID3D12GraphicsCommandList* list_begin()
-{
-    const unsigned k = s.ring++ % LIST_RING;
-    if (s.fence->GetCompletedValue() < s.alloc_fence[k]) {   // four lists back: rarely waits
-        s.fence->SetEventOnCompletion(s.alloc_fence[k], s.fence_ev);
-        WaitForSingleObject(s.fence_ev, 2000);
-    }
-    if (FAILED(s.alloc[k]->Reset()) || FAILED(s.list->Reset(s.alloc[k], nullptr))) return nullptr;
-    s.ring_k = k;
-    return s.list;
-}
-void list_end()
-{
-    if (FAILED(s.list->Close())) return;
-    ID3D12CommandList* l[1] = { s.list };
-    s.queue->ExecuteCommandLists(1, l);
-    s.queue->Signal(s.fence, ++s.fence_v);
-    s.alloc_fence[s.ring_k] = s.fence_v;
-}
-// Everything executed on the queue so far, the renderer's lists included, has run.
-void wait_gpu()
-{
-    if (!s.fence) return;
-    const UINT64 v = ++s.fence_v;
-    if (FAILED(s.queue->Signal(s.fence, v))) return;
-    if (s.fence->GetCompletedValue() < v) {
-        s.fence->SetEventOnCompletion(v, s.fence_ev);
-        WaitForSingleObject(s.fence_ev, 5000);
-    }
-}
-void barrier(ID3D12GraphicsCommandList* l, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to)
-{
-    D3D12_RESOURCE_BARRIER b = {};
-    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    b.Transition.pResource = r;
-    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    b.Transition.StateBefore = from;
-    b.Transition.StateAfter = to;
-    l->ResourceBarrier(1, &b);
-}
-
-bool overlay_create()
-{
-    if (s.no_overlay) return true;
-    D3D12_HEAP_PROPERTIES hp = {};
-    hp.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC rd = {};
-    rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    rd.Width = s.w; rd.Height = s.h; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
-    rd.Format = s.fmt; rd.SampleDesc.Count = 1;
-    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-    D3D12_CLEAR_VALUE cv = {};
-    cv.Format = s.fmt;
-    if (FAILED(s.dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                                              &cv, IID_PPV_ARGS(&s.overlay)))) return false;
-    s.overlay->SetName(L"gt5-menu-overlay");
-    s.dev->CreateRenderTargetView(s.overlay, nullptr, s.rtv_heap->GetCPUDescriptorHandleForHeapStart());
-    s.dev->CreateShaderResourceView(s.overlay, nullptr, srv_cpu(0));
-    return true;
-}
-
-// The overlay over a frame: one triangle that covers the target, each pixel taken from the overlay
-// at the same place (it is the frame's size), blended as premultiplied alpha, which is what Dear ImGui's
-// blending leaves in a target that started transparent.
-const char k_overlay_vs[] =
-    "float4 main(uint id : SV_VertexID) : SV_Position {\n"
-    "    float2 p = float2((id << 1) & 2, id & 2);\n"
-    "    return float4(p * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);\n"
-    "}\n";
-const char k_overlay_ps[] =
-    "Texture2D<float4> Overlay : register(t0);\n"
-    "float4 main(float4 pos : SV_Position) : SV_Target { return Overlay.Load(int3(pos.xy, 0)); }\n";
-
-bool composite_create()
-{
-    if (s.no_overlay) return true;
-    ID3DBlob *vs = nullptr, *ps = nullptr, *err = nullptr, *sig = nullptr;
-    bool ok = SUCCEEDED(D3DCompile(k_overlay_vs, sizeof k_overlay_vs - 1, "gt5_menu_vs", nullptr, nullptr, "main", "vs_5_0", 0, 0, &vs, &err)) &&
-              SUCCEEDED(D3DCompile(k_overlay_ps, sizeof k_overlay_ps - 1, "gt5_menu_ps", nullptr, nullptr, "main", "ps_5_0", 0, 0, &ps, &err));
-    if (ok) {
-        D3D12_DESCRIPTOR_RANGE range = {};
-        range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        range.NumDescriptors = 1;
-        D3D12_ROOT_PARAMETER param = {};
-        param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        param.DescriptorTable.NumDescriptorRanges = 1;
-        param.DescriptorTable.pDescriptorRanges = &range;
-        param.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-        D3D12_ROOT_SIGNATURE_DESC rsd = {};
-        rsd.NumParameters = 1;
-        rsd.pParameters = &param;
-        ok = SUCCEEDED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err)) &&
-             SUCCEEDED(s.dev->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&s.rs)));
-    }
-    if (ok) {
-        D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {};
-        pd.pRootSignature = s.rs;
-        pd.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
-        pd.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
-        pd.BlendState.RenderTarget[0].BlendEnable = TRUE;
-        pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
-        pd.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
-        pd.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
-        pd.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
-        pd.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
-        pd.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-        pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-        pd.SampleMask = UINT_MAX;
-        pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-        pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-        pd.RasterizerState.DepthClipEnable = TRUE;
-        pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        pd.NumRenderTargets = 1;
-        pd.RTVFormats[0] = s.fmt;
-        pd.SampleDesc.Count = 1;
-        ok = SUCCEEDED(s.dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&s.pso)));
-    }
-    if (!ok) fprintf(stderr, "[menu] the overlay's shaders or pipeline could not be made%s%s\n",
-                     err ? ": " : "", err ? (const char*)err->GetBufferPointer() : "");
-    if (vs) vs->Release();
-    if (ps) ps->Release();
-    if (sig) sig->Release();
-    if (err) err->Release();
-    return ok;
-}
-
-void composite_record(ID3D12GraphicsCommandList* l, D3D12_CPU_DESCRIPTOR_HANDLE rtv)
-{
-    const D3D12_VIEWPORT vp = { 0.0f, 0.0f, (float)s.w, (float)s.h, 0.0f, 1.0f };
-    const D3D12_RECT sc = { 0, 0, (LONG)s.w, (LONG)s.h };
-    l->SetDescriptorHeaps(1, &s.srv_heap);
-    l->SetGraphicsRootSignature(s.rs);
-    l->SetPipelineState(s.pso);
-    l->RSSetViewports(1, &vp);
-    l->RSSetScissorRects(1, &sc);
-    l->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
-    l->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    l->SetGraphicsRootDescriptorTable(0, srv_gpu(0));
-    l->DrawInstanced(3, 1, 0, 0);
-}
-
 // ---- the window ---------------------------------------------------------------------------------------
 
 ImGuiKey vk_to_key(WPARAM vk, LPARAM lp)
@@ -401,15 +245,23 @@ void mods_event(ImGuiIO& io)
     io.AddKeyEvent(ImGuiMod_Alt, (GetKeyState(VK_MENU) & 0x8000) != 0);
 }
 
-// The window's client area is the back buffer stretched: a point of the one in the other's pixels.
+// The menu is laid out in the window's pixels: the mouse's position is the menu's.
 void mouse_pos_event(ImGuiIO& io, LPARAM lp)
 {
-    RECT rc;
-    if (!GetClientRect(s.hwnd, &rc) || rc.right <= 0 || rc.bottom <= 0) return;
-    const float x = (float)(short)LOWORD(lp) * (float)s.w / (float)rc.right;
-    const float y = (float)(short)HIWORD(lp) * (float)s.h / (float)rc.bottom;
-    io.AddMousePosEvent(x, y);
+    io.AddMousePosEvent((float)(short)LOWORD(lp), (float)(short)HIWORD(lp));
     ui.keyboard_last = false;
+}
+
+// [win] No key and no mouse button held: the game reads the keyboard by polling (cellPad.c), so a key
+// that answered the menu (Enter on No) must be up before the game gets the input back. Waited for 1.5 s
+// at most (a key some driver reports held for good must not keep the game from its input).
+bool keys_up()
+{
+    for (int vk = 1; vk < 0xFF; vk++) {
+        if (vk == VK_F1 || vk == VK_F11) continue;     // never game keys (and the menu's own key goes up swallowed)
+        if (GetAsyncKeyState(vk) & 0x8000) return false;
+    }
+    return true;
 }
 
 void set_open(bool open)
@@ -440,6 +292,14 @@ void set_open(bool open)
 }
 
 // ---- window mode and size, applied from here (the launcher does the same from outside at start) ------
+
+// [win] The frame round a window at its monitor's scaling (the process is per-monitor DPI aware).
+void adjust_rect_dpi(RECT* r, DWORD style, DWORD ex, UINT dpi)
+{
+    typedef BOOL (WINAPI* fn_t)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    static fn_t f = (fn_t)(void*)GetProcAddress(GetModuleHandleW(L"user32.dll"), "AdjustWindowRectExForDpi");
+    if (f) f(r, style, FALSE, ex, dpi); else AdjustWindowRectEx(r, style, FALSE, ex);
+}
 
 void window_apply(bool mode_changed)
 {
@@ -484,17 +344,31 @@ void window_apply(bool mode_changed)
     // A window: the size asked for, else (coming out of full screen with nothing to go back to) the
     // frame's shape at 720 lines. Kept on the monitor.
     unsigned cw = 0, ch = 0;
+    const bool from_full = borderless_now && !s.have_windowed_place;   // [win] nothing to go back to: centred
     if (sscanf(size, "%ux%u", &cw, &ch) != 2 || cw < 64 || ch < 64) {
-        if (!(borderless_now && !s.have_windowed_place)) return;
-        ch = 720; cw = s.h ? (unsigned)((double)s.w * 720.0 / (double)s.h + 0.5) : 1280;
+        if (!from_full) return;
+        // [win] 720 lines at 100 % scaling, at this monitor's scaling (the game is DPI aware), in the shape of
+        // the picture the game draws: 16:9, or its wide mode's (PS3_ASPECT / PS3_WINDOW_SIZE, display_aspect.c),
+        // which the renderer's frame size says (the readout's frame_w x frame_h). Not the back buffer's
+        // (s.w x s.h): that is the window's own, in borderless a 21:9 monitor's, and gave a 1707x720 window
+        // with bars inside it when the game draws 16:9 there.
+        double shape = 16.0 / 9.0;
+        gt5_menu_stats st;
+        if (stats_get(&st) && st.frame_w > 0 && st.frame_h > 0) shape = (double)st.frame_w / (double)st.frame_h;
+        ch = (unsigned)(720u * s.dpi / 96u); cw = (unsigned)((double)ch * shape + 0.5);
     }
     if (shown && IsZoomed(s.hwnd)) ShowWindow(s.hwnd, SW_RESTORE);
     RECT wr = { 0, 0, (LONG)cw, (LONG)ch };
-    AdjustWindowRectEx(&wr, (DWORD)GetWindowLongPtrW(s.hwnd, GWL_STYLE), FALSE, (DWORD)GetWindowLongPtrW(s.hwnd, GWL_EXSTYLE));
-    const int ww = wr.right - wr.left, wh = wr.bottom - wr.top;
+    adjust_rect_dpi(&wr, (DWORD)GetWindowLongPtrW(s.hwnd, GWL_STYLE), (DWORD)GetWindowLongPtrW(s.hwnd, GWL_EXSTYLE), s.dpi);
+    int ww = wr.right - wr.left, wh = wr.bottom - wr.top;
+    const int aw = mi.rcWork.right - mi.rcWork.left, ah = mi.rcWork.bottom - mi.rcWork.top;
+    if (ww > aw || wh > ah) {               // [win] larger than the screen: the same shape, as large as fits
+        const double k = (double)aw / ww < (double)ah / wh ? (double)aw / ww : (double)ah / wh;
+        ww = (int)(ww * k); wh = (int)(wh * k);
+    }
     RECT cur;
     GetWindowRect(s.hwnd, &cur);
-    int x = cur.left, y = cur.top;
+    int x = from_full ? mi.rcWork.left + (aw - ww) / 2 : cur.left, y = from_full ? mi.rcWork.top + (ah - wh) / 2 : cur.top;
     if (x + ww > mi.rcWork.right) x = mi.rcWork.right - ww;
     if (y + wh > mi.rcWork.bottom) y = mi.rcWork.bottom - wh;
     if (x < mi.rcWork.left) x = mi.rcWork.left;
@@ -527,32 +401,37 @@ void save_if_due()
 
 // ---- a frame -----------------------------------------------------------------------------------------
 
-float dpi_scale()
+// The monitor's scaling, as Windows tells the window (96 = 100 %). A window that isn't per-monitor DPI
+// aware is told 96 and Windows enlarges it as a picture instead: the menu's size comes out the same.
+UINT window_dpi()
 {
     typedef UINT (WINAPI* get_dpi_fn)(HWND);
     static get_dpi_fn get_dpi = (get_dpi_fn)(void*)GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow");
     const UINT dpi = get_dpi ? get_dpi(s.hwnd) : 96;
-    return dpi >= 96 ? (float)dpi / 96.0f : 1.0f;
+    return dpi >= 48 ? dpi : 96;
+}
+// The client area, when nothing has said yet (start-up) or a message was missed.
+void client_refresh()
+{
+    RECT rc;
+    if (GetClientRect(s.hwnd, &rc) && rc.right > 0 && rc.bottom > 0) { s.client_w = rc.right; s.client_h = rc.bottom; }
 }
 
-// The text's height in back-buffer pixels. A fixed share of the frame (22 px in a 1080-line frame),
-// so the menu looks the same at 720p and at 4K; but never under 15 px on the screen itself, DPI
-// scaling counted, when the window is smaller than the frame it shows; and never so big that fewer
-// than 20 lines fit. Then the player's own size on top.
+// The body text's size in the window's pixels, which is what the player sees: 22 (Segoe UI with
+// capitals about 11.5 px tall, like 16.5 px text on a web page) at 100 % scaling and the Normal menu
+// size, times the monitor's scaling and the player's Menu size. Only a window too small to hold the
+// menu at that size makes it smaller: it keeps room for 24 lines of text in its height (the page list,
+// three rows, the help and the keys) and 28 widths of a line across. 960x540 holds 22.
 float text_px()
 {
-    float px = 22.0f * (float)s.h / 1080.0f;
-    RECT rc;
-    if (GetClientRect(s.hwnd, &rc) && rc.bottom > 0) {
-        const float on_screen_min = 15.0f * dpi_scale();
-        const float need = on_screen_min * (float)s.h / (float)rc.bottom;
-        if (px < need) px = need;
+    float px = 22.0f * (float)s.dpi / 96.0f * s.user_scale;
+    if (s.client_w > 0 && s.client_h > 0) {
+        float most = (float)s.client_h / 24.0f;
+        if (most > (float)s.client_w / 28.0f) most = (float)s.client_w / 28.0f;
+        if (px > most) px = most;
     }
-    px *= s.user_scale;
-    const float most = (float)s.h / 20.0f;
-    if (px > most) px = most;
-    if (px < 8.0f) px = 8.0f;
-    return px;
+    if (px < 9.0f) px = 9.0f;
+    return floorf(px * 4.0f + 0.5f) / 4.0f;     // quarter pixels: a window being dragged doesn't make a font a frame
 }
 
 void pad_to_imgui(ImGuiIO& io, PadEdges* edges)
@@ -587,33 +466,81 @@ void pad_to_imgui(ImGuiIO& io, PadEdges* edges)
     s.pad_prev = b;
 }
 
+// [win] GT5_MENU_HINT: the first start of an install shows "F1: settings" in a corner for eight seconds,
+// from three seconds after the first frame (past the boot screens' first black), and never again
+// ("shown" is written to settings.bat when it appears). "0" = never; "1" = at every start (tests).
+// Opening the menu ends it. Returns how opaque it is now (it fades in and out), 0 = not showing.
+float hint_alpha()
+{
+    if (s.hint_state < 0) return 0.0f;
+    const double t = now_s();
+    if (s.hint_state == 0) {
+        char b[16];
+        gt5_setting_stored("GT5_MENU_HINT", b, sizeof b);
+        s.hint_state = (!b[0] || !strcmp(b, "1")) ? 1 : -1;
+        s.hint_first = t;
+        if (s.hint_state < 0) return 0.0f;
+    }
+    if (ui.open) {                        // the player found the menu: done for good
+        char b[16];
+        gt5_setting_stored("GT5_MENU_HINT", b, sizeof b);
+        if (strcmp(b, "1")) gt5_setting_set("GT5_MENU_HINT", "shown");
+        s.hint_state = -1;
+        return 0.0f;
+    }
+    if (ui.quit) return 0.0f;
+    const double a = t - s.hint_first - 3.0, len = 8.0;
+    if (a < 0.0) return 0.0f;
+    if (ui.hint_until == 0.0) {
+        ui.hint_until = t + len - (a > 0.0 ? a : 0.0);
+        char b[16];
+        gt5_setting_stored("GT5_MENU_HINT", b, sizeof b);
+        if (strcmp(b, "1")) gt5_setting_set("GT5_MENU_HINT", "shown");
+        fprintf(stderr, "[menu] first-start hint shown\n");
+    }
+    const double left = ui.hint_until - t;
+    if (left <= 0.0) { s.hint_state = -1; return 0.0f; }
+    float alpha = 1.0f;
+    if (a < 0.4) alpha = (float)(a / 0.4);
+    if (left < 0.6) alpha = (float)(left / 0.6);
+    return alpha < 0.0f ? 0.0f : alpha > 1.0f ? 1.0f : alpha;
+}
+
 // Builds the frame's draw data. false: nothing to show.
 bool build_frame()
 {
     if (!s.inited) return false;
     refresh_settings();
-    if (InterlockedExchange(&s.toggle_req, 0)) set_open(!ui.open);
+    if (InterlockedExchange(&s.toggle_req, 0) && !ui.quit) set_open(!ui.open);   // [win] not while the quit question asks
     if (InterlockedExchange(&s.apply_mode, 0)) window_apply(true);
     if (InterlockedExchange(&s.apply_size, 0)) window_apply(false);
     if (s.release_wait && GetTickCount64() >= s.release_until) {
         AcquireSRWLockShared(&s.feed_lock);
         const bool idle = !s.pad.connected || s.pad.buttons == 0 || GetTickCount64() - s.pad_at > 500;
         ReleaseSRWLockShared(&s.feed_lock);
-        if (idle) { InterlockedExchange(&s.release_wait, 0); update_captured(); }
+        if (idle && (keys_up() || GetTickCount64() >= s.release_until + 1500)) { InterlockedExchange(&s.release_wait, 0); update_captured(); }
     }
     save_if_due();
-    if (!ui.open && !s.osd) return false;
+    const float hint = hint_alpha();      // [win] the first-start hint, 0 when not showing
+    const bool notes = !ui.open && !ui.quit && s.notices_allowed && s.notices_on;   // [merge] not over the quit question
+    if (!ui.open && !ui.quit && !s.osd && !notes && hint <= 0.0f) return false;
 
     ImGuiIO& io = ImGui::GetIO();
     // Text beyond Latin is on its way: the menu in Chinese, or the Game page's list of languages.
     if (ui.zh || (ui.open && ui.page == GT5_PAGE_GAME)) fonts_fallback();
+    if (s.client_w <= 0 || s.client_h <= 0) client_refresh();
     const float px = text_px();
-    if (px < s.applied_scale * 0.99f || px > s.applied_scale * 1.01f) {
+    if (px != s.applied_scale) {
         s.applied_scale = px;
         ui.scale = px / 22.0f;
         ui_apply_style(ui.scale);
+        ui.scrolled_to[0] = 0;               // the focused row moved: bring it into view again
     }
-    io.DisplaySize = ImVec2((float)s.w, (float)s.h);
+    // Laid out in the window's pixels, drawn in the frame's: after the stretch to the window, one to one.
+    const float cw = s.client_w > 0 ? (float)s.client_w : (float)s.w, ch = s.client_h > 0 ? (float)s.client_h : (float)s.h;
+    io.DisplaySize = ImVec2(cw, ch);
+    io.DisplayFramebufferScale = ImVec2((float)s.w / cw, (float)s.h / ch);
+    s.have_frame = true;
     LARGE_INTEGER t;
     QueryPerformanceCounter(&t);
     double dt = s.last.QuadPart ? (double)(t.QuadPart - s.last.QuadPart) / (double)s.qpf.QuadPart : 1.0 / 60.0;
@@ -624,9 +551,15 @@ bool build_frame()
     PadEdges edges;
     pad_to_imgui(io, &edges);
 
-    ImGui_ImplDX12_NewFrame();
+    if (s.new_frame) s.new_frame();          // the renderer's backend (ImGui_ImplDX12_NewFrame, ImGui_ImplVulkan_NewFrame)
     ImGui::NewFrame();
-    if (ui.open) ui_build(edges); else ui_build_osd();
+    if (ui.quit) ui_build_quit();                    // [win] the question alone, the menu (if open) waits behind it
+    else if (ui.open) ui_build(edges);
+    else {
+        if (s.osd) ui_build_osd();                   // top left
+        if (notes) ui_build_notices();               // top right
+        if (hint > 0.0f) ui_build_hint(hint);        // bottom right
+    }
     ImGui::Render();
 
     return true;
@@ -649,6 +582,71 @@ unsigned frame_h() { return s.h; }
 void need_fallback_fonts() { /* picked up before the next frame: build_frame() looks at the page and the language */ }
 void note_changed() { /* every change is noticed through the registry: on_any_setting() */ }
 void request_close() { InterlockedExchange(&s.toggle_req, ui.open ? 1 : 0); }
+
+// [win] "Quit the game?": asked over the game or the menu; Yes posts GT5_MENU_QUIT_MSG to the window
+// (rsx_null_backend.c ends the game cleanly), No goes back to where the player was.
+void quit_ask()
+{
+    if (!s.inited || ui.quit) return;
+    ImGuiIO& io = ImGui::GetIO();
+    ui.quit = true;
+    ui.quit_focus = true;
+    io.ClearInputKeys();
+    io.ClearInputMouse();
+    ClipCursor(nullptr);
+    if (GetCapture() == s.hwnd) ReleaseCapture();
+    s.buttons_down = 0;
+    update_captured();
+    PostMessageW(s.hwnd, WM_SETCURSOR, (WPARAM)s.hwnd, MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+    fprintf(stderr, "[menu] quit? asked\n");
+}
+void quit_answer(bool yes)
+{
+    if (!ui.quit) return;
+    ImGuiIO& io = ImGui::GetIO();
+    ui.quit = false;
+    io.ClearInputKeys();
+    io.ClearInputMouse();
+    if (GetCapture() == s.hwnd) ReleaseCapture();
+    s.buttons_down = 0;
+    fprintf(stderr, "[menu] quit? %s\n", yes ? "yes" : "no");
+    if (yes) { PostMessageW(s.hwnd, GT5_MENU_QUIT_MSG, 0, 0); return; }
+    if (!ui.open) {
+        // back to the game: the key or button that said No must be up before the game reads input again
+        s.release_until = GetTickCount64() + 150;
+        InterlockedExchange(&s.release_wait, 1);
+    } else {
+        ui.in_content = false;                 // back in the menu: the focus on its page list
+        ui.focus_nav = true;
+    }
+    update_captured();
+}
+bool pad_connected()
+{
+    AcquireSRWLockShared(&s.feed_lock);
+    const bool c = s.pad.connected && GetTickCount64() - s.pad_at <= 2000;
+    ReleaseSRWLockShared(&s.feed_lock);
+    return c;
+}
+
+int notices_get(char out[][192], int max)
+{
+    int n = 0;
+    const ULONGLONG now = GetTickCount64();
+    bool any = false;
+    AcquireSRWLockExclusive(&s.notice_lock);
+    for (int i = 0; i < GT5_NOTICE_COUNT; i++) {
+        State::Notice& nt = s.notice[i];
+        if (!nt.on) continue;
+        if (!nt.until && nt.ms) nt.until = now + nt.ms;     // its time runs from when it is first shown
+        if (nt.until && now >= nt.until) { nt.on = false; continue; }
+        any = true;
+        if (n < max) snprintf(out[n++], 192, "%s", ui.zh && nt.zh[0] ? nt.zh : nt.en);
+    }
+    InterlockedExchange(&s.notices_on, any ? 1 : 0);
+    ReleaseSRWLockExclusive(&s.notice_lock);
+    return n;
+}
 
 bool stats_get(gt5_menu_stats* out)
 {
@@ -692,53 +690,29 @@ void open_logs_folder()
     if (MultiByteToWideChar(CP_UTF8, 0, path, -1, w, 1100)) ShellExecuteW(nullptr, L"open", w, nullptr, nullptr, SW_SHOWNORMAL);
 }
 
-}  // namespace gt5m
+// ---- shared with the renderers' files (gt5_menu_dx12.cpp, gt5_menu_vk.cpp) ----------------------------
+// A renderer starts the menu in this order: core_begin (the window, the picture's size, the texts),
+// its own objects, core_context (Dear ImGui's context and the first font), its Dear ImGui backend
+// (core_context_abort if that fails), core_finish. Each frame core_build_frame, then it draws Dear
+// ImGui's draw data. Stopping: core_shutdown_begin, its GPU idle and its backend shut down,
+// core_shutdown_end, its own objects. Everything on the window's thread.
 
-using namespace gt5m;
-
-// ---- the API ------------------------------------------------------------------------------------------
-
-extern "C" int gt5_menu_init(const gt5_menu_init_info* info)
+void core_begin(HWND hwnd, unsigned w, unsigned h, const char* version, const char* title)
 {
-    if (s.inited) return 1;
-    if (!info || !info->hwnd || !info->device || !info->queue || !info->frame_w || !info->frame_h) return 0;
     if (!gt5_settings_path()[0]) gt5_settings_init(nullptr);
-    s.hwnd = info->hwnd;
-    s.dev = info->device;
-    s.queue = info->queue;
-    s.fmt = info->rtv_format ? info->rtv_format : DXGI_FORMAT_R8G8B8A8_UNORM;
-    s.w = info->frame_w; s.h = info->frame_h;
-    s.no_overlay = info->no_overlay != 0;
+    s.hwnd = hwnd;
+    s.w = w; s.h = h;
+    client_refresh();                         // then WM_SIZE and WM_DPICHANGED keep these
+    s.dpi = window_dpi();
     QueryPerformanceFrequency(&s.qpf);
-    {
-        const char* v = info->version && *info->version ? info->version : getenv("GT5_VER");
-        snprintf(s.version, sizeof s.version, "%s", v && *v && _stricmp(v, "none") ? v : "");
-        const char* t = info->title && *info->title ? info->title : getenv("PS3_TITLE");
-        snprintf(s.title, sizeof s.title, "%s", t && *t ? t : "Gran Turismo 5");
-    }
+    const char* v = version && *version ? version : getenv("GT5_VER");
+    snprintf(s.version, sizeof s.version, "%s", v && *v && _stricmp(v, "none") ? v : "");
+    const char* t = title && *title ? title : getenv("PS3_TITLE");
+    snprintf(s.title, sizeof s.title, "%s", t && *t ? t : "Gran Turismo 5");
+}
 
-    D3D12_DESCRIPTOR_HEAP_DESC hd = {};
-    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    hd.NumDescriptors = SRV_SLOTS;
-    hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    bool ok = SUCCEEDED(s.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&s.srv_heap)));
-    s.srv_step = s.dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    hd.NumDescriptors = 1;
-    hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    ok = ok && SUCCEEDED(s.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&s.rtv_heap)));
-    for (int i = 0; ok && i < LIST_RING; i++)
-        ok = SUCCEEDED(s.dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&s.alloc[i])));
-    ok = ok && SUCCEEDED(s.dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, s.alloc[0], nullptr, IID_PPV_ARGS(&s.list)));
-    if (ok) { s.list->Close(); s.list->SetName(L"gt5-menu-list"); }
-    ok = ok && SUCCEEDED(s.dev->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&s.fence)));
-    s.fence_ev = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    ok = ok && s.fence_ev && overlay_create() && composite_create();
-    if (!ok) {
-        fprintf(stderr, "[menu] Direct3D 12 objects could not be made: the settings menu is off\n");
-        return 0;
-    }
-
+void core_context()
+{
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -749,21 +723,18 @@ extern "C" int gt5_menu_init(const gt5_menu_init_info* info)
     io.ConfigNavCursorVisibleAuto = true;
     io.BackendPlatformName = "gt5_menu";
     fonts_init();
+}
 
-    ImGui_ImplDX12_InitInfo ii;
-    ii.Device = s.dev;
-    ii.CommandQueue = s.queue;
-    ii.NumFramesInFlight = 3;
-    ii.RTVFormat = s.fmt;
-    ii.DSVFormat = DXGI_FORMAT_UNKNOWN;
-    ii.SrvDescriptorHeap = s.srv_heap;
-    ii.SrvDescriptorAllocFn = srv_alloc;
-    ii.SrvDescriptorFreeFn = srv_free;
-    if (!ImGui_ImplDX12_Init(&ii)) {
-        fprintf(stderr, "[menu] Dear ImGui's Direct3D 12 backend did not start: the settings menu is off\n");
-        ImGui::DestroyContext();
-        return 0;
-    }
+void core_context_abort()
+{
+    ImGui::DestroyContext();
+    unmap_font(&s.font_main);
+    s = State();
+}
+
+void core_finish(void (*renderer_new_frame)(), const char* what)
+{
+    s.new_frame = renderer_new_frame;
     gt5_settings_on_change("GT5_LAUNCH_WINDOW", on_window_setting, nullptr);
     gt5_settings_on_change("PS3_WINDOW_SIZE", on_window_setting, nullptr);
     gt5_settings_on_change(nullptr, on_any_setting, nullptr);
@@ -772,51 +743,60 @@ extern "C" int gt5_menu_init(const gt5_menu_init_info* info)
     refresh_settings();
     char key[32];
     gt5_setting_str("GT5_MENU_KEY", key, sizeof key);
-    fprintf(stderr, "[menu] settings menu ready: %s opens it (frame %ux%u, settings in %s)\n", key[0] ? key : "F1",
-            s.w, s.h, gt5_settings_path());
-    return 1;
+    fprintf(stderr, "[menu] settings menu ready: %s opens it (%s %ux%u, window %dx%d at %u dpi, settings in %s)\n", key[0] ? key : "F1",
+            what, s.w, s.h, s.client_w, s.client_h, s.dpi, gt5_settings_path());
 }
 
-extern "C" void gt5_menu_shutdown(void)
+bool core_inited() { return s.inited; }
+bool core_build_frame()
 {
-    if (!s.inited) return;
+    // [win] The picture is still coming (gt5_menu_ask_quit). Each renderer calls this only when it has
+    // something to draw the menu into (D3D12: its overlay texture; Vulkan: its overlay image).
+    s.last_frame_tick = GetTickCount64();
+    return build_frame();
+}
+
+void core_set_size(unsigned w, unsigned h)
+{
+    s.w = w; s.h = h;
+    s.applied_scale = 0.0f;
+}
+
+void core_shutdown_begin()
+{
     s.inited = false;
-    InterlockedExchange(&s.overlay_visible, 0);
     InterlockedExchange(&g_gt5_menu_captured, 0);
+    InterlockedExchange(&g_gt5_menu_pause_want, 0);
     if (gt5_settings_dirty()) gt5_settings_save();
-    wait_gpu();
-    ImGui_ImplDX12_Shutdown();
+}
+
+void core_shutdown_end()
+{
     ImGui::DestroyContext();
     unmap_font(&s.font_main); unmap_font(&s.font_sym); unmap_font(&s.font_cjk); unmap_font(&s.font_kr);
-    if (s.pso) s.pso->Release();
-    if (s.rs) s.rs->Release();
-    if (s.overlay) s.overlay->Release();
-    if (s.list) s.list->Release();
-    for (int i = 0; i < LIST_RING; i++) if (s.alloc[i]) s.alloc[i]->Release();
-    if (s.fence) s.fence->Release();
-    if (s.rtv_heap) s.rtv_heap->Release();
-    if (s.srv_heap) s.srv_heap->Release();
-    if (s.fence_ev) CloseHandle(s.fence_ev);
     s = State();
     ui = Ui();
 }
 
-extern "C" void gt5_menu_set_frame_size(unsigned w, unsigned h)
-{
-    if (!s.inited || !w || !h || (w == s.w && h == s.h)) return;
-    // No list that draws the old overlay may be waiting: the caller has let its presenter finish (a
-    // new swap chain needs that anyway), and whatever is on the queue is run to the end here.
-    AcquireSRWLockExclusive(&s.overlay_lock);
-    InterlockedExchange(&s.overlay_visible, 0);
-    wait_gpu();
-    if (s.overlay) { s.overlay->Release(); s.overlay = nullptr; }
-    s.w = w; s.h = h;
-    if (!overlay_create()) fprintf(stderr, "[menu] no overlay texture at %ux%u\n", w, h);
-    ReleaseSRWLockExclusive(&s.overlay_lock);
-    s.applied_scale = 0.0f;
-}
+}  // namespace gt5m
+
+using namespace gt5m;
+
+// ---- the API ------------------------------------------------------------------------------------------
 
 extern "C" int gt5_menu_is_open(void) { return ui.open ? 1 : 0; }
+
+extern "C" int gt5_menu_ask_quit(void)
+{
+    // [win] Only when the overlay can be seen: the menu is up and frames still come (a stopped picture
+    // would hide the question, and the window would never close). [merge] Renderer-neutral: the frame
+    // time is taken in core_build_frame, which each renderer reaches only with something to draw into.
+    if (!s.inited) return 0;
+    if (!s.last_frame_tick || GetTickCount64() - s.last_frame_tick > 1500) return 0;
+    if (ui.quit) return 2;
+    quit_ask();
+    return 1;
+}
 extern "C" void gt5_menu_set_open(int open) { set_open(open != 0); }
 
 extern "C" int gt5_menu_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, LRESULT* result)
@@ -825,21 +805,57 @@ extern "C" int gt5_menu_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, LRESU
     ImGuiIO& io = ImGui::GetIO();
     if (result) *result = 0;
     switch (msg) {
+    // What the player sees: the menu sizes itself from these (and lets them through).
+    case WM_SIZE:
+        if (wp != SIZE_MINIMIZED && LOWORD(lp) > 0 && HIWORD(lp) > 0) { s.client_w = LOWORD(lp); s.client_h = HIWORD(lp); }
+        return 0;
+    case WM_DPICHANGED:                        // the window moved to a monitor with another scaling, or it changed
+        if (LOWORD(wp) >= 48) s.dpi = LOWORD(wp);
+        return 0;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
         const bool repeat = (lp & (1L << 30)) != 0;
-        if (!ui.open) {
+        // F11 and Alt+Enter: borderless full screen and back, as in most PC games, with the menu open or
+        // closed (not while a key is being chosen for a row, and not when F11 is the menu's own key).
+        const bool full_key = (msg == WM_KEYDOWN && wp == VK_F11 && s.menu_vk != VK_F11) ||
+                              (msg == WM_SYSKEYDOWN && wp == VK_RETURN && (lp & (1L << 29)));
+        if (full_key && ui.bind != BIND_KEY_ROW && ui.bind != BIND_MENU_KEY) {
+            if (!repeat) {
+                static char back[32] = "windowed";      // what to return to: a window, or a maximised one
+                char mode[32];
+                gt5_setting_stored("GT5_LAUNCH_WINDOW", mode, sizeof mode);
+                if (!_stricmp(mode, "borderless")) gt5_setting_set("GT5_LAUNCH_WINDOW", back);
+                else {
+                    snprintf(back, sizeof back, "%s", mode[0] ? mode : "windowed");
+                    gt5_setting_set("GT5_LAUNCH_WINDOW", "borderless");
+                }
+                s.swallow_up_vk = (int)wp;
+            }
+            return 1;
+        }
+        if (!ui.open && !ui.quit) {
             refresh_settings();
             if ((int)wp == s.menu_vk && !repeat) { set_open(true); s.swallow_up_vk = (int)wp; return 1; }
             return 0;
         }
         ui.keyboard_last = true;
+        if (ui.quit) {                         // [win] the quit question has the keys (Esc is its No)
+            if (msg == WM_SYSKEYDOWN && wp == VK_F4) return 0;        // Alt+F4 again: the window's (it quits)
+            if ((int)wp == s.menu_vk) return 1;
+            mods_event(io);
+            const ImGuiKey k = vk_to_key(wp, lp);
+            if (k != ImGuiKey_None) io.AddKeyEvent(k, true);
+            return 1;
+        }
         if (ui.bind == BIND_KEY_ROW || ui.bind == BIND_MENU_KEY) {
             // The next key is the one being chosen: it never reaches the menu's own navigation.
             if (!repeat) {
                 s.swallow_up_vk = (int)wp;
                 if (wp == VK_ESCAPE) ui_key_taken(nullptr);
-                else { const char* name = gt5_kb_key_from_vk((int)wp, (long long)lp); if (name) ui_key_taken(name); }
+                // The menu's own key and F11 (full screen) are never a game button's key.
+                else if (!(ui.bind == BIND_KEY_ROW && ((int)wp == s.menu_vk || wp == VK_F11))) {
+                    const char* name = gt5_kb_key_from_vk((int)wp, (long long)lp); if (name) ui_key_taken(name);
+                }
             }
             return 1;
         }
@@ -853,7 +869,7 @@ extern "C" int gt5_menu_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, LRESU
     case WM_KEYUP:
     case WM_SYSKEYUP: {
         if (s.swallow_up_vk && (int)wp == s.swallow_up_vk) { s.swallow_up_vk = 0; return 1; }
-        if (!ui.open) return 0;
+        if (!ui.open && !ui.quit) return 0;
         mods_event(io);
         const ImGuiKey k = vk_to_key(wp, lp);
         if (k != ImGuiKey_None) io.AddKeyEvent(k, false);
@@ -862,18 +878,18 @@ extern "C" int gt5_menu_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, LRESU
     case WM_CHAR:
     case WM_SYSCHAR:
     case WM_DEADCHAR:
-        return ui.open || s.swallow_up_vk ? 1 : 0;
+        return ui.open || ui.quit || s.swallow_up_vk ? 1 : 0;
     case WM_SYSCOMMAND:
-        return ui.open && (wp & 0xFFF0) == SC_KEYMENU ? 1 : 0;        // Alt alone doesn't open the window menu
+        return (ui.open || ui.quit) && (wp & 0xFFF0) == SC_KEYMENU ? 1 : 0;        // Alt alone doesn't open the window menu
     case WM_MOUSEMOVE:
-        if (!ui.open) return 0;
+        if (!ui.open && !ui.quit) return 0;
         mouse_pos_event(io, lp);
         return 1;
     case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK:
     case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK:
     case WM_XBUTTONDOWN: case WM_XBUTTONDBLCLK: {
-        if (!ui.open) return 0;
+        if (!ui.open && !ui.quit) return 0;
         if ((msg == WM_XBUTTONDOWN || msg == WM_XBUTTONDBLCLK) && ui.bind == BIND_KEY_ROW) {
             ui_key_taken(GET_XBUTTON_WPARAM(wp) == XBUTTON1 ? "Mouse4" : "Mouse5");
             if (result) *result = TRUE;
@@ -890,7 +906,7 @@ extern "C" int gt5_menu_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, LRESU
         return 1;
     }
     case WM_LBUTTONUP: case WM_RBUTTONUP: case WM_MBUTTONUP: case WM_XBUTTONUP: {
-        if (!ui.open) return 0;
+        if (!ui.open && !ui.quit) return 0;
         const int button = msg == WM_LBUTTONUP ? 0 : msg == WM_RBUTTONUP ? 1 : msg == WM_MBUTTONUP ? 2 : -1;
         if (button >= 0) {
             if (s.buttons_down > 0 && --s.buttons_down == 0 && GetCapture() == hwnd) ReleaseCapture();
@@ -899,19 +915,19 @@ extern "C" int gt5_menu_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, LRESU
         return 1;
     }
     case WM_MOUSEWHEEL:
-        if (!ui.open) return 0;
+        if (!ui.open && !ui.quit) return 0;
         io.AddMouseWheelEvent(0.0f, (float)GET_WHEEL_DELTA_WPARAM(wp) / (float)WHEEL_DELTA);
         ui.keyboard_last = false;
         return 1;
     case WM_SETCURSOR:
         // The arrow over the picture while the menu is open, whatever hid it for the game.
-        if (ui.open && LOWORD(lp) == HTCLIENT) { SetCursor(LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW)); if (result) *result = TRUE; return 1; }
+        if ((ui.open || ui.quit) && LOWORD(lp) == HTCLIENT) { SetCursor(LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW)); if (result) *result = TRUE; return 1; }
         return 0;
     case WM_KILLFOCUS:
-        if (ui.open) { io.AddFocusEvent(false); s.buttons_down = 0; }
+        if (ui.open || ui.quit) { io.AddFocusEvent(false); s.buttons_down = 0; }
         return 0;
     case WM_SETFOCUS:
-        if (ui.open) io.AddFocusEvent(true);
+        if (ui.open || ui.quit) io.AddFocusEvent(true);
         return 0;
     default:
         return 0;
@@ -938,9 +954,28 @@ extern "C" void gt5_menu_feed_pad(const gt5_menu_pad* pad)
         // let go: if the menu didn't open, the game gets the controller back once the buttons are up
         if (!ui.open) { s.release_until = now + 100; InterlockedExchange(&s.release_wait, 1); }
     }
-    if (s.release_wait && !down && pad->buttons == 0 && now >= s.release_until) InterlockedExchange(&s.release_wait, 0);
+    if (s.release_wait && !down && pad->buttons == 0 && now >= s.release_until && (keys_up() || now >= s.release_until + 1500)) InterlockedExchange(&s.release_wait, 0);
     ReleaseSRWLockExclusive(&s.feed_lock);
     update_captured();
+}
+
+extern "C" void gt5_menu_notice(int id, const char* en, const char* zh, unsigned ms)
+{
+    if (id < 0 || id >= GT5_NOTICE_COUNT) return;
+    AcquireSRWLockExclusive(&s.notice_lock);
+    State::Notice& nt = s.notice[id];
+    if (!en || !*en) nt.on = false;
+    else {
+        snprintf(nt.en, sizeof nt.en, "%s", en);
+        snprintf(nt.zh, sizeof nt.zh, "%s", zh ? zh : "");
+        nt.ms = ms;
+        nt.until = 0;
+        nt.on = true;
+    }
+    bool any = false;
+    for (int i = 0; i < GT5_NOTICE_COUNT; i++) any = any || s.notice[i].on;
+    InterlockedExchange(&s.notices_on, any ? 1 : 0);
+    ReleaseSRWLockExclusive(&s.notice_lock);
 }
 
 extern "C" void gt5_menu_feed_wheel(const gt5_menu_wheel* wheel)
@@ -968,56 +1003,6 @@ extern "C" void gt5_menu_set_stats(const gt5_menu_stats* st)
     s.stats.gpu_name[sizeof s.stats.gpu_name - 1] = 0;
     s.have_stats = true;
     ReleaseSRWLockExclusive(&s.stats_lock);
-}
-
-extern "C" int gt5_menu_frame(void)
-{
-    if (!s.inited || s.no_overlay || !s.overlay) return 0;
-    if (!build_frame()) { InterlockedExchange(&s.overlay_visible, 0); return 0; }
-    ID3D12GraphicsCommandList* l = list_begin();
-    if (!l) return 0;
-    const D3D12_CPU_DESCRIPTOR_HANDLE rtv = s.rtv_heap->GetCPUDescriptorHandleForHeapStart();
-    const float clear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-    barrier(l, s.overlay, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    l->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
-    l->ClearRenderTargetView(rtv, clear, 0, nullptr);
-    l->SetDescriptorHeaps(1, &s.srv_heap);
-    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), l);
-    barrier(l, s.overlay, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    list_end();
-    InterlockedExchange(&s.overlay_visible, 1);
-    return 1;
-}
-
-extern "C" int gt5_menu_overlay_visible(void) { return s.overlay_visible != 0; }
-
-extern "C" void gt5_menu_overlay_composite(ID3D12GraphicsCommandList* list, D3D12_CPU_DESCRIPTOR_HANDLE rtv)
-{
-    if (!list || !s.overlay_visible) return;
-    AcquireSRWLockShared(&s.overlay_lock);
-    if (s.overlay && s.pso) composite_record(list, rtv);
-    ReleaseSRWLockShared(&s.overlay_lock);
-}
-
-extern "C" void gt5_menu_overlay_blit(ID3D12Resource* back_buffer, D3D12_CPU_DESCRIPTOR_HANDLE rtv)
-{
-    if (!back_buffer || !s.overlay_visible || !s.overlay || !s.pso) return;
-    ID3D12GraphicsCommandList* l = list_begin();
-    if (!l) return;
-    barrier(l, back_buffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    composite_record(l, rtv);
-    barrier(l, back_buffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-    list_end();
-}
-
-extern "C" int gt5_menu_frame_direct(ID3D12GraphicsCommandList* list, D3D12_CPU_DESCRIPTOR_HANDLE rtv)
-{
-    if (!s.inited || !list) return 0;
-    if (!build_frame()) return 0;
-    list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
-    list->SetDescriptorHeaps(1, &s.srv_heap);
-    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), list);
-    return 1;
 }
 
 extern "C" void gt5_menu_test_goto(int page, int sub)
@@ -1051,5 +1036,24 @@ extern "C" int gt5_menu_test_focus(const char* key)
     ui.sub = SUB_NONE;
     ui.in_content = true;
     snprintf(ui.focus_key, sizeof ui.focus_key, "%s", d->key);
+    return 1;
+}
+extern "C" int gt5_menu_test_info_get(gt5_menu_test_info* out)
+{
+    if (!out || !s.inited || !s.have_frame) return 0;
+    memset(out, 0, sizeof *out);
+    out->client_w = s.client_w; out->client_h = s.client_h; out->dpi = (int)s.dpi;
+    out->text_px = s.applied_scale;
+    out->cap_px = ui.tv.cap_px;
+    out->small_px = ui.tv.small_px;
+    out->density = ui.tv.density;
+    memcpy(out->panel, ui.tv.panel, sizeof out->panel);
+    memcpy(out->page, ui.tv.page, sizeof out->page);
+    memcpy(out->focus, ui.tv.focus, sizeof out->focus);
+    memcpy(out->nav, ui.tv.nav, sizeof out->nav);
+    out->stacked = ui.tv.stacked ? 1 : 0;
+    out->help_cut = ui.tv.help_cut ? 1 : 0;
+    out->help_inline = ui.tv.help_inline ? 1 : 0;
+    snprintf(out->focus_key, sizeof out->focus_key, "%s", ui.tv.focus_key);
     return 1;
 }

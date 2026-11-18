@@ -24,10 +24,17 @@ file(GLOB RECOMP_SOURCES CONFIGURE_DEPENDS "${RECOMP_DIR}/*.cpp")
 list(LENGTH RECOMP_SOURCES RECOMP_SOURCE_COUNT)
 message(STATUS "Lifted sources:  ${RECOMP_SOURCE_COUNT} file(s)")
 
-# Movies decode through FFmpeg, loaded at run time; only its headers are needed to build.
-set(PS3RECOMP_FFMPEG_RUNTIME ON CACHE BOOL "" FORCE)
+# Movies decode through FFmpeg, loaded at run time; only its headers are needed to build. get-ffmpeg.ps1 (setup.ps1,
+# update.ps1) puts it in this folder. It is optional: without it the game builds and runs, and only its movies don't
+# play; get-ffmpeg.ps1 makes the build folder configure again when it arrives later.
 set(GT5_FFMPEG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ffmpeg/ffmpeg-n9.0-latest-win64-lgpl-shared-9.0")
-set(PS3RECOMP_FFMPEG_INCLUDE_DIR "${GT5_FFMPEG_DIR}/include" CACHE PATH "" FORCE)
+if(EXISTS "${GT5_FFMPEG_DIR}/include/libavcodec/avcodec.h")
+    set(PS3RECOMP_FFMPEG_RUNTIME ON CACHE BOOL "" FORCE)
+    set(PS3RECOMP_FFMPEG_INCLUDE_DIR "${GT5_FFMPEG_DIR}/include" CACHE PATH "" FORCE)
+else()
+    message(STATUS "GT5: no FFmpeg in ${GT5_FFMPEG_DIR}: this build plays no movies")
+    set(PS3RECOMP_FFMPEG_RUNTIME OFF CACHE BOOL "" FORCE)
+endif()
 # Vulkan as a second renderer (the launcher's Display > Renderer; DirectX 12 stays the default).
 # scripts\add_vulkan.ps1 builds SDL2 and glslang into deps\vulkan and turns it on; a build folder set up
 # again later finds them there by itself.
@@ -79,6 +86,7 @@ add_executable(gt5
     src/gt5_debug.cpp
     src/gt5_widescreen.cpp
     src/gt5_cockpit.cpp
+    src/gt5_padmap.cpp
     src/gt5_threadstats.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
@@ -86,14 +94,17 @@ add_executable(gt5
     ${SPU_SOURCES}
 )
 
-# The in-game settings menu (F1): Dear ImGui 1.93.0 (third_party/imgui, MIT, unmodified) on the D3D12 renderer.
-# The runtime calls it through runtime/settings/gt5_menu.h; a build without these sources links the
-# runtime's empty stand-ins (gt5_menu_stub.c) instead.
+# The in-game settings menu (F1): Dear ImGui 1.93.0 (third_party/imgui, MIT, unmodified) on the D3D12 renderer,
+# and on the Vulkan one when the build has it (gt5_menu_vk.cpp, imgui_impl_vulkan). Input, sizes and pages are
+# shared (gt5_menu.cpp, gt5_menu_ui.cpp); each renderer has a file of its own for the drawing.
+# The runtime calls it through runtime/settings/gt5_menu.h and gt5_menu_vk.h; a build without these sources
+# links the runtime's empty stand-ins (gt5_menu_stub.c) instead.
 set(GT5_IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui")
 if(WIN32 AND EXISTS "${GT5_IMGUI_DIR}/imgui.cpp" AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/menu/gt5_menu.cpp")
     set(GT5_MENU_SOURCES
         src/menu/gt5_menu.cpp
         src/menu/gt5_menu_ui.cpp
+        src/menu/gt5_menu_dx12.cpp
         src/menu/gt5_binds.c)
     set(GT5_IMGUI_SOURCES
         "${GT5_IMGUI_DIR}/imgui.cpp" "${GT5_IMGUI_DIR}/imgui_draw.cpp" "${GT5_IMGUI_DIR}/imgui_tables.cpp"
@@ -104,8 +115,19 @@ if(WIN32 AND EXISTS "${GT5_IMGUI_DIR}/imgui.cpp" AND EXISTS "${CMAKE_CURRENT_SOU
     set_source_files_properties(${GT5_MENU_SOURCES} ${GT5_IMGUI_SOURCES} PROPERTIES
         INCLUDE_DIRECTORIES "${_menu_inc}" COMPILE_DEFINITIONS "${_menu_defs}")
     set_source_files_properties(${GT5_IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "/w")
+    # The Vulkan renderer's drawing: its functions come from the runtime's loader (VK_NO_PROTOTYPES), so
+    # nothing links to vulkan-1.dll; the headers are the ones the Vulkan build uses.
+    if(PS3RECOMP_RSX_VULKAN AND EXISTS "${GT5_IMGUI_DIR}/backends/imgui_impl_vulkan.cpp" AND PS3RECOMP_VULKAN_INCLUDE_DIR)
+        set(GT5_MENU_VK_SOURCES src/menu/gt5_menu_vk.cpp "${GT5_IMGUI_DIR}/backends/imgui_impl_vulkan.cpp")
+        target_sources(gt5 PRIVATE ${GT5_MENU_VK_SOURCES})
+        set_source_files_properties(${GT5_MENU_VK_SOURCES} PROPERTIES
+            INCLUDE_DIRECTORIES "${_menu_inc};${PS3RECOMP_VULKAN_INCLUDE_DIR}" COMPILE_DEFINITIONS "${_menu_defs};VK_NO_PROTOTYPES")
+        set_source_files_properties("${GT5_IMGUI_DIR}/backends/imgui_impl_vulkan.cpp" PROPERTIES COMPILE_OPTIONS "/w")
+        message(STATUS "In-game menu:    on (Dear ImGui), DirectX 12 and Vulkan")
+    else()
+        message(STATUS "In-game menu:    on (Dear ImGui)")
+    endif()
     target_link_libraries(gt5 PRIVATE d3dcompiler shell32)
-    message(STATUS "In-game menu:    on (Dear ImGui)")
 endif()
 
 # Game-code mods (scripts/mods.py, MODDING.md): the start-up switch of each mod that applies to
@@ -282,9 +304,11 @@ target_link_libraries(gt5 PRIVATE ps3recomp_runtime dbghelp user32 gdi32 winmm)
 # of build.ninja that every CMake regeneration lost).
 target_compile_options(ps3recomp_runtime PRIVATE /Z7)
 # The DLLs the runtime opens sit next to the exe.
-add_custom_command(TARGET gt5 POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${GT5_FFMPEG_DIR}/bin/avcodec-63.dll" "${GT5_FFMPEG_DIR}/bin/avutil-61.dll" "${GT5_FFMPEG_DIR}/bin/swresample-7.dll"
-    "$<TARGET_FILE_DIR:gt5>")
+if(PS3RECOMP_FFMPEG_RUNTIME)
+    add_custom_command(TARGET gt5 POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${GT5_FFMPEG_DIR}/bin/avcodec-63.dll" "${GT5_FFMPEG_DIR}/bin/avutil-61.dll" "${GT5_FFMPEG_DIR}/bin/swresample-7.dll"
+        "$<TARGET_FILE_DIR:gt5>")
+endif()
 if(PS3RECOMP_RSX_VULKAN)
     # The runtime keeps the definition to itself (so the generated code isn't rebuilt); the boot harness
     # picks the Vulkan backend on it when RSX_LIVE_DRAW is off.

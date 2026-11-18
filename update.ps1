@@ -14,11 +14,21 @@
 # Kept: your saves (GT5\hdd0), your game files, the shader cache, and edits you made to files such as
 # play.bat (set aside during the switch and put back). The previous gt5.exe is kept as
 # GT5\build\gt5.previous.exe. The slow re-lift only runs when a version changes the lift tools;
-# otherwise only the changed code is rebuilt.
-param([string]$Version, [switch]$List, [switch]$Dev, [switch]$Test, [switch]$NoBuild, [switch]$Force, [switch]$Here, [string]$Relaunch)
+# otherwise only the changed code is rebuilt. The game is built with both renderers (Vulkan's libraries are
+# fetched once, also for an install made before that), and its add-ons are built again for the new version.
+# (-AfterSwitch -PrevVersion -NewLabel: used by update.ps1 itself. When the version it switched to has a different
+# update.ps1, that one does the rest, so each update runs the new version's own steps.)
+param([string]$Version, [switch]$List, [switch]$Dev, [switch]$Test, [switch]$NoBuild, [switch]$Force, [switch]$Here, [string]$Relaunch,
+      [switch]$AfterSwitch, [string]$PrevVersion, [string]$NewLabel)
+# This file as it was when it started: after the switch, a different one on disk is the new version's.
+$selfHash = $null
+try { $selfHash = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash } catch {}
 # Errors are checked through exit codes: with "Stop", Windows PowerShell turns git's progress messages
 # on stderr into errors.
 $ErrorActionPreference = "Continue"
+# Another Python's settings (Anaconda, QGIS and others set these for everyone) would make the port's own Python load
+# that one's libraries: not for this run or anything it starts.
+Remove-Item Env:PYTHONHOME, Env:PYTHONPATH -ErrorAction SilentlyContinue
 # On a drive that doesn't record who owns a file (exFAT, FAT32, many USB and network drives) git refuses
 # to work in the install folder ("detected dubious ownership", #41). Trust it for git run from here and
 # what this starts, through git's environment config; the player's own git settings stay as they are.
@@ -91,7 +101,7 @@ if ($List) {
     exit 0
 }
 
-$from = Describe
+$from = if ($AfterSwitch -and $PrevVersion) { $PrevVersion } else { Describe }
 New-Item -ItemType Directory -Force $state | Out-Null
 
 # The patch now in ps3recomp, saved before the switch replaces GT5\patches with the new version's.
@@ -116,8 +126,8 @@ if (-not (Test-Path $oldPatch) -and (Test-Path (Join-Path $rc ".git")) -and (git
 }
 
 # ---- Switch this folder to the chosen version ---------------------------------------------------------
-$label = $from
-if (-not $Here) {
+$label = if ($AfterSwitch -and $NewLabel) { $NewLabel } else { $from }
+if (-not $Here -and -not $AfterSwitch) {
     git -C $base fetch --quiet --tags origin
     if ($LASTEXITCODE -ne 0) { Fail "couldn't reach GitHub" }
     if ($Test) {
@@ -138,6 +148,24 @@ if (-not $Here) {
     }
     $targetCommit = git -C $base rev-parse "$target^{commit}"
     if ($targetCommit -eq (git -C $base rev-parse HEAD) -and -not $Force -and (Test-Path (Join-Path $state "applied.patch"))) {
+        # Parts next to the game that an earlier updater did not know how to add (it brought this version in
+        # with its own, older steps): added now, so nothing waits for the next version. Never a stop.
+        $addCommonNow = Join-Path $gt5 "scripts\addon_common.ps1"
+        if ((Test-Path -LiteralPath $addCommonNow) -and (Test-Path -LiteralPath (Join-Path $gt5 "build\gt5.exe")) -and -not $Here -and -not $NoBuild) {
+            . $addCommonNow
+            $logsNow = Join-Path $gt5 "logs"
+            if (-not (Test-Path -LiteralPath (Join-Path $gt5 "build\gt5_upscale_fsr.dll"))) {
+                Write-Host "Finishing up..."
+                $r = Invoke-AddOn (Join-Path $gt5 "scripts\add_fsr.ps1") @() "add_fsr" $logsNow
+                if ($r -eq 1) { Write-Host "  AMD FSR 3: not built this time (GT5\logs\add_fsr.log says why). The next update tries again." }
+            }
+            $licNow = Join-Path $state "installer-licences.txt"
+            $dlssShownNow = (Test-Path -LiteralPath $licNow) -and [bool](Select-String -LiteralPath $licNow -Pattern '^dlss\b' -Quiet)
+            if ($dlssShownNow -and -not (Test-Path -LiteralPath (Join-Path $gt5 "build\gt5_upscale_dlss.dll")) -and (Test-RtxCard)) {
+                $r = Invoke-AddOn (Join-Path $gt5 "scripts\add_dlss.ps1") @("-Accept") "add_dlss" $logsNow
+                if ($r -eq 1) { Write-Host "  NVIDIA DLSS: not built this time (GT5\logs\add_dlss.log says why). The next update tries again." }
+            }
+        }
         Write-Host "Already on $label."
         Finish 0
     }
@@ -176,6 +204,19 @@ if (-not $Here) {
             git -C $base stash drop --quiet
             Warn "Your edits to $files clash with this version's own changes there. This version's files are in place; your edits are saved in backups\$(Split-Path $mine -Leaf) to copy back by hand."
         }
+    }
+    # The version switched to has its own update.ps1: when it differs from this one, it does the rest (patching
+    # ps3recomp, the build, the add-ons), so a new step of an update already runs on the update that brings it.
+    # Only a copy that knows -AfterSwitch: an older version's (a switch back with -Version) is left to this one.
+    $now = $null
+    try { $now = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash } catch {}
+    if ($selfHash -and $now -and $now -ne $selfHash -and (Select-String -LiteralPath $PSCommandPath -Pattern '\[switch\]\$AfterSwitch' -Quiet)) {
+        $a = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath, "-AfterSwitch", "-PrevVersion", $from, "-NewLabel", $label)
+        if ($NoBuild) { $a += "-NoBuild" }
+        if ($Force) { $a += "-Force" }
+        if ($Relaunch) { $a += @("-Relaunch", $Relaunch) }
+        & powershell @a
+        exit $LASTEXITCODE
     }
 }
 
@@ -253,7 +294,10 @@ if ($same) {
 }
 Set-Content -Path (Join-Path $state "version.txt") -Value (Describe) -Encoding ascii
 if (Test-Path $py) {
-    & $py -m pip install --quiet --disable-pip-version-check -r (Join-Path $rc "requirements.txt")
+    # The versions the tools are tested with, as setup.ps1 pins them (nothing is fetched when they are in place).
+    $pins = @("capstone==5.0.9", "construct==2.10.70", "pycryptodome==4.2.0", "tabulate==0.10.0", "tqdm==4.70.1")
+    & $py -m pip install --quiet --disable-pip-version-check -r (Join-Path $rc "requirements.txt") @pins
+    if ($LASTEXITCODE -ne 0) { Warn "The Python packages couldn't be brought to this version's (see above): the tools run with the ones in place." }
 }
 
 if ($Here -or $NoBuild) {
@@ -301,11 +345,55 @@ if ($LASTEXITCODE -ne 0 -or $Force) {
     if ($LASTEXITCODE -ne 0) { Pop-Location; Fail "gen_hle_nids.py failed" }
 }
 if (Test-Path "build\gt5.exe") { Copy-Item "build\gt5.exe" "build\gt5.previous.exe" -Force }
+# The parts the game is built with or gets next to it (GT5\scripts\add_*.ps1, through addon_common.ps1: their
+# whole text goes to GT5\logs, their progress lines GT5_ADD ... are passed on). None of them can fail the update.
+$addCommon = Join-Path $gt5 "scripts\addon_common.ps1"
+$addOns = Test-Path -LiteralPath $addCommon
+if ($addOns) { . $addCommon }
+$logs = Join-Path $gt5 "logs"
+$cacheFile = Join-Path $gt5 "build\CMakeCache.txt"
+function Test-VulkanInBuild { return (Test-Path -LiteralPath $cacheFile) -and [bool](Select-String -LiteralPath $cacheFile -Pattern '^PS3RECOMP_RSX_VULKAN:BOOL=ON' -Quiet) }
+# FFmpeg (the game's movies) when an earlier setup or update couldn't get it: optional, never a stop. When it arrives,
+# get-ffmpeg.ps1 has the build folder configure again so the runtime is built with it.
+$getFf = Join-Path $base "get-ffmpeg.ps1"
+if ((Test-Path -LiteralPath $getFf) -and -not (Test-Path -LiteralPath (Join-Path $base "ffmpeg\ffmpeg-n9.0-latest-win64-lgpl-shared-9.0\bin\avcodec-63.dll"))) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $getFf
+    if ($LASTEXITCODE -ne 0) { Write-Host "  FFmpeg: not added this time, so the game's movies won't play. The next update tries again." }
+}
+# Vulkan, the second renderer, in this build: an install made before it was built in gets its two libraries
+# now (once, a few minutes), and this build adds it to the runtime.
+if ($addOns) {
+    $r = Invoke-AddOn (Join-Path $gt5 "scripts\add_vulkan.ps1") @("-Prepare") "add_vulkan" $logs
+    if ($r -eq 1) { Write-Host "  Vulkan: left out this time (DirectX 12 only; GT5\logs\add_vulkan.log says why). The next update tries again." }
+}
 Write-Host "Building (only what changed)..."
 cmd /c "scripts\build.cmd gt5"
 $built = $LASTEXITCODE
+if ($built -ne 0 -and $addOns -and (Test-VulkanInBuild)) {
+    # The game must build even when Vulkan doesn't: once more without it (only the runtime is rebuilt).
+    Write-Host "The build stopped. Building once more without Vulkan..."
+    $null = Invoke-AddOn (Join-Path $gt5 "scripts\add_vulkan.ps1") @("-Remove", "-Prepare") "add_vulkan-off" $logs
+    cmd /c "scripts\build.cmd gt5"
+    $built = $LASTEXITCODE
+    if ($built -eq 0) { Write-Host "  Vulkan: left out this time (the build with it stopped; GT5\logs says why). The next update tries again." }
+}
 Pop-Location
 if ($built -ne 0) { Fail "the build failed (see the messages above). The previous game is in GT5\build\gt5.previous.exe." }
+# The add-ons follow the game: their small plug-ins are built for one version of it, so they are built again
+# now. AMD FSR 3, which needs no agreement, always (added when it is missing); NVIDIA DLSS on an NVIDIA RTX card
+# when it is there or the installer showed its licence by the Install button (.gt5\installer-licences.txt).
+if ($addOns) {
+    Write-Host "Finishing up..."
+    $r = Invoke-AddOn (Join-Path $gt5 "scripts\add_fsr.ps1") @() "add_fsr" $logs
+    if ($r -eq 1) { Write-Host "  AMD FSR 3: not built this time (GT5\logs\add_fsr.log says why). The next update tries again." }
+    $licFile = Join-Path $state "installer-licences.txt"
+    $dlssShown = (Test-Path -LiteralPath $licFile) -and [bool](Select-String -LiteralPath $licFile -Pattern '^dlss\b' -Quiet)
+    $dlssThere = Test-Path -LiteralPath (Join-Path $gt5 "build\gt5_upscale_dlss.dll")
+    if (($dlssShown -or $dlssThere) -and (Test-RtxCard)) {
+        $r = Invoke-AddOn (Join-Path $gt5 "scripts\add_dlss.ps1") @("-Accept") "add_dlss" $logs
+        if ($r -eq 1) { Write-Host "  NVIDIA DLSS: not built this time (GT5\logs\add_dlss.log says why). The next update tries again." }
+    }
+}
 Write-Host ""
 Write-Host "Done: $from -> $label. Saves, game files, settings and the shader cache were kept." -ForegroundColor Green
 Write-Host "The previous build is GT5\build\gt5.previous.exe; to go back, run update.ps1 -Version <version> (see -List)."
