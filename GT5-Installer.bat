@@ -1,6 +1,6 @@
 <# : GT5-Installer.bat
 @echo off
-rem Gran Turismo 5 for PC - installer. Double-click it. A window asks for your own copy of GT5 and the PS3
+rem GT5 Recomp - installer. Double-click it. A window asks for your own copy of GT5 and the PS3
 rem system software file, then installs everything else and builds the game, showing how far it has got.
 rem Run it again any time to update, or to carry on if something stopped it: it skips what's already done.
 setlocal
@@ -11,7 +11,7 @@ if not defined GT5_INSTALL_NOGUI (
     if not errorlevel 1 goto :eof
 )
 rem No window: GT5_INSTALL_NOGUI=1 (testing), or this PC can't show one. Everything runs in this console.
-title Gran Turismo 5 for PC - installer
+title GT5 Recomp - installer
 set "GT5_INSTALLER_ROLE=console"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ([IO.File]::ReadAllText($env:GT5_INSTALLER))"
 echo.
@@ -100,9 +100,9 @@ $Prologue  = '(?i)prologue|\u30D7\u30ED\u30ED\u30FC\u30B0|\u5E8F\u7AE0|\uD504\uB
 $OtherIds  = @("BCAS20108", "BCAS20218")   # Asian releases players have tried to install
 $RegKey    = "HKCU:\Software\GT5-PC-installer"
 $NeedGB    = 25
-$StepTitles = @("Checking this PC", "The port's code (from GitHub)", "Python and the compiler tools",
-                "PS3 system software", "Your game files", "Unlocking the game's EBOOT.BIN",
-                "Generating the game code", "Building gt5.exe")
+$StepTitles = @("Getting ready", "Downloading the code", "Build tools",
+                "PS3 system software", "Your game files", "Preparing the game",
+                "Converting the game", "Building the game")
 $Total = $StepTitles.Count
 $Utf8 = New-Object Text.UTF8Encoding($false)
 # Git for Windows' portable MinGit, used when the PC has no Git. The same pin is in get-git.ps1.
@@ -585,7 +585,7 @@ function Install-PortableGit([string]$dir) {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
         Stop-Install "the Git download isn't the expected file (SHA-256 $h). It was deleted. Press Try again, and report it if it happens again."
     }
-    Set-Now "Unpacking Git"; Set-Pct -1
+    Set-Now "Setting up"; Set-Pct -1
     try {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         [IO.Compression.ZipFile]::ExtractToDirectory($zip, (Join-Path $work "x"))
@@ -626,7 +626,7 @@ function Get-Code([string]$base) {
     if ((Invoke-Tool $git @("-C", $base, "remote", "add", "origin", $RepoUrl) -Quiet) -ne 0) {
         [void](Invoke-Tool $git @("-C", $base, "remote", "set-url", "origin", $RepoUrl) -Quiet)
     }
-    Set-Now "Downloading the port's code from GitHub (code only: nothing from the game)"
+    Set-Now "Downloading the code"
     $code = Invoke-Tool $git @("-C", $base, "fetch", "--progress", "--tags", "origin") -OnLine { param($l) Read-GitProgress $l }
     if ($code -ne 0) { Stop-Install "downloading the code from GitHub failed (is the internet connection up?)." }
     Set-Now "Unpacking the code"; Set-Pct -1
@@ -666,9 +666,9 @@ function Invoke-Ps3Unlock([string[]]$a, [string]$now, [string]$hint, [scriptbloc
     return $u
 }
 function Write-Fallback($u, [string]$what) {
-    if ($u.Code -eq 98) { Note "Unlocking $what with RPCS3 (test switch GT5_INSTALL_RPCS3)." }
-    elseif ($u.Code -eq 99) { Note "This copy of the code can't unlock $what by itself: RPCS3 does it instead." }
-    else { Note "Unlocking $what directly didn't work ($(if ($u.Line) { $u.Line } else { "code $($u.Code)" })): RPCS3 does it instead." }
+    if ($u.Code -eq 98) { Say "  Unlocking $what with RPCS3 (test switch GT5_INSTALL_RPCS3)." }
+    elseif ($u.Code -eq 99) { Say "  This copy of the code can't unlock $what by itself: RPCS3 does it instead." }
+    else { Say "  Unlocking $what directly didn't work ($(if ($u.Line) { $u.Line } else { "code $($u.Code)" })): RPCS3 does it instead." }
 }
 
 function Unlock-Firmware([string]$pup, [string]$devFlash) {
@@ -689,11 +689,11 @@ function Unlock-Firmware([string]$pup, [string]$devFlash) {
     if (-not (Test-Path -LiteralPath $okMark)) {
         # A half-finished install in RPCS3's folder would make it ask about "old firmware": start clean.
         Remove-Item -LiteralPath $flash -Recurse -Force -ErrorAction SilentlyContinue
-        Set-Now "Installing the PS3 system software with RPCS3 (its windows stay hidden)" "A few minutes."
+        Set-Now "Installing the PS3 system software" "A few minutes."
         if (-not (Install-Rpcs3Firmware $rp $pup)) { return $false }
         [IO.File]::WriteAllText($okMark, (Get-Date -Format "yyyy-MM-dd HH:mm:ss"))
     }
-    Set-Now "Copying the system files into GT5\dev_flash"; Set-Pct -1
+    Set-Now "Installing the PS3 system software"; Set-Pct -1
     $code = Invoke-Tool "robocopy.exe" @($flash, $devFlash, "/E", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP") -Quiet
     return ($code -lt 8 -and (Test-Path -LiteralPath (Join-Path $devFlash "sys\external")))
 }
@@ -708,7 +708,7 @@ function Unlock-Eboot([string]$bin, [string]$elf) {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $work | Out-Null
     Copy-Item -LiteralPath $bin (Join-Path $work "EBOOT.BIN")
-    Set-Now "Unlocking EBOOT.BIN with RPCS3" "Under a minute."
+    Set-Now "Preparing the game" "Under a minute."
     $p = Start-Rpcs3 $rp @("--no-gui", "--decrypt", "`"$(Join-Path $work 'EBOOT.BIN')`"")
     if (-not $p.WaitForExit(180000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
     Stop-Rpcs3Watch
@@ -731,7 +731,7 @@ function Get-Rpcs3 {
     $dir = Join-Path $script:Tools "rpcs3"
     $exe = Join-Path $dir "rpcs3.exe"
     if (Test-Path -LiteralPath $exe) { $script:Rpcs3 = $exe; return $exe }
-    Set-Now "Finding the newest RPCS3 build on GitHub (only as a tool: it holds Sony's keys)"; Set-Pct -1
+    Set-Now "Getting a helper tool"; Set-Pct -1
     try { $rel = Invoke-RestMethod "https://api.github.com/repos/RPCS3/rpcs3-binaries-win/releases/latest" -Headers @{ "User-Agent" = "gt5-pc-installer" } -TimeoutSec 60 }
     catch { Stop-Install "couldn't reach GitHub to download RPCS3 ($($_.Exception.Message))." }
     $asset = $rel.assets | Where-Object { $_.name -like "*win64*.7z" } | Select-Object -First 1
@@ -751,7 +751,7 @@ function Get-Rpcs3 {
             Stop-Install "the RPCS3 download was damaged (checksum). Press Try again."
         }
     }
-    Set-Now "Unpacking RPCS3"; Set-Pct -1
+    Set-Now "Setting up a helper tool"; Set-Pct -1
     if (-not $env:GT5_INSTALL_NOTAR) { [void](Invoke-Tool "tar.exe" @("-xf", $arc, "-C", $part) -Quiet) }
     if (-not (Test-Path -LiteralPath (Join-Path $part "rpcs3.exe"))) {
         # Windows 10's tar can't read this archive (no LZMA): use 7-Zip, or 7-Zip's own small extractor.
@@ -935,7 +935,7 @@ function Invoke-Install {
         else {
             $needTc = $true
             Say "  Compiler: no Visual Studio with the Clang tools here, so the compiler tools are fetched into $tools\toolchain in step 3 (about 1.5 GB; nothing is installed in Windows)"
-            Set-Now "Waiting for you: Microsoft's licence for the compiler libraries"
+            Set-Now "Waiting for you: Microsoft's licence"
             $lic = Get-MsLicence
             if (-not (Ask-Licence $lic)) {
                 Stop-Install "Microsoft's licence wasn't accepted, so the compiler tools can't be fetched (nothing was downloaded for them). The other way is Visual Studio 2022 with 'Desktop development with C++', 'C++ Clang tools for Windows' and a Windows 11 SDK, installed by you (README, Requirements); then run this again."
@@ -954,14 +954,14 @@ function Invoke-Install {
     $gv = "$(& $script:GitExe --version 2>$null)".Trim()
     if (-not $gv) { Stop-Install "Git doesn't run ($script:GitExe)." }
     Say "  Git: $gv, $gitText"
-    Step-End "done" "Git: $(if ($pcGit) { "the PC's" } else { "the port's own" }); compiler: $(if ($useVs) { 'Visual Studio' } elseif ($needTc) { 'tools to fetch' } else { 'tools here' })"
+    Step-End "done" "Ready"
 
     # ---- 2. The port's code ----------------------------------------------------------------------------
     Step-Start 2 $(if ($dest.Existing) { "Up to a few minutes." } else { "About a minute." })
     if ($dest.Existing) {
         if (Test-Path -LiteralPath (Join-Path $base ".git")) {
             # Rerun = update: the newest version first, so every script used below is the newest.
-            Set-Now "Getting the newest version of the port's code (update.ps1)"; Set-Pct -1
+            Set-Now "Checking for a newer version"; Set-Pct -1
             Remove-GitLocks $base 10
             $up = @{ Fail = ""; Label = "" }
             $code = Invoke-Ps (Join-Path $base "update.ps1") @("-NoBuild") -Dir $base -OnLine {
@@ -969,17 +969,17 @@ function Invoke-Install {
                 if ($l -match '^update: (.*)$') { $up.Fail = $Matches[1] }
                 elseif ($l -match '^Switching from .+ to (.+)$|^Reinstalling (.+)$|^Already on (.+?)\.?$') {
                     $up.Label = "$($Matches[1])$($Matches[2])$($Matches[3])"
-                    if ($l -notmatch '^Already') { Set-Now "Getting version $($up.Label) of the port's code" }
+                    if ($l -notmatch '^Already') { Set-Now "Updating to $($up.Label)" }
                 }
-                elseif ($l -match '^ps3recomp:') { Set-Now "Patching ps3recomp for this version" }
+                elseif ($l -match '^ps3recomp:') { Set-Now "Updating" }
                 $false
             }
             if ($code -ne 0) {
                 if ($up.Fail -match 'close the game') { Stop-Install "Gran Turismo 5 is running from this install folder: close it, then press Try again." }
-                Note "Updating the code didn't work ($(if ($up.Fail) { $up.Fail } else { "code $code" })): carrying on with the version already here."
-                Step-End "done" "Not updated (see the note)"
-            } else { Step-End "done" $(if ($up.Label) { "Version: $($up.Label)" } else { "Up to date" }) }
-        } else { Step-End "skip" "Already here (a downloaded copy, not a git clone: not updated)" }
+                Note "Couldn't get the newest version: carrying on with the one already here."; Say "  Updating the code didn't work ($(if ($up.Fail) { $up.Fail } else { "code $code" })): carrying on with the version already here."
+                Step-End "done" "Not updated"
+            } else { Step-End "done" $(if ($up.Label) { "$($up.Label)" } else { "Up to date" }) }
+        } else { Step-End "skip" "Already here" }
     } else {
         Get-Code $base
         Step-End "done" "Downloaded"
@@ -993,7 +993,7 @@ function Invoke-Install {
     # install made from the PC's Python.
     $getPy = Join-Path $base "get-python.ps1"
     if (Test-Path -LiteralPath $getPy) {
-        Set-Now "The port's own Python (python.org's 3.11.9, 17 MB)"; Set-Pct -1
+        Set-Now "Downloading build tools"; Set-Pct -1
         # get-python.ps1 unpacks into tools\python.tmp: its file count shows it isn't stuck (minutes on a slow USB drive).
         $pyw = @{ Dir = (Join-Path $tools "python.tmp"); T = 0 }
         [void](Invoke-Ps $getPy @() -Dir $base -OnTick {
@@ -1010,10 +1010,10 @@ function Invoke-Install {
     $pcCheck = Join-Path $base "pc-check.ps1"
     $ownPy = Join-Path $tools "python\python.exe"
     if ((Test-Path -LiteralPath $pcCheck) -and (Test-Path -LiteralPath $ownPy)) {
-        Set-Now "Checking that every processor of this PC calculates correctly"; Set-Pct -1
+        Set-Now "Checking this PC"; Set-Pct -1
         . $pcCheck
         $pcNote = Use-GoodProcessors -Base $base -Py $ownPy
-        if ($pcNote) { Note $pcNote }
+        if ($pcNote) { Say "  $pcNote" }
     }
     if ($needTc) {
         $tc = Find-Toolchain $base
@@ -1022,17 +1022,17 @@ function Invoke-Install {
             if (-not (Test-Path -LiteralPath $getTc) -or ([IO.File]::ReadAllText($getTc) -notmatch '\[switch\]\$AcceptLicence')) {
                 Stop-Install "this copy of the code is too old to fetch its compiler tools from the installer window. Run Update.bat in $base, then run the installer again."
             }
-            Set-Now "The compiler tools: LLVM, CMake, Ninja, and Microsoft's C/C++ libraries and Windows SDK" "10 to 30 minutes, once."
+            Set-Now "Downloading build tools (about 1.5 GB)" "10 to 30 minutes, once."
             # -AcceptLicence: the player accepted Microsoft's licence in step 1 (the window's tick box, or "yes").
             $code = Invoke-Ps $getTc @("-Path", (Join-Path $tools "toolchain"), "-AcceptLicence") -Dir $base -OnLine {
                 param($l)
                 if ($l -match '^\s*#*\s*(\d{1,3}(?:\.\d)?)%\s*$') { Set-Pct ([double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture)); return $true }
                 if ($l -match '^\s*#[#\s]*$|^\s*$') { return $true }
-                if ($l -match 'downloading (.+?)\.\.\.$') { Set-Now "Downloading $($Matches[1])" }
-                elseif ($l -match 'unpacking the parts of LLVM') { Set-Now "Unpacking LLVM"; Set-Pct -1 }
-                elseif ($l -match 'running portable-msvc\.py') { Set-Now "Microsoft's C/C++ libraries and Windows SDK, from Microsoft" "5 to 15 minutes."; Set-Pct -1 }
+                if ($l -match 'downloading (.+?)\.\.\.$') { Set-Now "Downloading build tools" }
+                elseif ($l -match 'unpacking the parts of LLVM') { Set-Now "Setting up build tools"; Set-Pct -1 }
+                elseif ($l -match 'running portable-msvc\.py') { Set-Now "Downloading build tools from Microsoft" "5 to 15 minutes."; Set-Pct -1 }
                 elseif ($l -match '^(.+?) \.\.\. (\d+)%$') { Set-Pct -1 "$($Matches[1]) $($Matches[2])%"; return $true }
-                elseif ($l -match '^Unpacking msi files') { Set-Now "Unpacking Microsoft's libraries"; Set-Pct -1 }
+                elseif ($l -match '^Unpacking msi files') { Set-Now "Setting up build tools"; Set-Pct -1 }
                 $false
             }
             $tc = Find-Toolchain $base
@@ -1045,17 +1045,17 @@ function Invoke-Install {
     # setup.ps1 and build.cmd pick Visual Studio first; tell them to use these tools in this run (the test
     # switch, or a Visual Studio that has no Windows SDK).
     if (-not $useVs) { $env:GT5_TOOLCHAIN = $tc }
-    Step-End "done" $(if ($useVs) { "Python ready; the compiler is Visual Studio's" } else { "Python and the compiler tools ready" })
+    Step-End "done" "Ready"
 
     # ---- 4. PS3 system software ---------------------------------------------------------------------------
     $needFw = -not (Test-Path -LiteralPath (Join-Path $gt5 "dev_flash\sys\external")) -or (Test-Mark $base "firmware-partial")
     Step-Start 4 "A few seconds to a few minutes, once."
-    if (-not $needFw) { Step-End "skip" "Already installed" } else {
+    if (-not $needFw) { Step-End "skip" "Done" } else {
         if ((Test-Pup $pickFw) -ne "ok") { Stop-Install "choose PS3UPDAT.PUP (Sony's PS3 system software file) in the installer window." }
         Set-Mark $base "firmware-partial"
         if (-not (Unlock-Firmware $pickFw (Join-Path $gt5 "dev_flash"))) { Stop-Install "installing the PS3 system software didn't finish (see Details). Press Try again." }
         Clear-Mark $base "firmware-partial"
-        Step-End "done" "Installed"
+        Step-End "done" "Done"
     }
 
     # ---- 5. The game files ------------------------------------------------------------------------------
@@ -1064,7 +1064,7 @@ function Invoke-Install {
     if ($game.Ok) {
         $src = $null
         if ($game.Iso) {
-            Set-Now "Opening $($game.Iso)"
+            Set-Now "Opening your game"
             $m = Mount-Iso $game.Iso
             if (-not $m) { Stop-Install "couldn't open the .iso. Double-click it in Explorer and choose its drive as the game folder instead." }
             if ($m.Ours) { Set-Mounted $game.Iso }
@@ -1072,10 +1072,10 @@ function Invoke-Install {
         } else { $src = $game.Ps3Game }
         $same = $false
         try { $same = ((Resolve-Path -LiteralPath $src).Path.TrimEnd('\') -eq [IO.Path]::GetFullPath($vfsGame).TrimEnd('\')) } catch {}
-        if ($same) { Step-End "skip" "Already in place" } else {
+        if ($same) { Step-End "skip" "Done" } else {
             $bytes = [double](Get-ChildItem -LiteralPath $src -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
             $gb = [math]::Round($bytes / 1GB, 1)
-            Set-Now "Copying $gb GB of game files from $src"
+            Set-Now "Copying your game ($gb GB)"
             Set-Mark $base "game-partial"
             # The bar follows what robocopy has read, so it doesn't matter how it writes the files.
             $cp = @{ Bytes = $bytes; Gb = $gb; Pid = 0 }
@@ -1089,10 +1089,10 @@ function Invoke-Install {
             if ($script:Mounted) { Dismount-Iso $script:Mounted; Set-Mounted $null }
             if ($code -ge 8 -or $code -lt 0) { Stop-Install "copying the game files failed (robocopy code $code). Is there enough space?" }
             Clear-Mark $base "game-partial"
-            Step-End "done" "Copied ($gb GB)"
+            Step-End "done" "Done"
         }
         if ($script:Mounted) { Dismount-Iso $script:Mounted; Set-Mounted $null }
-    } elseif ((Test-Path -LiteralPath (Join-Path $vfsGame "USRDIR")) -and -not (Test-Mark $base "game-partial")) { Step-End "skip" "Already in place" }
+    } elseif ((Test-Path -LiteralPath (Join-Path $vfsGame "USRDIR")) -and -not (Test-Mark $base "game-partial")) { Step-End "skip" "Done" }
     elseif (Test-Mark $base "game-partial") { Stop-Install "copying your game files didn't finish last time: choose your GT5 game (its folder or .iso) in the installer window so the copy can be completed." }
     else { Stop-Install "choose your GT5 game (its folder or .iso) in the installer window." }
 
@@ -1100,7 +1100,7 @@ function Invoke-Install {
     $elf = Join-Path $gt5 "input\EBOOT.elf"
     $needElf = -not (Test-Path -LiteralPath $elf) -or [bool]$game.Ok
     Step-Start 6 "Under a minute."
-    if (-not $needElf) { Step-End "skip" "Already done" } else {
+    if (-not $needElf) { Step-End "skip" "Done" } else {
         $bin = Join-Path $vfsGame "USRDIR\EBOOT.BIN"
         New-Item -ItemType Directory -Force (Split-Path $elf) | Out-Null
         if (Test-ElfFile $bin) {
@@ -1115,7 +1115,7 @@ function Invoke-Install {
 
     # ---- 7 and 8. Game code and build: setup.ps1 ----------------------------------------------------------
     Step-Start 7 "About 10 minutes."
-    Set-Now "Checking the tools and your files (setup.ps1)" "About 10 minutes."; Set-Pct -1
+    Set-Now "Checking everything is in place" "About 10 minutes."; Set-Pct -1
     Remove-GitLocks $base 10
     # Code generation: relift.ps1's phases ("== name") and how much of the time each takes.
     $sp = @{ Msg = ""; Missing = @(); Phase = ""; Built = $false; Gen = $false
@@ -1128,11 +1128,11 @@ function Invoke-Install {
         $t = $l.Trim()
         if ($t -match '^\[missing\]\s+(.*)$') { $sp.Missing += $Matches[1] }
         elseif ($t -match '^setup stopped: (.*)$') { $sp.Msg = $Matches[1] }
-        elseif ($t -match '^downloading FFmpeg') { Set-Now "Downloading FFmpeg (about 100 MB; it plays the game's movies)" }
-        elseif ($t -match '^Generating the game code') { $sp.Gen = $true; Set-Now "Generating the game code from your EBOOT.elf" "About 10 minutes."; Set-Pct 0 }
+        elseif ($t -match '^downloading FFmpeg') { Set-Now "Downloading the video player (about 100 MB)" }
+        elseif ($t -match '^Generating the game code') { $sp.Gen = $true; Set-Now "Converting the game" "About 10 minutes."; Set-Pct 0 }
         elseif ($t -match '^Trying once more from the start') {
-            Note "Generating the game code stopped on a one-off error; it is trying once more from the start (another 10 minutes)."
-            Set-Now "Generating the game code (second try)" "About 10 minutes."; Set-Pct 0
+            Note "That step is being run again (about 10 more minutes)."
+            Set-Now "Converting the game (second try)" "About 10 minutes."; Set-Pct 0
         }
         elseif ($sp.Gen -and $t -match '^== (\w+)$' -and $sp.W.ContainsKey($Matches[1])) {
             $sp.Phase = $Matches[1]; $done = 0
@@ -1145,20 +1145,20 @@ function Invoke-Install {
         elseif ($sp.Phase -eq "ppu_lifter" -and $t -match 'emitting (\d+)/(\d+) functions') {
             Set-Pct ($sp.Done + $sp.W.ppu_lifter * (0.6 + 0.4 * [double]$Matches[1] / [double]$Matches[2])) "writing C++"
         }
-        elseif ($t -match '^The game code is already generated and current') { $sp.End7 = $true; Step-End "skip" "Already current" }
+        elseif ($t -match '^The game code is already generated and current') { $sp.End7 = $true; Step-End "skip" "Done" }
         elseif ($t -match '^Building gt5\.exe') {
-            if (-not $sp.End7) { $sp.End7 = $true; Step-End "done" "Generated" }
+            if (-not $sp.End7) { $sp.End7 = $true; Step-End "done" "Done" }
             Step-Start 8 "20 to 50 minutes the first time."
-            Set-Now "Compiling the game (clang-cl)" "20 to 50 minutes the first time."; Set-Pct -1
+            Set-Now "Building the game" "20 to 50 minutes the first time."; Set-Pct -1
         }
         elseif ($t -match '^\[(\d+)/(\d+)\]') {
             if ([int]$Matches[2] -gt 0) { Set-Pct (100.0 * [int]$Matches[1] / [int]$Matches[2]) "file $($Matches[1]) of $($Matches[2])" }
         }
         elseif ($t -match '^The build stopped\. Trying again with (\d+)') {
-            Note "The compiler stopped on a file (it happens on busy PCs): carrying on with $($Matches[1]) jobs at a time."
-            Set-Now "Compiling the game (carrying on)"
+            Say "  The compiler stopped on a file (it happens on busy PCs): carrying on with $($Matches[1]) jobs at a time."
+            Set-Now "Building the game"
         }
-        elseif ($t -match '^launcher: built') { Set-Now "Building the launcher (GT5Launcher.exe)" }
+        elseif ($t -match '^launcher: built') { Set-Now "Finishing up" }
         $false
     }
     if ($code -ne 0) {
@@ -1173,13 +1173,13 @@ function Invoke-Install {
         Exit-Engine 0
     }
     if (-not (Test-Path -LiteralPath (Join-Path $gt5 "build\gt5.exe"))) { Stop-Install "the build didn't produce GT5\build\gt5.exe (see Details)." }
-    if ($script:CurStep -eq 8) { Step-End "done" "Built" }
+    if ($script:CurStep -eq 8) { Step-End "done" "Done" }
     Clear-Mark $base "started"
 
     if ($script:Pipe) { Send "done" @($base, "built"); Exit-Engine 0 }
     $lnk = New-Shortcut $base
     Write-Host ""
-    Write-Host "  Done! Gran Turismo 5 is installed." -ForegroundColor Green
+    Write-Host "  Done! GT5 Recomp is installed." -ForegroundColor Green
     Write-Host "  Start it with 'Gran Turismo 5 (PC)' on your desktop: the launcher, with settings (resolution,"
     Write-Host "  full screen, wheel, language), Play and Updates. (Or $gt5\play.bat directly.)"
     Write-Host "  Keyboard: Z = Cross, X = Circle, arrows, Enter = Start. Pads work too. More in README.md."
@@ -1196,7 +1196,7 @@ function Invoke-Engine {
         $script:LogW = Open-LogWriter
         Write-LogLine ""; Write-LogLine "==== GT5-Installer $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), console ===="
         Write-Host ""
-        Write-Host "  GRAN TURISMO 5 for PC - installer" -ForegroundColor White
+        Write-Host "  GT5 Recomp - installer" -ForegroundColor White
         Write-Host "  (log: $LogPath)" -ForegroundColor DarkGray
     }
     try { Invoke-Install }
@@ -1249,14 +1249,14 @@ function Show-Window {
     if ($env:GT5_INSTALL_UISCALE) { $want = [double]$env:GT5_INSTALL_UISCALE; $fk = $want / $U.K; $U.K = $want }   # testing
     $U.Log = Open-LogWriter
     Write-UiLog ""; Write-UiLog "==== GT5-Installer $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), window ===="
-    $U.Red = [Drawing.Color]::FromArgb(176, 20, 30); $U.Ok = [Drawing.Color]::FromArgb(20, 120, 50)
+    $U.Band = [Drawing.Color]::FromArgb(24, 27, 36); $U.Accent = [Drawing.Color]::FromArgb(40, 116, 208); $U.Ok = [Drawing.Color]::FromArgb(20, 120, 50)
     $U.Bad = [Drawing.Color]::FromArgb(180, 30, 30); $U.Amber = [Drawing.Color]::FromArgb(150, 90, 0)
     $U.Dim = [Drawing.Color]::DimGray; $U.Wait = [Drawing.Color]::FromArgb(150, 150, 150)
     $U.Font = New-Object Drawing.Font("Segoe UI", (10 * $fk)); $U.Bold = New-Object Drawing.Font("Segoe UI Semibold", (10 * $fk))
     $U.Small = New-Object Drawing.Font("Segoe UI", (9 * $fk)); $U.NowFont = New-Object Drawing.Font("Segoe UI Semibold", (11 * $fk))
     $U.Big = New-Object Drawing.Font("Segoe UI Semibold", (16 * $fk)); $U.Mono = New-Object Drawing.Font("Consolas", (9 * $fk))
     $U.BrOk = New-Object Drawing.SolidBrush($U.Ok); $U.BrBad = New-Object Drawing.SolidBrush($U.Bad)
-    $U.BrAmber = New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(200, 130, 0)); $U.BrBar = New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(196, 30, 40))
+    $U.BrAmber = New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(200, 130, 0)); $U.BrBar = New-Object Drawing.SolidBrush($U.Accent)
     $U.BrBarBg = New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(228, 228, 228))
     $U.St = @(); $U.StNote = @(); for ($i = 0; $i -lt $Total; $i++) { $U.St += "wait"; $U.StNote += "" }
     $U.Lines = New-Object Collections.Generic.List[string]
@@ -1266,21 +1266,21 @@ function Show-Window {
     $f = New-Object Windows.Forms.Form
     $U.Form = $f
     $f.AutoScaleMode = "None"
-    $f.Text = "Gran Turismo 5 for PC - installer"; $f.ClientSize = New-Object Drawing.Size((S 760), (S 520))
+    $f.Text = "GT5 Recomp - installer"; $f.ClientSize = New-Object Drawing.Size((S 760), (S 520))
     $f.FormBorderStyle = "FixedDialog"; $f.MaximizeBox = $false
     $f.Font = $U.Font; $f.BackColor = [Drawing.Color]::White
     try {
-        $ib = New-Object Drawing.Bitmap 32, 32; $ig = [Drawing.Graphics]::FromImage($ib); $ig.Clear($U.Red)
+        $ib = New-Object Drawing.Bitmap 32, 32; $ig = [Drawing.Graphics]::FromImage($ib); $ig.Clear($U.Band)
         $ig.TextRenderingHint = "AntiAlias"; $ig.DrawString("GT", (New-Object Drawing.Font("Segoe UI", 13, [Drawing.FontStyle]::Bold, [Drawing.GraphicsUnit]::Pixel)), [Drawing.Brushes]::White, 3, 7)
         $f.Icon = [Drawing.Icon]::FromHandle($ib.GetHicon())
     } catch {}
     if ($U.SnapDir) { $f.StartPosition = "Manual"; $f.Location = New-Object Drawing.Point(-10000, -10000); $f.ShowInTaskbar = $false }
     else { $f.StartPosition = "CenterScreen" }
 
-    $band = New-Ctl "Panel" $f 0 0 760 78; $band.BackColor = $U.Red
-    $t1 = New-Ctl "Label" $band 22 6 700 40 "GRAN TURISMO 5  for PC"; $t1.ForeColor = [Drawing.Color]::White
+    $band = New-Ctl "Panel" $f 0 0 760 78; $band.BackColor = $U.Band
+    $t1 = New-Ctl "Label" $band 22 6 700 40 "GT5 Recomp"; $t1.ForeColor = [Drawing.Color]::White
     $t1.Font = New-Object Drawing.Font("Segoe UI Semibold", (20 * $fk))
-    $U.Sub = New-Ctl "Label" $band 25 48 720 24; $U.Sub.ForeColor = [Drawing.Color]::FromArgb(255, 225, 225); $U.Sub.AutoEllipsis = $true
+    $U.Sub = New-Ctl "Label" $band 25 48 720 24; $U.Sub.ForeColor = [Drawing.Color]::FromArgb(186, 192, 208); $U.Sub.AutoEllipsis = $true
     $U.Pages = @{}
     foreach ($n in "pick", "work", "lic", "fin") {
         $pg = New-Ctl "Panel" $f 0 78 760 442; $pg.Visible = $false; $U.Pages[$n] = $pg
@@ -1322,7 +1322,7 @@ function Show-Page([string]$name) {
     $U.Page = $name
     $U.Sub.Text = switch ($name) {
         "pick" { "Builds the PC version from your own copy of the game. Point it at two things and press Install." }
-        "work" { if ($U.Mode -eq "run") { "Installing. You can use the PC meanwhile; this window can stay in the background." } else { $U.Sub.Text } }
+        "work" { if ($U.Mode -eq "run") { "Installing. You can keep using your PC." } else { $U.Sub.Text } }
         "lic"  { "One question before the compiler tools are fetched." }
         "fin"  { "Finished." }
     }
@@ -1364,7 +1364,7 @@ function Build-PickPage($pg) {
     $bfB = New-Btn $pg "Browse..." 502 $rf.Y 110; $bfS = New-Btn $pg "Get it from Sony" 620 $rf.Y 118
     $bdB = New-Btn $pg "Browse..." 502 $rd.Y 110
     $note = New-Ctl "Label" $pg 22 330 716 50; $note.ForeColor = $U.Dim
-    $note.Text = "Takes about an hour the first time. Git, Python and the compiler tools go into the install folder when the PC doesn't have them: nothing is installed in Windows. Nothing from the game is ever uploaded or shared."
+    $note.Text = "Takes about an hour the first time. Everything goes into the install folder. Nothing from your game is uploaded or shared."
     $U.Go = New-Btn $pg "Install" 520 392 110; $U.Go.Font = $U.Bold
     $cancel = New-Btn $pg "Cancel" 638 392 100
     $U.Form.AcceptButton = $U.Go
@@ -1522,7 +1522,7 @@ function Draw-Steps([Drawing.Graphics]$g, [int]$w) {
             $pen.Dispose()
         } elseif ($st -eq "run") {
             $pen = New-Object Drawing.Pen([Drawing.Color]::FromArgb(225, 225, 225), $pw); $g.DrawEllipse($pen, $r); $pen.Dispose()
-            $pen = New-Object Drawing.Pen($U.Red, $pw); $g.DrawArc($pen, $r, [float]$U.Spin, [float]110); $pen.Dispose()
+            $pen = New-Object Drawing.Pen($U.Accent, $pw); $g.DrawArc($pen, $r, [float]$U.Spin, [float]110); $pen.Dispose()
         } elseif ($st -eq "fail" -or $st -eq "stop") {
             $g.FillEllipse($(if ($st -eq "fail") { $U.BrBad } else { $U.BrAmber }), $r)
             $pen = New-Object Drawing.Pen([Drawing.Color]::White, $pw)
@@ -1592,7 +1592,7 @@ function Send-Answer([string]$a) {
 # ---- Page: finished ---------------------------------------------------------------------------------------
 function Build-FinishPage($pg) {
     $U = $script:U
-    $U.FinBig = New-Ctl "Label" $pg 22 18 716 40 "Done! Gran Turismo 5 is installed."; $U.FinBig.Font = $U.Big; $U.FinBig.ForeColor = $U.Ok
+    $U.FinBig = New-Ctl "Label" $pg 22 18 716 40 "Done! GT5 Recomp is installed."; $U.FinBig.Font = $U.Big; $U.FinBig.ForeColor = $U.Ok
     $U.FinWhere = New-Ctl "Label" $pg 22 64 716 22; $U.FinWhere.AutoEllipsis = $true
     $tips = New-Ctl "Label" $pg 22 100 716 110
     $tips.Text = "Play opens the launcher: settings (resolution, full screen, wheel, language), Play and Updates.`r`n`r`nKeyboard: Z = Cross, X = Circle, arrows, Enter = Start. Pads work too. More in README.md.`r`nTo update later: the launcher's Updates page, or Update.bat in the install folder."
@@ -1639,7 +1639,7 @@ function Start-Engine {
     $U.NoteL.Text = ""; $U.NoteL.ForeColor = $U.Amber
     $U.StepT0 = Get-Date; $U.RunT0 = Get-Date; $U.ExitSeen = 0; $U.LastSnapT = [Environment]::TickCount
     Set-WorkMode "run"
-    $U.Sub.Text = "Installing. You can use the PC meanwhile; this window can stay in the background."
+    $U.Sub.Text = "Installing. You can keep using your PC."
     $psi = New-Object Diagnostics.ProcessStartInfo (Join-Path $PSHOME "powershell.exe")
     $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -Command "iex ([IO.File]::ReadAllText($env:GT5_INSTALLER))"'
     $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
@@ -1688,7 +1688,7 @@ function Request-Cancel {
     if (-not $U.Proc) { return $true }
     $sure = $true
     if (-not $env:GT5_INSTALL_TESTCANCEL) {
-        $sure = ([Windows.Forms.MessageBox]::Show($U.Form, "Stop the installation?`r`n`r`nWhat's done so far is kept: run the installer again (or press Try again) to carry on from here.", "Gran Turismo 5 for PC - installer", "YesNo", "Question") -eq "Yes")
+        $sure = ([Windows.Forms.MessageBox]::Show($U.Form, "Stop the installation?`r`n`r`nWhat's done so far is kept: run the installer again (or press Try again) to carry on from here.", "GT5 Recomp - installer", "YesNo", "Question") -eq "Yes")
     }
     if (-not $sure -or -not $U.Proc) { return $false }
     $U.Cancelled = $true
@@ -1848,7 +1848,7 @@ if ($Role -eq "ui") {
     catch {
         $m = "The installer window hit an error: $($_.Exception.Message) (line $($_.InvocationInfo.ScriptLineNumber))."
         try { [IO.File]::AppendAllText($LogPath, "`r`n$m`r`n") } catch {}
-        try { [void][Windows.Forms.MessageBox]::Show("$m`r`n`r`nThe log is $LogPath. Running GT5-Installer.bat with GT5_INSTALL_NOGUI=1 works without the window.", "Gran Turismo 5 for PC - installer") } catch {}
+        try { [void][Windows.Forms.MessageBox]::Show("$m`r`n`r`nThe log is $LogPath. Running GT5-Installer.bat with GT5_INSTALL_NOGUI=1 works without the window.", "GT5 Recomp - installer") } catch {}
         if ($script:U.Proc) { Stop-Engine }
     }
     exit 0

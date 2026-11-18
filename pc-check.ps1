@@ -38,7 +38,7 @@ function Use-GoodProcessors {
         } catch { }
     }
     if ($null -eq $bad) {
-        Write-Host "            Checking that every processor of this PC calculates correctly (a minute or two)..."
+        Write-Host "            Checking this PC (a minute or two)..."
         $tmp = Join-Path ([IO.Path]::GetTempPath()) ("gt5_pc_check_" + [guid]::NewGuid().ToString("N") + ".json")
         $rounds = if ($Again) { 6 } else { 4 }
         & $Py -I $script --rounds $rounds --json $tmp | Out-Null
@@ -56,12 +56,12 @@ function Use-GoodProcessors {
             $save = @{ when = (Get-Date).ToString("s"); processor = $cpu; logical = $n; bad = @($bad) } | ConvertTo-Json
             [IO.File]::WriteAllText($rec, $save)
         } catch { }
-        if (-not $bad.Count) { Write-Host "            All $n processors gave the same answers." }
+        if (-not $bad.Count) { Write-Host "            This PC passed the check." }
     }
     if (-not $bad.Count) { return }
     $good = $n - $bad.Count
     if ($good -lt 2) {
-        return "Almost every processor of this PC gave wrong answers in a test calculation, so none can be left out. The install goes on, but expect it to fail: this PC needs fixing first (README.md, 'A processor that calculates wrongly')."
+        return "Most processors of this PC failed the check, so none is left out; the install may not finish. (More in README.md: 'A processor that calculates wrongly'.)"
     }
     $mask = [long]0
     for ($i = 0; $i -lt $n; $i++) { if ($bad -notcontains $i) { $mask = $mask -bor ([long]1 -shl $i) } }
@@ -70,9 +70,9 @@ function Use-GoodProcessors {
         $cur = [long]$p.ProcessorAffinity
         if (($cur -band $mask) -ne 0) { $mask = $cur -band $mask }     # inside a limit somebody already set
         $p.ProcessorAffinity = [IntPtr]$mask
-    } catch { return "Processors $($bad -join ', ') of this PC gave wrong answers in a test calculation, and the install could not be kept off them ($($_.Exception.Message))." }
+    } catch { return "Processors $($bad -join ', ') failed the check, but could not be left out ($($_.Exception.Message))." }
     $which = if ($bad.Count -eq 1) { "Processor $($bad[0])" } else { "Processors $($bad -join ', ')" }
-    return "$which of this PC's $n gave wrong answers in a test calculation. The install goes on using the other $good only. This is a fault of the PC (processor, BIOS settings or a driver), not of the game: see README.md, 'A processor that calculates wrongly'."
+    return "$which failed the check and won't be used; the other $good will. (More in README.md: 'A processor that calculates wrongly'.)"
 }
 
 # Run by itself: the check, in full, and what the port would do about it.

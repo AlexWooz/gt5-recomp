@@ -9,6 +9,15 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.106**
+
+🎨 **Installer: a calmer look and plainer words**
+- The header is dark slate with a blue progress bar and spinner (it was a large red band, which looked
+  alarming); red is kept for an actual failure. The window is titled **GT5 Recomp**.
+- The steps and status lines say what is happening in a few plain words ("Build tools", "Converting the
+  game", "Done") without tool names or file names. The specifics are still in Details and in the log.
+- Notes that don't need the player (a fallback that worked, a compiler retry, processors left out by the
+  check) no longer appear in the main window; they are in Details and the log.
 🏷️ Released as **v0.1.105**
 
 🪟 **The installer is one window now, installs nothing into Windows, and no longer needs RPCS3**
