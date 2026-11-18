@@ -45371,7 +45371,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
      }
      if (!ea || ea == 0xFFFFFFFFu ||
          (uint64_t)ea + min_bytes > 0x100000000ull) return nullptr;
-@@ -446,8 +564,68 @@
+@@ -446,8 +564,77 @@
  
  extern "C" const char* cellGame_get_title(void);   /* PARAM.SFO TITLE, for the caption */
  
@@ -45432,6 +45432,15 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
 +        sum = 0; n = 0; t_last = c.QuadPart;
 +    }
 +}
++/* A build made with -fprofile-generate (a profile-guided build's first stage) writes its counts in
++ * an atexit handler, which _exit and TerminateProcess skip: write them first. A weak reference, so
++ * any other build links without the profile runtime and this does nothing. */
++#if defined(__clang__) && !defined(_WIN32)
++extern "C" int __llvm_profile_write_file(void) __attribute__((weak));
++static void ps3_profile_flush(void) { if (__llvm_profile_write_file) __llvm_profile_write_file(); }
++#else
++static void ps3_profile_flush(void) {}
++#endif
 +
 +#include "ps3emu/thread_name.h"   /* ps3_thread_on_fast_cores */
  static DWORD WINAPI vblank_ticker(LPVOID)
@@ -45440,7 +45449,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
      /* Window caption: $PS3_TITLE wins, else the TITLE field PARAM.SFO already
       * gave cellGame, else a neutral name. It used to fall back to a specific
       * other title, so every port announced itself as that game. */
-@@ -461,21 +639,43 @@
+@@ -461,21 +648,43 @@
       * backbuffer when its clip EQUALS the backend size, so a title that renders
       * into something other than 1280x720 must say so: RSX_W / RSX_H. */
      uint32_t rsx_w = 1280, rsx_h = 720;
@@ -45487,7 +45496,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
          rsx_ok = (rsx_backend_init(rsx_w, rsx_h, _title) == 0);
      }
      fprintf(stderr, "[rsx] backend init %s\n", rsx_ok ? "OK -- window open" : "FAILED");
-@@ -485,7 +685,16 @@
+@@ -485,7 +694,16 @@
       * window DXGI Present throttles hard, which previously stalled these ticks and
       * paced the game's main loop to ~0.5fps. Drive the ticks off REAL elapsed time
       * and catch up in a bounded burst so present latency never slows the game. */
@@ -45505,7 +45514,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
      for (;;) {
          /* Was Sleep(4). The FIFO kick event existed, was signalled on a dry
           * fence queue, and had no waiter -- so a guest starved for `get` or a
-@@ -494,8 +703,9 @@
+@@ -494,8 +712,9 @@
           * does. */
          cellGcm_fifo_kick_wait(4);
          ULONGLONG now = GetTickCount64();
@@ -45516,7 +45525,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
              cellGcmTickVBlank();
              cellGcmTickFlip();
              /* Present a pending flip BEFORE draining further: the flip fires
-@@ -505,8 +715,8 @@
+@@ -505,8 +724,8 @@
               * writes and showed empty or mixed batches. */
              {
                  if (rsx_ok && cellGcm_take_flip_pending()) {
@@ -45527,7 +45536,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
                  }
              }
              /* Drain the game's GCM FIFO every tick -- this writes the RSX sync-fence
-@@ -514,20 +724,21 @@
+@@ -514,20 +733,21 @@
               * Doing it here (not after present) keeps those fences advancing at 60Hz
               * even when present() throttles on a hidden/occluded window. */
              if (rsx_ok) cellGcm_rsx_process_fifo();
@@ -45553,7 +45562,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
          }
          /* YDKJ_INJECT_Q3: the main thread polls q3 (load/state-complete) each frame but
           * it's never posted (producer signals a condvar, never enqueues). Inject a q3
-@@ -538,7 +749,24 @@
+@@ -538,7 +758,25 @@
              if(++s_q3 % 8 == 0){ int r=sys_event_queue_inject(qid, 0x1234, 0, 0, 0);
                static int _n=0; if(_n++<12) fprintf(stderr,"[INJQ3] injected q%u event rc=%d\n",qid,r); } }
          if (rsx_ok) {
@@ -45563,6 +45572,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
 +            if (rsx_pump_messages() != 0) {
 +                fprintf(stderr, "[rsx] window closed, exiting\n");
 +                fflush(stderr); fflush(stdout);
++                ps3_profile_flush();   /* a profile-recording build: before the exit skips atexit */
 +#ifdef _WIN32
 +                /* [win] cleanly: the pads' motors off, a save in flight let finish, every open file
 +                 * flushed (PS3_EXIT_CLEAN=0: at once, as before). The window's own quit
@@ -45579,7 +45589,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
              if (getenv("YDKJ_PACETRACE")) {
                  static ULONGLONG s_win=0; static int s_pf=0, s_pres=0; static ULONGLONG s_presms=0;
                  s_pf += fired; s_pres++;
-@@ -557,9 +785,9 @@
+@@ -557,9 +795,9 @@
                   * flash a partial frame (clear + a few draws). Before the
                   * first flip present freely so the window isn't stuck white
                   * during boot. */
@@ -45591,7 +45601,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
                      last_flip = fc;
                  } else if (fc == 0) {
                      rsx_backend_present();
-@@ -601,6 +829,8 @@
+@@ -601,6 +839,8 @@
  
  extern "C" const char* g_hle_inflight[];   /* ppu_hle.cpp; 64 entries */
  extern "C" void ppu_report_guest_lrs(void); /* ppu_loader.cpp */
@@ -45600,7 +45610,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
  
  static void dump_threads(const char* label, HMODULE self)
  {
-@@ -934,45 +1164,45 @@
+@@ -934,45 +1174,45 @@
              dump_threads("console", self);
          } else if (!strcmp(verb, "find32") && sscanf(cmd, "%*s %x", &a) == 1) {
              /* find32 <hex>: every aligned big-endian u32 equal to <hex> in committed
@@ -45675,7 +45685,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
          } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
              dbg_prof((DWORD)a, b ? b : 5);
          } else if (!strcmp(verb, "hle")) {
-@@ -1006,6 +1236,108 @@
+@@ -1006,6 +1246,108 @@
      return 0;
  }
  
@@ -45784,7 +45794,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
  static DWORD WINAPI hang_watchdog(LPVOID)
  {
      HMODULE self = NULL;
-@@ -1023,6 +1355,38 @@
+@@ -1023,6 +1365,38 @@
      snprintf(lbl, sizeof lbl, "%ds sample", t1); dump_threads(lbl, self);
      Sleep((DWORD)(t2 - t1) * 1000);
      snprintf(lbl, sizeof lbl, "%ds sample", t2); dump_threads(lbl, self);
@@ -45823,7 +45833,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
      return 0;
  }
  #endif
-@@ -1085,6 +1449,12 @@
+@@ -1085,6 +1459,12 @@
  
  int main(int argc, char** argv)
  {
@@ -45836,7 +45846,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
      /* <PPU ELF> [--username NAME] [--psnr host[:port]], flags in any order. */
      const char* elf = NULL;
      const char* username = NULL;
-@@ -1105,10 +1475,46 @@
+@@ -1105,10 +1485,46 @@
      np_psnr_setup(username, psnr);
  
  #ifdef _WIN32
@@ -45883,7 +45893,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
      SetUnhandledExceptionFilter(ydkj_crash_filter);
      AddVectoredExceptionHandler(0 /*last*/, [](EXCEPTION_POINTERS* ep)->LONG{
          if (ep->ExceptionRecord->ExceptionCode == 0xC00000FDu /*STACK_OVERFLOW*/) {
-@@ -1121,6 +1527,15 @@
+@@ -1121,6 +1537,15 @@
      { ULONG g=256*1024; SetThreadStackGuarantee(&g); }  /* reserve stack so the SO handler can run */
      signal(SIGABRT, ydkj_abort_handler);
      setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: don't lose prints on kill */
@@ -45899,7 +45909,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
  #endif
  
      /* Flat VM: one host buffer, guest addr -> vm_base + addr. This maps the
-@@ -1136,8 +1551,24 @@
+@@ -1136,8 +1561,24 @@
      /* Reserve the full 4 GB guest space; pages commit on first touch via the VEH. */
      AddVectoredExceptionHandler(1, guard_report_veh);  /* diagnose 0x80000001 silent deaths */
      AddVectoredExceptionHandler(1, vm_commit_veh);
@@ -45925,7 +45935,7 @@ diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
  #else
      vm_base = (uint8_t*)calloc(1, 0xE0000000u);
      ppu_vm_size = 0xE0000000u;
-@@ -1146,6 +1577,25 @@
+@@ -1146,6 +1587,25 @@
  
      uint32_t entry = ppu_load_elf(elf);
      if (!entry) { printf("load failed\n"); return 1; }
