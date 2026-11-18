@@ -17,7 +17,9 @@
 # Every file this script downloads itself is checked against the SHA-256 written below; portable-msvc.py
 # checks each Microsoft file against the SHA-256 in Microsoft's own catalog. Run it again to finish or
 # repair: the parts that are done are kept.
-param([string]$Path = "")
+# -AcceptLicence: you already accepted Microsoft's licence in GT5-Installer.bat's window (its tick box,
+# which only you can tick), so it isn't asked again here. Nothing else ever passes it.
+param([string]$Path = "", [switch]$AcceptLicence)
 $ErrorActionPreference = "Continue"
 $base = $PSScriptRoot
 # GitHub and Microsoft need TLS 1.2, which Windows PowerShell 5.1 doesn't always offer by default.
@@ -124,8 +126,13 @@ if (-not $msvcDone) {
     Write-Host ""
     Write-Host "    $licence" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "Please open that link and read it. Only you can accept it; this script never does it for you."
-    $a = Read-Host "Type yes to accept Microsoft's licence and go on (anything else stops here)"
+    if ($AcceptLicence) {
+        Write-Host "You accepted it in the installer window (GT5-Installer.bat)."
+        $a = "yes"
+    } else {
+        Write-Host "Please open that link and read it. Only you can accept it; this script never does it for you."
+        $a = Read-Host "Type yes to accept Microsoft's licence and go on (anything else stops here)"
+    }
     if ("$a".Trim() -ne "yes") {
         Write-Host ""
         Write-Host "Stopped; nothing was downloaded. Without Microsoft's libraries the game can't be built here." -ForegroundColor Yellow
@@ -228,7 +235,7 @@ if (-not $msvcDone) {
     $script = Get-Pinned "pmsvc"
     Remove-Item -LiteralPath (Join-Path $Path "msvc") -Recurse -Force -ErrorAction SilentlyContinue   # an unfinished earlier try
     Write-Host "            running portable-msvc.py $($MsvcArgs -join ' ') --accept-license"
-    Write-Host "            (--accept-license because you typed yes above; it fetches from Microsoft, 5-15 minutes)"
+    Write-Host "            (--accept-license because you accepted it above; it fetches from Microsoft, 5-15 minutes)"
     Push-Location -LiteralPath $Path
     & $pyExe @pyArgs $script @MsvcArgs --accept-license
     $code = $LASTEXITCODE

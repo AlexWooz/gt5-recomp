@@ -18,6 +18,9 @@ if ($env:GT5_GIT_SAFE -ne "1") {
     $env:GIT_CONFIG_COUNT = "$($gn + 1)"; $env:GT5_GIT_SAFE = "1"
 }
 $base = $PSScriptRoot
+# Git: the PC's own, else the port's own portable copy in tools\git (get-git.ps1; nothing installed in Windows).
+$ownGit = Join-Path $base "tools\git\cmd"
+if (-not (Get-Command git -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path $ownGit "git.exe"))) { $env:Path = "$ownGit;$env:Path" }
 $gt5 = Join-Path $base "GT5"
 $rc = Join-Path $base "ps3recomp"
 $venv = Join-Path $base "venv"
@@ -59,8 +62,12 @@ Write-Host ""
 Write-Host "Tools:"
 
 # ---- Git ------------------------------------------------------------------------------------------------
+if (-not (Get-Command git -ErrorAction SilentlyContinue) -and (Test-Path (Join-Path $base "get-git.ps1"))) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $base "get-git.ps1") | ForEach-Object { Write-Host "            $_" }
+    if (Test-Path -LiteralPath (Join-Path $ownGit "git.exe")) { $env:Path = "$ownGit;$env:Path" }
+}
 if (Get-Command git -ErrorAction SilentlyContinue) { Ok "Git" }
-else { Todo "Git" "Install Git for Windows (https://git-scm.com), then run setup.ps1 again."; Stop-Setup "Git is needed to fetch ps3recomp." }
+else { Todo "Git" "get-git.ps1 couldn't fetch the port's own Git (see above; is the internet connection up?). Run setup.ps1 again, or install Git for Windows (https://git-scm.com)."; Stop-Setup "Git is needed to fetch ps3recomp." }
 
 # ---- Python: the port's own copy (get-python.ps1, in tools\python) ------------------------------------------
 # The tools run in an environment (venv) made from python.org's Python 3.11.9 that get-python.ps1 puts in
@@ -140,7 +147,7 @@ foreach ($r in @("${env:ProgramFiles(x86)}\Windows Kits\10\Lib", "$env:ProgramFi
     }
 }
 if ($vsOk -and -not $sdkOk -and -not (Find-Toolchain)) {
-    Todo "Windows SDK" "Your Visual Studio has the Clang tools but no Windows SDK (kernel32.lib and the other Windows libraries the build needs). In the Visual Studio Installer choose Modify, tick 'Windows 11 SDK' under Individual components, then run setup.ps1 again. GT5-Installer.bat adds it by itself."
+    Todo "Windows SDK" "Your Visual Studio has the Clang tools but no Windows SDK (kernel32.lib and the other Windows libraries the build needs). In the Visual Studio Installer choose Modify, tick 'Windows 11 SDK' under Individual components, then run setup.ps1 again. (GT5-Installer.bat fetches its own compiler tools instead in that case.)"
 }
 elseif ($vsOk -and $sdkOk) { Ok "Visual Studio with the C++ Clang tools" }
 else {
@@ -269,6 +276,13 @@ if ($script:todo -gt 0) {
 if ($NoBuild) { Write-Host "Everything is in place. Run setup.ps1 without -NoBuild to build the game." -ForegroundColor Green; exit 0 }
 
 # ---- Generate the game code (only when it's missing or out of date), then build --------------------------
+# Processors that calculate wrongly are left out of everything from here on (pc-check.ps1 says why).
+$pcCheck = Join-Path $base "pc-check.ps1"
+if (Test-Path -LiteralPath $pcCheck) {
+    . $pcCheck
+    $pcNote = Use-GoodProcessors -Base $base -Py $py
+    if ($pcNote) { Write-Host $pcNote -ForegroundColor Yellow }
+}
 Push-Location $gt5
 & $py "scripts\lift_stamp.py" --check | Out-Null
 if ($LASTEXITCODE -ne 0) {
@@ -276,12 +290,16 @@ if ($LASTEXITCODE -ne 0) {
     & powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\relift.ps1"
     if ($LASTEXITCODE -ne 0) {
         # Seen on a player's PC: a step stopped with an error from inside Python itself that no line of the
-        # tool can raise (Python ran a wrong instruction). Every step starts again from its inputs, so one
-        # more try costs ten minutes and gets past a one-off.
+        # tool can raise: two of its processors calculated wrongly. So the check is made again, now with
+        # one of the lift's own jobs, any processor that fails is left out, and the lift starts again.
+        if (Get-Command Use-GoodProcessors -ErrorAction SilentlyContinue) {
+            $pcNote = Use-GoodProcessors -Base $base -Py $py -Again
+            if ($pcNote) { Write-Host $pcNote -ForegroundColor Yellow }
+        }
         Write-Host "Generating the game code stopped (see above). Trying once more from the start..." -ForegroundColor Yellow
         & powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\relift.ps1"
     }
-    if ($LASTEXITCODE -ne 0) { Pop-Location; Stop-Setup "generating the game code failed twice with Python $pyVer (see above). If the error is a Python 'Traceback' and that Python is not the port's own, run GT5-Installer.bat again (it switches to the port's own Python). Otherwise please report it with that output: https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml" }
+    if ($LASTEXITCODE -ne 0) { Pop-Location; Stop-Setup "generating the game code failed twice with Python $pyVer (see above). Please report it with that output: https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml" }
 } else {
     Write-Host "The game code is already generated and current."
 }

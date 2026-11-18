@@ -72,9 +72,12 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
    - **your GT5 game**: the folder of your disc dump (the one with `PS3_GAME` in it) or an `.iso`;
    - **PS3UPDAT.PUP**, Sony's free PS3 system software (the window has a button that opens Sony's page).
 
-That's all. It installs Git if it's missing, downloads this code, its own copy of Python (17 MB) and the compiler tools
+That's all, and it all happens in that one window: the steps, a progress bar, and what went wrong if
+something does. Nothing is installed into Windows. It downloads this code and, into the install folder,
+its own copies of Git (38 MB, only when the PC has none), Python (17 MB) and the compiler tools
 (about 1.5 GB, into the install folder: **no Visual Studio is installed or changed**; Microsoft's
-libraries in it come under Microsoft's licence, which the installer shows and asks you to accept), unlocks your game's executable and the system software with RPCS3 (used only as a tool for that:
+libraries in it come under Microsoft's licence, which the installer shows and asks you to accept), unlocks your game's executable and the system software (with the port's own small tool; RPCS3 is fetched
+only if that fails, as a tool:
 the game itself runs natively as `gt5.exe`, not in an emulator), builds the game (about an hour the
 first time) and puts **Gran Turismo 5 (PC)** on your desktop, which opens the [launcher](#launcher).
 Nothing from the game is ever uploaded or shared.
@@ -805,11 +808,34 @@ The Windows build under **Proton** is untried too. Direct3D 12 would go through 
   or Linux Mint 22), and a Vulkan-compatible GPU with a Vulkan driver. Follow the
   [Linux setup](#linux) to install build dependencies and prepare the game.
 - An AVX2-capable CPU and 16 GB of RAM for the first build.
-- Git. Python is not needed: `setup.ps1` fetches the port's own copy (python.org's 3.11.9, 17 MB) into
-  `tools\python` and runs every tool on it; nothing is installed in Windows.
+- Git and Python are not needed: `setup.ps1` fetches the port's own copies into `tools\git` (MinGit,
+  only when the PC has no Git) and `tools\python` (python.org's 3.11.9, 17 MB) and runs every tool on
+  them; nothing is installed in Windows.
 - About 25 GB free on Windows or 30 GB on Linux, including about 17 GB of game files.
 - Your own GT5 disc (BCES00569, BCUS98114 or BCAS20108) and the means to dump it, and
   [RPCS3](https://rpcs3.net/download) to install PS3 firmware and decrypt the game's executable.
+
+<a id="pc-check"></a>
+
+### A processor that calculates wrongly
+
+The game is built on your PC by long calculations, and they assume every processor gives the right
+answer. On some PCs one or two logical processors don't (seen on a 14th generation Intel desktop
+processor: two of its 28 failed a fixed job most of the time, the other 26 never). The signs are tools
+stopping with errors that make no sense, compiler crashes, or a game that misbehaves.
+
+Setup checks for this before it generates and builds the game: a small fixed job runs on every
+processor, and any processor that gives an error or a different result is left out of the whole install.
+You are told which. The result is kept for 30 days in `.gt5\pc-check.json`. To run the check by hand:
+
+```
+powershell -ExecutionPolicy Bypass -File pc-check.ps1
+```
+
+Leaving processors out gets the game built, but the PC still has the fault, and other programs (and the
+game itself) can hit it. What usually cures it: the newest BIOS for your motherboard (for Intel 13th and
+14th generation processors it carries Intel's fix), the processor maker's default settings in the BIOS
+instead of the motherboard's "performance" ones, memory at its standard speed, and current drivers.
 
 <a id="no-visual-studio"></a>
 

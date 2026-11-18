@@ -9,6 +9,49 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
+🏷️ Released as **v0.1.105**
+
+🪟 **The installer is one window now, installs nothing into Windows, and no longer needs RPCS3**
+- **One window from start to finish.** After Install the same window shows the eight steps (done,
+  running, waiting), one line saying what is happening and roughly how long it takes, a progress bar
+  with real figures (download bytes, files copied, functions generated, the compiler's file count), and a
+  Details button with the full text. The command prompt that used to scroll for an hour is gone (the
+  .bat's own console closes after a fraction of a second).
+- **Questions are part of the window.** Microsoft's licence for the compiler libraries is a page with
+  the link and a tick box that only you can tick (it used to be "type yes" in the console). Nothing else
+  asks anything.
+- **When something stops**, the window says what in a sentence, with Try again (it resumes: finished
+  steps are skipped), Open the log, Copy details and Report a problem. Cancel, or closing the window,
+  asks once, stops everything it started and says it is safe to run again.
+- **Finish page** with Play and a tick box for the desktop shortcut.
+- **No RPCS3 for the unlock steps.** The game's `EBOOT.BIN` and Sony's firmware file are now unlocked by
+  the port's own small tool, `GT5\scripts\ps3_unlock.py` (Python standard library only; about 3 s for
+  the firmware, under a second for the executable). It was checked byte for byte against RPCS3's output:
+  the executable of the Europe 1.00 disc (and, by the tool's own tests, the Asian 1.00 disc and the 2.01
+  and 2.17 updates) and all 1,075 files of firmware 4.92. Sony's keys are still not in this repository:
+  the tool fetches the key tables (about 50 KB) from RPCS3's public source at a pinned commit, checked by
+  SHA-256. If that fetch or the tool fails, the installer falls back to RPCS3 as before, now started
+  hidden; RPCS3 is downloaded only then. Installing game-update `.pkg` files still uses RPCS3.
+- **Nothing is installed into Windows any more.** Git was the last thing (winget, with a permission
+  prompt): when the PC has no Git, the port fetches a portable one (Git for Windows' MinGit 2.56.1,
+  38 MB, SHA-256 and signature checked) into `tools\git`, and the installer, `setup.ps1`, `update.ps1`
+  (so Update.bat and the launcher's Update button), `add_vulkan.ps1` and `add_dlss.ps1` use it.
+- **A PC whose processors calculate wrongly no longer breaks the install.** A fresh install on an
+  i7-14700KF kept stopping in code generation with Python errors that the tools' own lines cannot
+  raise. A deterministic job run on each of its 28 logical processors showed why: two of them failed it
+  most of the time, the other 26 never. Setup (and the installer, before it unlocks anything) now makes
+  that check, a minute or two, with the new `GT5\scripts\pc_check.py`; processors that fail are left
+  out of the whole install, the player is told which, and the result is kept for 30 days. If code
+  generation still stops, the check is made again with one of the lift's own jobs before the second
+  try. `pc-check.ps1` runs it by hand; README, "A processor that calculates wrongly".
+- Also fixed: running the installer on an existing install updates it first (the tools used to run from
+  the old scripts); a download or copy that was cut short resumes (it used to count as done, or block
+  the folder); an .iso is dismounted properly; output of every program reaches the log.
+- Tested on this PC up to the build (new install with no Git, existing install, the licence page,
+  a forced failure, cancel, both unlock routes). **Not tested: a whole install through the hour-long
+  build with the new window**; that run is being made after this release.
+- No re-lift: nothing the code generation is made from changed.
+
 🏷️ Released as **v0.1.104**
 
 🏷️ Released as **v0.1.103**

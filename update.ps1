@@ -25,6 +25,9 @@ if ($env:GT5_GIT_SAFE -ne "1") {
     $env:GIT_CONFIG_COUNT = "$($gn + 1)"; $env:GT5_GIT_SAFE = "1"
 }
 $base = $PSScriptRoot
+# Git: the PC's own, else the port's own portable copy in tools\git (get-git.ps1; nothing installed in Windows).
+$ownGit = Join-Path $base "tools\git\cmd"
+if (-not (Get-Command git -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path $ownGit "git.exe"))) { $env:Path = "$ownGit;$env:Path" }
 $gt5 = Join-Path $base "GT5"
 $rc = Join-Path $base "ps3recomp"
 $state = Join-Path $base ".gt5"
@@ -261,13 +264,25 @@ if (Test-Path (Join-Path $gt5 "scripts\update_exe.ps1")) {
 }
 
 # ---- Re-lift only when this version changes what the generated code is made from, then build --------------
+# Processors that calculate wrongly are left out of everything from here on (pc-check.ps1 says why).
+$pcCheck = Join-Path $base "pc-check.ps1"
+if (Test-Path -LiteralPath $pcCheck) {
+    . $pcCheck
+    $pcNote = Use-GoodProcessors -Base $base -Py $py
+    if ($pcNote) { Write-Host $pcNote -ForegroundColor Yellow }
+}
 Push-Location $gt5
 & $py "scripts\lift_stamp.py" --check
 if ($LASTEXITCODE -ne 0 -or $Force) {
     Write-Host "Re-lifting (about 10 minutes): this version changes the lift tools, mods or your EBOOT."
     & powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\relift.ps1"
     if ($LASTEXITCODE -ne 0) {
-        # A step that stops inside Python itself (seen on a player's PC) usually passes the second time.
+        # A step that stops inside Python itself: the processors are checked again with one of the lift's
+        # own jobs, any that calculates wrongly is left out, and the lift starts again.
+        if (Get-Command Use-GoodProcessors -ErrorAction SilentlyContinue) {
+            $pcNote = Use-GoodProcessors -Base $base -Py $py -Again
+            if ($pcNote) { Write-Host $pcNote -ForegroundColor Yellow }
+        }
         Write-Host "The re-lift stopped (see above). Trying once more from the start..." -ForegroundColor Yellow
         & powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\relift.ps1"
     }

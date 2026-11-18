@@ -30,6 +30,9 @@ if ($env:GT5_GIT_SAFE -ne '1') {
     $env:GIT_CONFIG_COUNT = "$($gn + 1)"; $env:GT5_GIT_SAFE = '1'
 }
 $gt5 = Split-Path -Parent $PSScriptRoot
+# Git: the PC's own, else the port's own portable copy in tools\git (get-git.ps1; nothing installed in Windows).
+$ownGit = Join-Path (Split-Path -Parent $gt5) 'tools\git\cmd'
+if (-not (Get-Command git -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path $ownGit 'git.exe'))) { $env:Path = "$ownGit;$env:Path" }
 $build = Join-Path $gt5 'build'
 $deps = Join-Path $gt5 'deps\dlss'
 $plug = Join-Path $build 'gt5_upscale_dlss.dll'

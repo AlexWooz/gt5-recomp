@@ -60,7 +60,7 @@ for i in range(60000):
     ins.append(Ins(i * 4, x >> 26, (x >> 13) & 127, x & 127))
 h = hashlib.sha256()
 bounds = [(s, s + 2400) for s in range(0, 240000, 2000)]
-for rnd in range(6):
+for rnd in range(20):
     for (s, e) in bounds:
         fn = [i for i in ins if s <= i.addr < e]
         acc = 0
