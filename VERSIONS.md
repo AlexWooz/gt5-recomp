@@ -6,6 +6,8 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.104](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.104) | 17 Nov 2026 | The port's own Python (python.org 3.11.9 in tools\python): no Python install, the PC's Python is no longer used |
+| [v0.1.103](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.103) | 17 Nov 2026 | Setup: retry a code-generation step that stops inside Python; final Python releases only |
 | [v0.1.102](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.102) | 17 Nov 2026 | Installer: no Visual Studio install, compiler tools fetched into the install folder |
 | [v0.1.101](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.101) | 17 Nov 2026 | NVIDIA DLSS / DLAA, frame generation from the game's own motion, menu fixes |
 | [v0.1.100](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.100) | 17 Nov 2026 | In-game menu: cockpit view, mouse steering and force feedback apply while playing |

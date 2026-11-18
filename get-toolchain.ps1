@@ -85,15 +85,23 @@ if (-not (Test-Path (Join-Path $Path "gt5-toolchain.txt")) -and $free -lt 3) {
     Stop-Here "that drive has $free GB free and this needs about 3 GB while it works. Free some space, or run it again and choose a folder on another drive."
 }
 
-# ---- Python (runs portable-msvc.py and unpacks LLVM): setup.ps1's venv, else Python 3.9 or newer --------------
+# ---- Python (runs portable-msvc.py and unpacks LLVM): setup.ps1's venv, else the port's own Python
+# (get-python.ps1 fetches it into tools\python), else Python 3.9 or newer on the PC ----------------------------
 $py = @(Join-Path $base "venv\Scripts\python.exe")
 if (-not (Test-Path $py[0])) {
+    $own = Join-Path $base "tools\python\python.exe"
+    if (-not (Test-Path $own) -and (Test-Path (Join-Path $base "get-python.ps1"))) {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $base "get-python.ps1") | Out-Host
+    }
     $py = $null
+    if (Test-Path $own) { $py = @($own) }
+    else {
     foreach ($cand in @(@("py", "-3"), @("python"), @("python3"))) {
         if (-not (Get-Command $cand[0] -ErrorAction SilentlyContinue)) { continue }
         $rest = @($cand | Select-Object -Skip 1)
         $v = & $cand[0] @rest -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
         if ($LASTEXITCODE -eq 0 -and "$v" -match '^3\.(\d+)$' -and [int]$Matches[1] -ge 9) { $py = $cand; break }
+    }
     }
     if (-not $py) { Stop-Here "Python 3.9 or newer is needed. Install it from https://www.python.org/downloads/ (tick 'Add python.exe to PATH'), then run this again." }
 }

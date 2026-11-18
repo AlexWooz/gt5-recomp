@@ -15,7 +15,8 @@ goto :eof
 # Gran Turismo 5 for PC installer
 #
 # What it does, in the install folder you choose:
-#   1. installs Git and Python if they're missing (winget)
+#   1. installs Git if it's missing (winget). Python is not installed: the port fetches its own copy
+#      (python.org's 3.11.9, 17 MB) into the install folder's tools\python.
 #   2. downloads the port's code from GitHub (code only: nothing from the game), and, unless a Visual
 #      Studio with the Clang tools is already on the PC, the compiler tools with get-toolchain.ps1: about
 #      1.5 GB in the install folder's tools\toolchain, no Visual Studio, nothing installed in Windows.
@@ -223,7 +224,7 @@ function Show-Installer($game0, $fw0, $dest0) {
     $bdB = New-Button "Browse..." 502 $rd.Y 110
 
     $note = New-Object Windows.Forms.Label; $note.SetBounds((S 22), (S 412), (S 716), (S 44)); $note.ForeColor = [Drawing.Color]::DimGray
-    $note.Text = "Takes about an hour the first time. Git and Python are installed if missing (Windows may ask for permission); the compiler tools (about 1.5 GB) go into the install folder, with no Visual Studio. Nothing from the game is ever uploaded or shared."
+    $note.Text = "Takes about an hour the first time. Git is installed if missing (Windows may ask for permission). Python and the compiler tools (about 1.5 GB) go into the install folder: no Visual Studio, nothing else installed in Windows. Nothing from the game is ever uploaded or shared."
     $f.Controls.Add($note)
     $go = New-Button "Install" 520 470 110; $go.Font = $bold; $cancel = New-Button "Cancel" 638 470 100
     $f.AcceptButton = $go; $f.CancelButton = $cancel
@@ -283,15 +284,6 @@ function Install-WithWinget([string]$id, [string]$name, [string[]]$extra) {
     Say "  installing $name (Windows may ask for permission)..." "Yellow"
     & winget install --id $id -e --source winget --accept-package-agreements --accept-source-agreements @extra
     Update-Path
-}
-function Find-Python {
-    foreach ($c in @(@("py", "-3.11"), @("py", "-3.12"), @("py", "-3.13"), @("py", "-3"), @("python"))) {
-        $exe = $c[0]; $a = @($c | Select-Object -Skip 1)
-        if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
-        $v = & $exe @a -c "import sys; print(1 if sys.version_info >= (3, 11) else 0)" 2>$null
-        if ($v -eq "1") { return $true }
-    }
-    return $false
 }
 $VsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 function Find-VsClang {
@@ -472,16 +464,13 @@ if ($env:GT5_GIT_SAFE -ne "1") {
 }
 
 # ---- 1. Tools --------------------------------------------------------------------------------------
-Step 1 "Tools: Git, Python"
+Step 1 "Tools: Git"
 Update-Path
 if (Get-Command git -ErrorAction SilentlyContinue) { Say "  Git: ok" } else {
     Install-WithWinget "Git.Git" "Git" @("--silent")
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Stop-Install "Git didn't install. Install it from https://git-scm.com and run this again." }
 }
-if (Find-Python) { Say "  Python: ok" } else {
-    Install-WithWinget "Python.Python.3.11" "Python 3.11" @("--silent")
-    if (-not (Find-Python)) { Stop-Install "Python didn't install. Install Python 3.11 from https://www.python.org (tick 'Add python.exe to PATH') and run this again." }
-}
+Say "  Python: the port's own copy, fetched in step 2 into the install folder (17 MB; nothing is installed)"
 # The compiler: a Visual Studio with the Clang tools and the Windows SDK that is already here is used as it
 # is. Otherwise the tools come from get-toolchain.ps1 after the code is downloaded (step 2). This installer
 # never installs or changes Visual Studio: that took 7 GB or more, opened the Visual Studio Installer, and
@@ -504,6 +493,16 @@ if ($dest.Existing) {
 }
 $tools = Join-Path $base "tools"
 New-Item -ItemType Directory -Force $tools | Out-Null
+# The port's own Python (python.org's build, checked by hash and signature), for every tool from here on.
+# setup.ps1 makes its environment from it; GT5_OWN_PYTHON=1 also replaces an environment an earlier
+# install made from the PC's Python.
+$getPy = Join-Path $base "get-python.ps1"
+if (Test-Path -LiteralPath $getPy) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $getPy | ForEach-Object { Say "  $_" }
+    if (-not (Test-Path (Join-Path $tools "python\python.exe"))) { Stop-Install "the port's own Python wasn't fetched (see above; is the internet connection up?)." }
+}
+# An older copy of the code has no get-python.ps1 yet: step 7 updates it first, and setup.ps1 fetches it then.
+$env:GT5_OWN_PYTHON = "1"
 if (-not $useVs) {
     $tc = Find-Toolchain $base
     if ($tc) { Say "  compiler tools: already in $tc" } else {

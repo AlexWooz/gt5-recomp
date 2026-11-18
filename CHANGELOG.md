@@ -9,7 +9,35 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 
 ## 17 Nov 2026
 
-🏷️ Released as **v0.1.102**
+🏷️ Released as **v0.1.104**
+
+🏷️ Released as **v0.1.103**
+
+🏷️ Released as **v0.1.103**
+
+🐍 **The port brings its own Python: none has to be installed, and the PC's own is no longer used**
+- Why: the tools that turn the game's code into C++ are Python programs, and until now they ran on
+  whatever Python the PC had (or the installer put Python 3.11 on the PC with winget). A fresh install
+  on a player's PC stopped in "spu_jobs" with `TypeError: 'int' object does not support the context
+  manager protocol` on a line with no `with` in it: an error from inside that PC's Python, which the
+  tool's own line cannot raise.
+- Now `setup.ps1` (and the installer, right after it downloads the code) runs the new `get-python.ps1`:
+  python.org's own build of **Python 3.11.9**, the version every release is generated with, from the
+  package the Python Software Foundation publishes on nuget.org. 17 MB, 43 MB unpacked, into
+  `tools\python` of the install folder. The download is checked against a SHA-256 and `python.exe` must
+  carry the Python Software Foundation's signature. Nothing is installed in Windows, no administrator
+  rights, PATH untouched; delete the folder to remove it.
+- The tools' environment (`venv`) is made from that copy. An install that already works keeps its
+  environment as it is. Running `GT5-Installer.bat` again switches an existing install to the port's
+  own Python (that is the fix for the install above: download the new installer and run it again).
+- `GT5-Installer.bat` no longer installs Python; of the things it used to put on the PC only Git is
+  left. `get-toolchain.ps1` uses the port's Python too.
+- If generating the game code still stops once, `setup.ps1` and `update.ps1` run it a second time from
+  the start before giving up, and the message names the Python version.
+- The lift scripts themselves are unchanged, so nobody has to regenerate the game code for this update.
+- Checked on made-up install folders: fetch (and a second run finding it there), a new environment made
+  from it with the tools' packages installed, an existing environment kept, and one made again when the
+  installer asks. The player's failure itself could not be reproduced here.
 
 🧰 **The installer no longer installs or changes Visual Studio**
 - `GT5-Installer.bat` used to install Microsoft's C++ Build Tools (about 7 GB) when no Visual Studio with

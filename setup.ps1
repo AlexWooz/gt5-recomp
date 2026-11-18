@@ -62,23 +62,48 @@ Write-Host "Tools:"
 if (Get-Command git -ErrorAction SilentlyContinue) { Ok "Git" }
 else { Todo "Git" "Install Git for Windows (https://git-scm.com), then run setup.ps1 again."; Stop-Setup "Git is needed to fetch ps3recomp." }
 
-# ---- Python 3.11 or newer (the py launcher first: plain "python" can be the Microsoft Store stub) --------
-$pyCmd = $null
-foreach ($cand in @(@("py", "-3.11"), @("py", "-3.12"), @("py", "-3.13"), @("py", "-3"), @("python"), @("python3"))) {
-    if (-not (Get-Command $cand[0] -ErrorAction SilentlyContinue)) { continue }
-    $rest = @($cand | Select-Object -Skip 1)
-    $v = & $cand[0] @rest -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
-    if ($LASTEXITCODE -eq 0 -and "$v" -match '^3\.(\d+)$' -and [int]$Matches[1] -ge 11) { $pyCmd = $cand; break }
+# ---- Python: the port's own copy (get-python.ps1, in tools\python) ------------------------------------------
+# The tools run in an environment (venv) made from python.org's Python 3.11.9 that get-python.ps1 puts in
+# this folder: the version they are tested on, whatever Python the PC has or hasn't. An environment that
+# already exists is kept as it is (an earlier setup made it from the PC's Python), unless GT5_OWN_PYTHON=1
+# (GT5-Installer.bat sets it) asks for it to be made again from the port's own.
+$ownPy = Join-Path $base "tools\python\python.exe"
+function Get-PyVer([string]$p) { return "$(& $p -c "import sys; print('%d.%d.%d%s' % (sys.version_info[:3] + ('' if sys.version_info.releaselevel == 'final' else ' ' + sys.version_info.releaselevel,)))" 2>$null)".Trim() }
+function Test-VenvIsOwn {
+    $cfg = Join-Path $venv "pyvenv.cfg"
+    if (-not (Test-Path -LiteralPath $cfg)) { return $false }
+    $h = (Get-Content -LiteralPath $cfg | Where-Object { $_ -match '^\s*home\s*=' } | Select-Object -First 1) -replace '^\s*home\s*=\s*', ''
+    return ("$h".Trim().TrimEnd('\') -ieq (Split-Path $ownPy -Parent))
 }
-if (Test-Path $py) { Ok "Python environment (venv)" }
-elseif ($pyCmd) {
+if (-not (Test-Path $py) -or ($env:GT5_OWN_PYTHON -eq "1" -and -not (Test-VenvIsOwn))) {
+    if (-not (Test-Path $ownPy)) { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $base "get-python.ps1") | ForEach-Object { Write-Host "            $_" } }
+    if ((Test-Path $ownPy) -and (Test-Path $py) -and -not (Test-VenvIsOwn)) {
+        Write-Host "            Making the Python environment again from the port's own Python (it was made from the PC's: Python $(Get-PyVer $py))."
+        Remove-Item -LiteralPath $venv -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+if (Test-Path $py) { $pyVer = Get-PyVer $py; Ok "Python environment (venv, Python $pyVer)" }
+else {
+    # The port's own Python, else (the download failed) one already on the PC: 3.11 or newer, final releases only.
+    $pyCmd = $null
+    if (Test-Path $ownPy) { $pyCmd = @($ownPy) }
+    else {
+        foreach ($cand in @(@("py", "-3.11"), @("py", "-3.12"), @("py", "-3.13"), @("py", "-3"), @("python"), @("python3"))) {
+            if (-not (Get-Command $cand[0] -ErrorAction SilentlyContinue)) { continue }
+            $rest = @($cand | Select-Object -Skip 1)
+            $v = & $cand[0] @rest -c "import sys; print('%d.%d' % sys.version_info[:2] if sys.version_info.releaselevel == 'final' else 'pre-release')" 2>$null
+            if ($LASTEXITCODE -eq 0 -and "$v" -match '^3\.(\d+)$' -and [int]$Matches[1] -ge 11) { $pyCmd = $cand; break }
+        }
+    }
+    if (-not $pyCmd) {
+        Todo "Python" "get-python.ps1 couldn't fetch the port's own Python (see above; is the internet connection up?). Run setup.ps1 again, or install Python 3.11 from https://www.python.org/downloads/ and tick 'Add python.exe to PATH'."
+        Stop-Setup "Python is needed for the tools."
+    }
     $rest = @($pyCmd | Select-Object -Skip 1)
     & $pyCmd[0] @rest -m venv $venv
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $py)) { Stop-Setup "making the Python environment failed (see the message above)." }
-    Ok "Python environment (venv), made with $($pyCmd -join ' ')"
-} else {
-    Todo "Python 3.11 or newer" "Install it from https://www.python.org/downloads/ and tick 'Add python.exe to PATH' in the installer, then run setup.ps1 again."
-    Stop-Setup "Python is needed for the tools."
+    $pyVer = Get-PyVer $py
+    Ok "Python environment (venv, Python $pyVer$(if (Test-VenvIsOwn) { ', the port''s own' } else { ', from the PC''s ' + ($pyCmd -join ' ') }))"
 }
 
 # ---- Visual Studio with the Clang tools (what GT5\scripts\build.cmd needs), or get-toolchain.ps1's tools ----
@@ -249,7 +274,14 @@ Push-Location $gt5
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Generating the game code from your EBOOT.elf (about 10 minutes)..."
     & powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\relift.ps1"
-    if ($LASTEXITCODE -ne 0) { Pop-Location; Stop-Setup "generating the game code failed (see above). Please report it with that output: https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml" }
+    if ($LASTEXITCODE -ne 0) {
+        # Seen on a player's PC: a step stopped with an error from inside Python itself that no line of the
+        # tool can raise (Python ran a wrong instruction). Every step starts again from its inputs, so one
+        # more try costs ten minutes and gets past a one-off.
+        Write-Host "Generating the game code stopped (see above). Trying once more from the start..." -ForegroundColor Yellow
+        & powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\relift.ps1"
+    }
+    if ($LASTEXITCODE -ne 0) { Pop-Location; Stop-Setup "generating the game code failed twice with Python $pyVer (see above). If the error is a Python 'Traceback' and that Python is not the port's own, run GT5-Installer.bat again (it switches to the port's own Python). Otherwise please report it with that output: https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml" }
 } else {
     Write-Host "The game code is already generated and current."
 }

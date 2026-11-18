@@ -266,7 +266,12 @@ Push-Location $gt5
 if ($LASTEXITCODE -ne 0 -or $Force) {
     Write-Host "Re-lifting (about 10 minutes): this version changes the lift tools, mods or your EBOOT."
     & powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\relift.ps1"
-    if ($LASTEXITCODE -ne 0) { Pop-Location; Fail "the re-lift failed (see the messages above)" }
+    if ($LASTEXITCODE -ne 0) {
+        # A step that stops inside Python itself (seen on a player's PC) usually passes the second time.
+        Write-Host "The re-lift stopped (see above). Trying once more from the start..." -ForegroundColor Yellow
+        & powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\relift.ps1"
+    }
+    if ($LASTEXITCODE -ne 0) { Pop-Location; Fail "the re-lift failed twice (see the messages above)" }
 } else {
     # The runtime's HLE function list can change with any version.
     & $py "..\ps3recomp\tools\gen_hle_nids.py" --all --out "src\gen\ppu_hle_nids.cpp"

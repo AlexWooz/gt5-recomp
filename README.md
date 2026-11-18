@@ -72,7 +72,7 @@ It is built on [ps3recomp](https://github.com/sp00nznet/ps3recomp) and borrows f
    - **your GT5 game**: the folder of your disc dump (the one with `PS3_GAME` in it) or an `.iso`;
    - **PS3UPDAT.PUP**, Sony's free PS3 system software (the window has a button that opens Sony's page).
 
-That's all. It installs Git and Python if they're missing, downloads this code and the compiler tools
+That's all. It installs Git if it's missing, downloads this code, its own copy of Python (17 MB) and the compiler tools
 (about 1.5 GB, into the install folder: **no Visual Studio is installed or changed**; Microsoft's
 libraries in it come under Microsoft's licence, which the installer shows and asks you to accept), unlocks your game's executable and the system software with RPCS3 (used only as a tool for that:
 the game itself runs natively as `gt5.exe`, not in an emulator), builds the game (about an hour the
@@ -532,7 +532,7 @@ environment `setup.ps1` makes. `analysis\version.json` is made by the build itse
 so it isn't a file you add. Open PowerShell in the `gt5-recomp` folder (the one with `setup.ps1`, not
 `GT5\scripts`) and run `powershell -ExecutionPolicy Bypass -File setup.ps1`. It installs what's
 missing, lists any of your files that are missing or in the wrong place, and once everything is there
-it generates and builds the game for you. If Python itself is missing, install Python 3.11 or newer
+it generates and builds the game for you. If Python itself is missing (the download of the port's own copy failed), run `setup.ps1` again or install Python 3.11 or newer
 from python.org with "Add python.exe to PATH" ticked, then run setup again.
 
 **Q: The game starts but the window stays black, and the title says `draws: 0`. What's wrong?**
@@ -805,7 +805,8 @@ The Windows build under **Proton** is untried too. Direct3D 12 would go through 
   or Linux Mint 22), and a Vulkan-compatible GPU with a Vulkan driver. Follow the
   [Linux setup](#linux) to install build dependencies and prepare the game.
 - An AVX2-capable CPU and 16 GB of RAM for the first build.
-- Python 3.11 or newer, and Git.
+- Git. Python is not needed: `setup.ps1` fetches the port's own copy (python.org's 3.11.9, 17 MB) into
+  `tools\python` and runs every tool on it; nothing is installed in Windows.
 - About 25 GB free on Windows or 30 GB on Linux, including about 17 GB of game files.
 - Your own GT5 disc (BCES00569, BCUS98114 or BCAS20108) and the means to dump it, and
   [RPCS3](https://rpcs3.net/download) to install PS3 firmware and decrypt the game's executable.
@@ -935,7 +936,7 @@ A voucher without its key stays locked, and the game shows nothing for it.
 to do, checks your files, and tells you exactly what's missing and how to fix it. Once everything is
 in place it builds the game for you. You never need to run the scripts in `GT5\scripts` yourself.
 
-1. Install the tools from [Requirements](#-requirements): Git, Python 3.11 or newer (tick "Add
+1. Install the tools from [Requirements](#-requirements): Git (Python is fetched by `setup.ps1`; if you would rather use your own: 3.11 or newer, tick "Add
    python.exe to PATH"), and Visual Studio 2022 with C++ and the Clang tools.
 2. Get the port and run setup once. In PowerShell:
 
