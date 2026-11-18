@@ -31108,7 +31108,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      return handle;
  }
  
-@@ -2338,6 +3304,292 @@
+@@ -2338,6 +3304,385 @@
      dc.n_verts = dc.n_refs;
  }
  
@@ -31131,7 +31131,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
 +    return ps3_ab_on("vkconst") != 0;
 +}
 +
-+/* ---- VK_VCACHE: converted draws kept across frames (Windows; on unless VK_VCACHE=0) ------------
++/* ---- VK_VCACHE: converted draws kept across frames (Windows and Linux; on unless VK_VCACHE=0) ---------
 + * The D3D12 renderer's LD_VCACHE (rsx_live_draw.c, where the reasoning is), for this engine. GT5
 + * draws the same car and track meshes every frame from memory nothing rewrites, and each draw
 + * gathered its indices, de-duplicated them, converted every vertex and copied it all into the
@@ -31141,12 +31141,104 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
 + * on the guest reservation (MEM_WRITE_WATCH, boot_main.cpp) says whether they were. A key is
 + * recorded the second time it is seen, stored the third (its pages still clean), drawn from the
 + * arena after that; a key whose pages keep being written is left to the ordinary path after two
-+ * strikes. VK_VCACHE_MB sizes the arena (the backend's); PS3_AB_WHAT=vcache alternates it (tests). */
-+#if defined(_WIN32)
++ * strikes. VK_VCACHE_MB sizes the arena (the backend's); PS3_AB_WHAT=vcache alternates it (tests).
++ * Linux (6.7 or newer) has the same tracking: the guest mapping is registered once for userfaultfd's
++ * asynchronous write-protect (UFFD_FEATURE_WP_ASYNC: the kernel lifts the protection itself on the
++ * first write and remembers it, no handler thread), and PAGEMAP_SCAN lists the written pages of a
++ * range and protects them again in one call -- what Wine builds GetWriteWatch on. A kernel without
++ * it leaves the cache off. Steam Deck (kernel 7.2), GT5 US 2.17, alternated every 10 s: a race paused
++ * on the grid 14.9 vs 14.5 fps (~740 draws a frame from the arena), car select unchanged (16.8 vs
++ * 16.7: the car's vertices are rewritten by SPU jobs every frame). */
++#if defined(_WIN32) || (defined(__linux__) && __has_include(<linux/userfaultfd.h>))
 +#include <stdint.h>
++#if defined(_WIN32)
 +__declspec(dllimport) unsigned int __stdcall GetWriteWatch(unsigned long flags, void* base, size_t size,
 +                                                          void** addrs, unsigned long long* count,
 +                                                          unsigned long* granularity);
++static int eng_ww_init(void) { return 1; }
++#else
++#include <errno.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <sys/ioctl.h>
++#include <sys/syscall.h>
++#include <linux/fs.h>
++#include <linux/userfaultfd.h>
++#ifndef PAGEMAP_SCAN   /* headers older than 6.7: the kernel may still have it */
++#define PAGEMAP_SCAN _IOWR('f', 16, struct pm_scan_arg)
++#define PAGE_IS_WRITTEN (1 << 3)
++#define PM_SCAN_WP_MATCHING (1 << 0)
++#define PM_SCAN_CHECK_WPASYNC (1 << 1)
++struct page_region { unsigned long long start, end, categories; };
++struct pm_scan_arg {
++    unsigned long long size, flags, start, end, walk_end, vec, vec_len, max_pages,
++                       category_inverted, category_mask, category_anyof_mask, return_mask;
++};
++#endif
++#ifndef UFFD_FEATURE_WP_ASYNC
++#define UFFD_FEATURE_WP_ASYNC (1 << 15)
++#endif
++#ifndef UFFD_FEATURE_WP_UNPOPULATED
++#define UFFD_FEATURE_WP_UNPOPULATED (1 << 13)
++#endif
++#ifndef UFFD_USER_MODE_ONLY
++#define UFFD_USER_MODE_ONLY 1
++#endif
++static int s_ww_uffd = -1, s_ww_pagemap = -1;
++/* Register the 4 GB guest mapping (boot_main.cpp: private anonymous) once. The descriptor stays open:
++ * closing it would drop the registration. Unpopulated pages count as protected, so a page's first
++ * write ever is seen too. */
++static int eng_ww_init(void)
++{
++    static int st = -1;
++    if (st >= 0) return st;
++    st = 0;
++    int u = (int)syscall(SYS_userfaultfd, O_CLOEXEC | O_NONBLOCK | UFFD_USER_MODE_ONLY);
++    if (u < 0) { fprintf(stderr, "[vcache] no userfaultfd (%d): the cache stays off\n", errno); return 0; }
++    struct uffdio_api api; memset(&api, 0, sizeof api);
++    api.api = UFFD_API; api.features = UFFD_FEATURE_WP_ASYNC | UFFD_FEATURE_WP_UNPOPULATED;
++    struct uffdio_register reg; memset(&reg, 0, sizeof reg);
++    reg.range.start = (unsigned long long)(uintptr_t)vm_base; reg.range.len = 0x100000000ull;
++    reg.mode = UFFDIO_REGISTER_MODE_WP;
++    const int pm = open("/proc/self/pagemap", O_RDONLY | O_CLOEXEC);
++    if (ioctl(u, UFFDIO_API, &api) != 0 || ioctl(u, UFFDIO_REGISTER, &reg) != 0 || pm < 0) {
++        fprintf(stderr, "[vcache] no asynchronous write-protect on this kernel (%d): the cache stays off\n", errno);
++        close(u); if (pm >= 0) close(pm);
++        return 0;
++    }
++    s_ww_uffd = u; s_ww_pagemap = pm;
++    return st = 1;
++}
++/* GetWriteWatch(WRITE_WATCH_FLAG_RESET) for Linux: the written pages of [base, base + size), at most
++ * *count of them, are listed and protected again. 0 on success. */
++static unsigned int GetWriteWatch(unsigned long flags, void* base, size_t size, void** addrs,
++                                  unsigned long long* count, unsigned long* granularity)
++{
++    (void)flags;
++    *granularity = 4096;
++    struct page_region rg[64];
++    unsigned long long n = 0;
++    const unsigned long long end = (unsigned long long)(uintptr_t)base + size;
++    unsigned long long at = (unsigned long long)(uintptr_t)base;
++    while (at < end) {
++        struct pm_scan_arg a; memset(&a, 0, sizeof a);
++        a.size = sizeof a; a.flags = PM_SCAN_WP_MATCHING | PM_SCAN_CHECK_WPASYNC;
++        a.start = at; a.end = end; a.vec = (unsigned long long)(uintptr_t)rg; a.vec_len = 64;
++        a.category_mask = PAGE_IS_WRITTEN; a.return_mask = PAGE_IS_WRITTEN;
++        const long r = ioctl(s_ww_pagemap, PAGEMAP_SCAN, &a);
++        if (r < 0) return 1;
++        for (long i = 0; i < r; i++)
++            for (unsigned long long pg = rg[i].start; pg < rg[i].end; pg += 4096) {
++                if (n >= *count) return 1;   /* more than the caller can take: treat as failed */
++                addrs[n++] = (void*)(uintptr_t)pg;
++            }
++        if (!a.walk_end || a.walk_end <= at) break;
++        at = a.walk_end;
++    }
++    *count = n;
++    return 0;
++}
++#endif
 +extern unsigned long long cellPad_now_ms(void);
 +#define ENG_VC_SLOTS 16384u
 +#define ENG_VC_SPANS 4u
@@ -31187,8 +31279,9 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
 +static int eng_vc_enabled(void)
 +{
 +    if (s_vc_on < 0) {
-+        const char* e = getenv("VK_VCACHE");   /* on unless VK_VCACHE=0 (this part is Windows only) */
-+        s_vc_on = (!e || atoi(e) != 0) && g.be && g.be->arena_alloc && g.be->arena_reset && g.be->draw_arena && vm_base;
++        const char* e = getenv("VK_VCACHE");
++        s_vc_on = !e || atoi(e) != 0;          /* on unless VK_VCACHE=0 */
++        s_vc_on = s_vc_on && eng_ww_init() && g.be && g.be->arena_alloc && g.be->arena_reset && g.be->draw_arena && vm_base;
 +        if (s_vc_on) {
 +            s_vc = (eng_vc_entry*)calloc(ENG_VC_SLOTS, sizeof(eng_vc_entry));
 +            s_vc_page_gen = (u32*)calloc(1u << 20, sizeof(u32));
@@ -31401,7 +31494,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
  /* ---- sink ---------------------------------------------------------------- */
  
  static void sink_begin(void* user, const rsx_dispatch* r, u32 prim)
-@@ -2454,15 +3706,339 @@
+@@ -2454,15 +3799,339 @@
                                         const rsx_dsp_texture* t)
  {
      static u32 logs;
@@ -31744,7 +31837,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
  }
  
  static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
-@@ -2473,6 +4049,7 @@
+@@ -2473,6 +4142,7 @@
      u32 mask = 0;
      u32 feedback[RSX_BE_MAX_COLOR_TARGETS] = {0};
      for (u32 u = 0; u < RSX_BE_MAX_TEXTURES; u++) {
@@ -31752,7 +31845,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          rsx_dsp_texture t;
          rsx_dsp_get_texture(&g.rsx, u, &t);
          /* A unit left enabled by an earlier draw but not sampled by this
-@@ -2482,6 +4059,7 @@
+@@ -2482,6 +4152,7 @@
          mask |= 1u << u;
          eng_decode_sampler(t.filter, t.wrap, t.control0, &samplers[u]);
          samplers[u].border = eng_border_class(t.format, t.border_color);
@@ -31760,7 +31853,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
  
          int sampled = -1, own = 0, surface_at = -1;
          /* DXT data is never a render target's output: no surface colour
-@@ -2492,6 +4070,57 @@
+@@ -2492,6 +4163,57 @@
           * target in Resistance: Fall of Man). Neither colour nor depth
           * surfaces are looked up for it. */
          const u32 base_fmt = t.format & RSX_TEX_FMT_BASE_MASK & ~(u32)RSX_TEX_FMT_UNNORM;
@@ -31818,7 +31911,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          const int compressed = base_fmt == RSX_TEX_FMT_DXT1 ||
                                 base_fmt == RSX_TEX_FMT_DXT23 ||
                                 base_fmt == RSX_TEX_FMT_DXT45;
-@@ -2508,6 +4137,7 @@
+@@ -2508,6 +4230,7 @@
              sampled = (int)i;
              break;
          }
@@ -31826,7 +31919,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          /* The depth at this address, when it was written after any colour
           * there: a depth-only pass names its zeta as a colour target too. */
          int zsrc = -1;
-@@ -2515,13 +4145,19 @@
+@@ -2515,13 +4238,19 @@
              const eng_zdepth* z = &g.zdepths[i];
              if (z->location != t.location || z->offset != t.offset || !z->depth_serial)
                  continue;
@@ -31849,7 +31942,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
              /* DEPTH24_D8 keeps the backend's own snapshot when it has one;
               * anything else goes through guest memory. */
              if (base_fmt == RSX_TEX_FMT_DEPTH24_D8 && current_zslot != (u32)zsrc) {
-@@ -2542,8 +4178,13 @@
+@@ -2542,8 +4271,13 @@
              eng_surface* s = &g.surfaces[surface_at];
              rsx_dsp_surface sf;
              rsx_dsp_get_surface(&g.rsx, &sf);
@@ -31864,7 +31957,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
              u32 k = 0;
              while (k < n_targets && target_slots[k] != (u32)surface_at) k++;
              if (k == n_targets) return eng_color_feedback_failure(u, s, &t);
-@@ -2575,17 +4216,59 @@
+@@ -2575,17 +4309,59 @@
              continue;
          }
          if (sampled >= 0) {
@@ -31929,7 +32022,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
                      g.zdepths[i].last_use = g.frames;
                      const u32 snap = eng_zdepth_snapshot(i, t.width, t.height);
                      if (snap) textures[u] = snap;
-@@ -2597,6 +4280,42 @@
+@@ -2597,6 +4373,42 @@
                                         t.width, t.height, t.mipmaps, t.pitch,
                                         (int)t.cubemap, t.remap & 0xFFFFu,
                                         (t.dimension == 3 && !t.cubemap) ? t.depth : 1u);
@@ -31972,7 +32065,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      }
      return mask;
  }
-@@ -2612,6 +4331,7 @@
+@@ -2612,6 +4424,7 @@
          rsx_dsp_get_vertex_texture(&g.rsx, u, &vt);
          eng_decode_sampler(vt.filter, vt.wrap, vt.control0, &samplers[u]);
          samplers[u].border = eng_border_class(vt.format, vt.border_color);
@@ -31980,7 +32073,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          /* A vertex unit has no crossbar, so its remap is the identity. */
          textures[u] = eng_texture_slot(vt.location, vt.offset, vt.format,
                                         vt.width, vt.height, vt.mipmaps,
-@@ -2691,6 +4411,22 @@
+@@ -2691,6 +4504,22 @@
      if (s_pd.state == 1 && s_pd.after_s &&
          difftime(time(NULL), s_pd.start) >= (double)s_pd.after_s && pd_open_index())
          fprintf(s_pd.index, "from a draw of frame %u, %u s in\n", g.frames, s_pd.after_s);
@@ -32003,7 +32096,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      return s_pd.state == 2;
  }
  
-@@ -2728,14 +4464,15 @@
+@@ -2728,14 +4557,15 @@
      default: return;
      }
      if (!s->handle || !s->w || !s->h || !g.be->readback) return;
@@ -32024,7 +32117,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
              const u8* p = raw + i * bpp;
              u8* o = rgb + i * 3u;
              if (s->fmt == RSX_BE_FMT_R8G8B8A8) {
-@@ -2755,8 +4492,8 @@
+@@ -2755,8 +4585,8 @@
                  o[0] = o[1] = o[2] = pd_unit(v);
              }
          }
@@ -32035,7 +32128,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          fclose(f);
      }
      free(raw);
-@@ -2770,8 +4507,8 @@
+@@ -2770,8 +4600,8 @@
      const eng_zdepth* z = &g.zdepths[zslot];
      *lo_out = *hi_out = -1.0f;
      if (!g.be->depth_readback || !z->handle) return;
@@ -32046,7 +32139,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      float* d = (float*)malloc((size_t)w * h * sizeof(float));
      u8* px = (u8*)malloc((size_t)w * h);
      FILE* f = (d && px) ? fopen(path, "wb") : NULL;
-@@ -3022,10 +4759,1869 @@
+@@ -3022,10 +4852,1869 @@
                  what, rc[0], rc[1], rc[2], rc[3], w, h);
  }
  
@@ -33916,7 +34009,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      /* Mixed geometry sources have no defined concatenation here. Reject the
       * whole group instead of drawing partial/misordered geometry. */
      if (dc.n_immediate && (dc.n_arr || dc.n_idx || dc.inl_bytes ||
-@@ -3051,12 +6647,23 @@
+@@ -3051,12 +6740,23 @@
  
      rsx_vertex_layout_plan layout;
      eng_vertex_layout(&layout);
@@ -33942,7 +34035,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          if (!eng_topology_rebuild(prim, dc.refs_remapped, &indexed)) return;
          n_draw = indexed
              ? rsx_draw_engine_topology_index_count(prim, dc.n_source_refs,
-@@ -3068,17 +6675,27 @@
+@@ -3068,17 +6768,27 @@
      rsx_be_render_state rs;
      rsx_draw_engine_decode_render_state(&g.rsx, &rs);
  
@@ -33976,7 +34069,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
  
      /* A guest program pair that will not translate has no fallback: the draw
       * is dropped, as the reference engine drops it. Substituting the built-in
-@@ -3087,12 +6704,24 @@
+@@ -3087,12 +6797,24 @@
      int pipeline_is_fixed = 1;
      u32 tex_used = 0;
      u64 fp_hash = 0;
@@ -34003,7 +34096,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
  
      /* Textures before any pipeline or target binding: a cache refresh can
       * replace a resource, and the backend is free to submit while doing it. */
-@@ -3107,10 +6736,35 @@
+@@ -3107,10 +6829,35 @@
      const u32 tex_mask = sink_bind_textures(targets, n_targets, zslot, tex_used,
                                              textures, samplers);
      if (tex_mask == ENG_INVALID) return;
@@ -34040,7 +34133,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          if (!dc_reserve_indices(n_draw)) return;
          rsx_draw_engine_write_topology_indices(
              prim, dc.n_source_refs, dc.cuts, dc.n_cuts,
-@@ -3136,8 +6790,41 @@
+@@ -3136,8 +6883,41 @@
          xf[5] = -((vp.translate[1] - Hv * 0.5f) / (Hv * 0.5f));
          xf[6] = vp.translate[2];
      }
@@ -34084,7 +34177,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
  
      /* The buffered fragment constants, then fp_alpha: the layout
       * rsx_fp_decompile_buffered_ex compiled the shader against. */
-@@ -3160,34 +6847,68 @@
+@@ -3160,34 +6940,68 @@
        const u32 win = rsx_dsp_reg(&g.rsx, 0x1D88);
        alpha[1] = ((win >> 12) & 0xFu) ? (float)(win & 0xFFFu) : 0.0f;
        alpha[2] = ((win >> 16) & 0xFu) ? -0.5f : 0.0f;
@@ -34161,7 +34254,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          g.be->set_scissor(g.be->user, sc[0], sc[1], sc[2], sc[3]);
      }
      /* Dynamic, and deliberately outside the pipeline key. */
-@@ -3219,23 +6940,62 @@
+@@ -3219,23 +7033,62 @@
              if (slope != slope) slope = 0.0f;   /* NaN */
              if (units != units) units = 0.0f;
          }
@@ -34228,7 +34321,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      }
  }
  
-@@ -3243,21 +7003,25 @@
+@@ -3243,21 +7096,25 @@
  {
      (void)user; (void)r;
      if (!g.ready) return;
@@ -34265,7 +34358,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
          const u32 c = rsx_dsp_clear_color(&g.rsx);
          const float rgba[4] = {
              (float)((c >> 16) & 0xFF) / 255.0f,
-@@ -3277,6 +7041,11 @@
+@@ -3277,6 +7134,11 @@
              if (!part) continue;
              if (part == 2 && g.be->clear_color_rect) {
                  eng_log_rect_clear("colour", rc, s->w, s->h);
@@ -34277,7 +34370,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
                  g.be->clear_color_rect(g.be->user, s->handle, rgba,
                                         rc[0], rc[1], rc[2], rc[3]);
              } else
-@@ -3286,63 +7055,264 @@
+@@ -3286,63 +7148,264 @@
          if (wrote) eng_surfaces_wrote(targets, n_targets);
      }
      if (mask & (RSX_CLEAR_DEPTH | RSX_CLEAR_STENCIL)) {
@@ -34599,7 +34692,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
  
  /* Resolve a flip's buffer id to a REGISTERED surface rather than whatever is
   * currently bound: the live target at that instant is often an offscreen
-@@ -3360,12 +7330,29 @@
+@@ -3360,12 +7423,29 @@
      return eng_current_surface();
  }
  
@@ -34629,7 +34722,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      if (getenv("PS3RECOMP_METAL_FRAME_DUMP") && g.frames % 120 == 0) {
          u32 current = eng_current_surface();
          fprintf(stderr, "[rsx capture] frame=%u buffer=%u selected=%u current=%u draws=%u surfaces=%u\n",
-@@ -3375,9 +7362,36 @@
+@@ -3375,9 +7455,36 @@
                      i, g.surfaces[i].location, g.surfaces[i].offset,
                      g.surfaces[i].w, g.surfaces[i].h, g.surfaces[i].handle);
      }
@@ -34667,7 +34760,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      g.frames++;
      g.last_guest_draws = g.guest_draws;
      g.guest_draws = 0;
-@@ -3430,7 +7444,7 @@
+@@ -3430,7 +7537,7 @@
        s_texhash_full_always = e && *e && strcmp(e, "0") != 0; }
      { const char* e = getenv("PS3RECOMP_ENG_DEPTH_VIA_GUEST");
        s_depth_via_guest = e && *e && strcmp(e, "0") != 0; }
@@ -34676,7 +34769,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      if (!g.vp_cb) return -1;
      if (g.be->init && g.be->init(g.be->user, g.width, g.height) != 0) {
          free(g.vp_cb); g.vp_cb = NULL;
-@@ -3448,6 +7462,7 @@
+@@ -3448,6 +7555,7 @@
      sink.flip             = sink_flip;
      rsx_dispatch_init(&g.rsx, &sink);
      g.ready = 1;
@@ -34684,7 +34777,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      /* Display buffers the title registered before the backend came up. */
      cellGcm_replay_display_buffers_to_engine();
      fprintf(stderr, "[rsx engine] register-file draw engine up (%ux%u)\n",
-@@ -3460,18 +7475,47 @@
+@@ -3460,18 +7568,47 @@
      if (!g.be) return;
      if (g.ready && g.be->submit_and_wait)
          g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_SHUTDOWN);
@@ -34733,7 +34826,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
      if (g.ready && g.be->shutdown) g.be->shutdown(g.be->user);
  
      rsx_draw_engine_set_guest_memory(NULL, NULL);
-@@ -3524,7 +7568,9 @@
+@@ -3524,7 +7661,9 @@
       * re-present a double-buffered title's OTHER scanout. Presenting twice is
       * harmless either way -- the engine never clears the surface, so a second
       * present just blits the same image again. */
@@ -34743,7 +34836,7 @@ diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
  }
  
  void rsx_draw_engine_present_buffer(u32 buffer_id)
-@@ -3551,7 +7597,7 @@
+@@ -3551,7 +7690,7 @@
      const eng_surface* s = &g.surfaces[slot];
      if (!s->handle || s->fmt != RSX_BE_FMT_R8G8B8A8 || !s->w || !s->h) return 0;
      u8 px[4] = { 0, 0, 0, 0 };
