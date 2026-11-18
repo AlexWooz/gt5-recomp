@@ -76,10 +76,13 @@ open(sys.argv[sys.argv.index("--output") + 1] + "/out.txt", "w").write(h.hexdige
 
 def find_job():
     """One of the lift's SPU jobs with the function list the lift made for it, or None."""
-    gt5 = HERE.parent
-    lifter = gt5.parent / "ps3recomp" / "tools" / "spu_lifter.py"
-    if not lifter.is_file():
+    # next to this script (GT5\scripts), or, for a copy of the script run from elsewhere, the GT5 folder
+    # it was started in
+    gt5 = next((g for g in (HERE.parent, Path.cwd())
+                if (g.parent / "ps3recomp" / "tools" / "spu_lifter.py").is_file()), None)
+    if gt5 is None:
         return None
+    lifter = gt5.parent / "ps3recomp" / "tools" / "spu_lifter.py"
     best = None
     for dump in sorted((gt5 / "analysis" / "spu_miss").glob("spujob_*.bin")):
         fp = dump.name.split("_")[1][:8].upper()
