@@ -88,6 +88,10 @@ add_executable(gt5
     src/gt5_cockpit.cpp
     src/gt5_padmap.cpp
     src/gt5_threadstats.cpp
+    src/gt5_framerate.cpp
+    src/gt5_volread.cpp
+    src/gt5_glyphs.cpp
+    src/gt5_glyph_art.c
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
     ${RECOMP_SOURCES}
@@ -135,6 +139,17 @@ endif()
 file(GLOB GT5_MOD_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/gen/mods.cpp")
 if(GT5_MOD_SOURCES)
     target_sources(gt5 PRIVATE ${GT5_MOD_SOURCES})
+    # The Frame rate setting (60 / 30) switches the half-rate mod's pacer while the game runs
+    # (src/gt5_framerate.cpp): only when the mod applies to this EBOOT, so that its switch exists.
+    # A re-lift rewrites mods.cpp: configure again then, so this follows it.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GT5_MOD_SOURCES}")
+    file(STRINGS "${GT5_MOD_SOURCES}" _half_rate REGEX "int g_mod_half_rate")
+    if(_half_rate)
+        set_property(SOURCE src/gt5_framerate.cpp APPEND PROPERTY COMPILE_DEFINITIONS GT5_HAVE_HALF_RATE=1)
+        message(STATUS "Frame rate:      60 and 30 (the half-rate mod's switch)")
+    else()
+        message(STATUS "Frame rate:      60 only (no half-rate mod for this EBOOT)")
+    endif()
 endif()
 
 # Scoped so the huge PPU TUs keep their cached compile commands. /GS-: no stack-cookie check in
@@ -166,6 +181,18 @@ endforeach()
 # switch with its old name picks native or lifted at run time (scripts/spu_native_patch.py), so no
 # re-lift is needed and every caller is unchanged. GT5_SPU_NATIVE=0 runs the lifted code as before.
 set(GT5_NATIVE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/native")
+# Direct branches (scripts/spu_native_patch.py --direct-bi, src/native/gt5_direct_bi.c): in the lifted code of
+# every WWS job and of the WWS job manager, a branch or call to a register holding one of the image's own
+# entries goes there without the runtime's dispatcher wherever the dispatcher would choose the same (the
+# rest is unchanged). GT5_DIRECT_BI=0 at run time: as before; 2: each one checked against the dispatcher;
+# GT5_DIRECT_BI_OFF=<image,...>: those images as before. Off here: none of it is built.
+option(GT5_SPU_DIRECT_BI "direct branches in the lifted SPU job images" ON)
+set(_dbi_args "")
+set(_dbi_deps "")
+if(GT5_SPU_DIRECT_BI AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/gen/spu_jobs.c")
+    set(_dbi_args --direct-bi "${CMAKE_CURRENT_SOURCE_DIR}/src/gen/spu_jobs.c")
+    set(_dbi_deps "${CMAKE_CURRENT_SOURCE_DIR}/src/gen/spu_jobs.c")
+endif()
 if(EXISTS "${GT5_NATIVE_DIR}/natives.txt" AND SPU_JOB_SOURCES)
     find_program(GT5_PYTHON NAMES python python3
                  HINTS "${CMAKE_CURRENT_SOURCE_DIR}/../venv/Scripts" "${CMAKE_CURRENT_SOURCE_DIR}/../venv/bin")
@@ -200,6 +227,14 @@ if(EXISTS "${GT5_NATIVE_DIR}/natives.txt" AND SPU_JOB_SOURCES)
             list(APPEND _nat_gen_${_img} "${_val}")
         endif()
     endforeach()
+    # -DGT5_CULL_PROF=ON (testing builds only): the w018CAD00 job profiler -- src/native/natives_prof.txt's
+    # hooks and the profiler code in native_w018CAD00.c (GT5_CULL_PROF=1 at run time prints "[cull-prof]").
+    # Off (the default, every player build): none of its hooks is in the game.
+    option(GT5_CULL_PROF "w018CAD00 job profiler hooks (testing builds only)" OFF)
+    set(_nat_lists "${GT5_NATIVE_DIR}/natives.txt")
+    if(GT5_CULL_PROF AND EXISTS "${GT5_NATIVE_DIR}/natives_prof.txt")
+        list(APPEND _nat_lists "${GT5_NATIVE_DIR}/natives_prof.txt")
+    endif()
     # -DGT5_NATIVE_STATS=ON (testing): the geometry natives count what they do and print it every 5 s.
     set(_nat_stats "")
     if(GT5_NATIVE_STATS)
@@ -243,8 +278,8 @@ if(EXISTS "${GT5_NATIVE_DIR}/natives.txt" AND SPU_JOB_SOURCES)
             list(APPEND _nat_done ${_img})
             set(_out "${CMAKE_BINARY_DIR}/spu_native/${_img}/spu_recomp.c")
             add_custom_command(OUTPUT "${_out}"
-                COMMAND "${GT5_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/spu_native_patch.py" "${_in}" "${_out}" ${_img} "${GT5_NATIVE_DIR}/natives.txt"
-                DEPENDS "${_in}" "${GT5_NATIVE_DIR}/natives.txt" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/spu_native_patch.py"
+                COMMAND "${GT5_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/spu_native_patch.py" "${_in}" "${_out}" ${_img} ${_nat_lists} ${_dbi_args}
+                DEPENDS "${_in}" ${_nat_lists} ${_dbi_deps} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/spu_native_patch.py"
                 COMMENT "Native SPU functions for ${_img}" VERBATIM)
             file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/spu_native/${_img}")
             set_source_files_properties("${_in}" PROPERTIES HEADER_FILE_ONLY ON)
@@ -258,6 +293,9 @@ if(EXISTS "${GT5_NATIVE_DIR}/natives.txt" AND SPU_JOB_SOURCES)
             set(_nat_defs "SPU_USE_DISPATCH_MT;NATIVE_HOOKED")
             if(_src MATCHES "^native_w")   # the geometry natives; the sound ones keep their counters for the harness
                 string(APPEND _nat_defs "${_nat_stats}")
+            endif()
+            if(GT5_CULL_PROF AND _src STREQUAL "native_w018CAD00.c")
+                string(APPEND _nat_defs ";GT5_CULL_PROF_HOOKS")
             endif()
             set_source_files_properties("${GT5_NATIVE_DIR}/${_src}" PROPERTIES
                 INCLUDE_DIRECTORIES "${_incs}" COMPILE_DEFINITIONS "${_nat_defs}" COMPILE_OPTIONS "${_opts}")
@@ -284,6 +322,42 @@ if(EXISTS "${GT5_NATIVE_DIR}/natives.txt" AND SPU_JOB_SOURCES)
         endif()
         list(LENGTH _nat_done _nat_n)
         message(STATUS "Native SPU:      ${_nat_n} image(s) with native functions")
+    endif()
+endif()
+if(SPU_JOB_SOURCES AND EXISTS "${GT5_NATIVE_DIR}/gt5_direct_bi.c")
+    # the run-time half (also what the natives' in-run A/B calls), with or without the option
+    target_sources(gt5 PRIVATE "${GT5_NATIVE_DIR}/gt5_direct_bi.c")
+    set_source_files_properties("${GT5_NATIVE_DIR}/gt5_direct_bi.c" PROPERTIES
+        INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu;${GT5_NATIVE_DIR}" COMPILE_OPTIONS "-O2;/w;/GS-;-mavx2;-mfma")
+endif()
+if(_dbi_args AND SPU_JOB_SOURCES)
+    find_program(GT5_PYTHON NAMES python python3
+                 HINTS "${CMAKE_CURRENT_SOURCE_DIR}/../venv/Scripts" "${CMAKE_CURRENT_SOURCE_DIR}/../venv/bin")
+    if(GT5_PYTHON)
+        # The images with native functions got theirs in the natives patch above; every other job image is
+        # compiled from a copy made here (the script copies an image that takes no direct branches unchanged).
+        set(_dbi_n 0)
+        foreach(_in ${SPU_JOB_SOURCES})
+            get_filename_component(_dir "${_in}" DIRECTORY)
+            get_filename_component(_img "${_dir}" NAME)
+            if(_img IN_LIST _nat_done)
+                continue()
+            endif()
+            set(_out "${CMAKE_BINARY_DIR}/spu_dbi/${_img}/spu_recomp.c")
+            add_custom_command(OUTPUT "${_out}"
+                COMMAND "${GT5_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/spu_native_patch.py" "${_in}" "${_out}" ${_img} ${_dbi_args}
+                DEPENDS "${_in}" ${_dbi_deps} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/spu_native_patch.py"
+                COMMENT "Direct branches for ${_img}" VERBATIM)
+            file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/spu_dbi/${_img}")
+            get_source_file_property(_opts "${_in}" COMPILE_OPTIONS)
+            set_source_files_properties("${_in}" PROPERTIES HEADER_FILE_ONLY ON)
+            target_sources(gt5 PRIVATE "${_out}")
+            set_source_files_properties("${_out}" PROPERTIES
+                INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu;${_dir};${GT5_NATIVE_DIR}"
+                COMPILE_DEFINITIONS SPU_USE_DISPATCH_MT COMPILE_OPTIONS "${_opts}")
+            math(EXPR _dbi_n "${_dbi_n} + 1")
+        endforeach()
+        message(STATUS "Direct branches: on (the WWS jobs' code and job manager; ${_dbi_n} job file(s) copied for it)")
     endif()
 endif()
 

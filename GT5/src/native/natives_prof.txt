@@ -1,0 +1,46 @@
+# Testing builds only (CMake option GT5_CULL_PROF=ON reads this list after natives.txt and compiles the
+# profiler into native_w018CAD00.c; a normal build has none of these hooks). GT5_CULL_PROF=1 at run time:
+# where a w018CAD00 job's time goes, "[cull-prof]" every 5 s (own time, calls and dispatches a job per
+# stamp: the job's entry and end, its program interpreter, every opcode handler, 0xDF00; the allocator,
+# the culls, the writer, its emitter and opcode handlers 9, 12, 33 stamp from their hooks in natives.txt).
+w018CAD00 00007608 - native_w018CAD00.c hooked
+w018CAD00 00005240 - native_w018CAD00.c hooked
+w018CAD00 00005270 - native_w018CAD00.c hooked
+w018CAD00 000052E8 - native_w018CAD00.c hooked
+w018CAD00 000069E0 - native_w018CAD00.c hooked
+w018CAD00 000069C8 - native_w018CAD00.c hooked
+w018CAD00 000063A8 - native_w018CAD00.c hooked
+w018CAD00 00006538 - native_w018CAD00.c hooked
+w018CAD00 000068F8 - native_w018CAD00.c hooked
+w018CAD00 00006ED0 - native_w018CAD00.c hooked
+w018CAD00 00006888 - native_w018CAD00.c hooked
+w018CAD00 000067B0 - native_w018CAD00.c hooked
+w018CAD00 00006798 - native_w018CAD00.c hooked
+w018CAD00 00006780 - native_w018CAD00.c hooked
+w018CAD00 00006768 - native_w018CAD00.c hooked
+w018CAD00 00006750 - native_w018CAD00.c hooked
+w018CAD00 00006428 - native_w018CAD00.c hooked
+w018CAD00 00007298 - native_w018CAD00.c hooked
+w018CAD00 00008C40 - native_w018CAD00.c hooked
+w018CAD00 00008800 - native_w018CAD00.c hooked
+w018CAD00 00007548 - native_w018CAD00.c hooked
+w018CAD00 00004D58 - native_w018CAD00.c hooked
+w018CAD00 000068C0 - native_w018CAD00.c hooked
+w018CAD00 00004EB8 - native_w018CAD00.c hooked
+w018CAD00 000075B0 - native_w018CAD00.c hooked
+w018CAD00 000074A0 - native_w018CAD00.c hooked
+w018CAD00 00008428 - native_w018CAD00.c hooked
+w018CAD00 00007610 - native_w018CAD00.c hooked
+w018CAD00 00007B08 - native_w018CAD00.c hooked
+w018CAD00 00007B00 - native_w018CAD00.c hooked
+w018CAD00 000062F0 - native_w018CAD00.c hooked
+w018CAD00 00005DD8 - native_w018CAD00.c hooked
+w018CAD00 00005F68 - native_w018CAD00.c hooked
+w018CAD00 00005AE0 - native_w018CAD00.c hooked
+w018CAD00 00006718 - native_w018CAD00.c hooked
+w018CAD00 00007C98 - native_w018CAD00.c hooked
+w018CAD00 000107D8 - native_w018CAD00.c hooked
+w018CAD00 00004A30 - native_w018CAD00.c hooked
+w018CAD00 00005340 - native_w018CAD00.c hooked
+w018CAD00 0000DF00 - native_w018CAD00.c hooked
+w018CAD00 00010884 - native_w018CAD00.c hooked

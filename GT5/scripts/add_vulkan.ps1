@@ -215,4 +215,33 @@ Send-Add 'game' $Bar.G 'Building the game'
 $rc = Invoke-Counted { cmd /c "`"$PSScriptRoot\build.cmd`" gt5" } 'game' $Bar.G 99 'Building the game'
 if ($rc) { Fail 'Building gt5.exe with Vulkan failed (see above).' 'Build failed' }
 if (-not (Test-Path (Join-Path $build 'SDL2.dll'))) { Fail 'The build finished but build\SDL2.dll is missing. Please report this.' 'Build failed' }
+# The DLSS and FSR 3 plug-ins, when they are in, were built before the Vulkan headers were here, so without
+# their Vulkan part: each is built again now (its add script, its full text in GT5\logs\add_*.log; its
+# progress lines are not passed on, this run's progress is Vulkan's). DLSS's plug-in being there means its
+# licence was accepted when it was added (update.ps1 goes by the same rule). A failure leaves that plug-in as
+# it was (Direct3D 12 only) and Vulkan in; the next update builds it again.
+function Invoke-PlugInAgain([string]$Script, [string[]]$ArgList, [string]$Log) {
+    $logs = Join-Path $gt5 'logs'
+    $w = $null
+    try {
+        New-Item -ItemType Directory -Force $logs | Out-Null
+        $w = New-Object IO.StreamWriter((Join-Path $logs "$Log.log"), $false, (New-Object Text.UTF8Encoding($false)))
+        $w.AutoFlush = $true
+        $w.WriteLine("$Script $($ArgList -join ' ') (from add_vulkan.ps1), $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+    } catch { $w = $null }
+    & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $Script) @ArgList -NoPause 2>&1 | ForEach-Object {
+        if ($w) { try { $w.WriteLine("$_") } catch {} }
+    }
+    $code = [int]$LASTEXITCODE
+    if ($w) { try { $w.Close() } catch {} }
+    return $code
+}
+foreach ($p in @(@{ Dll = 'gt5_upscale_dlss.dll'; Script = 'add_dlss.ps1'; Args = @('-Accept'); Log = 'add_dlss'; Name = 'NVIDIA DLSS' },
+                 @{ Dll = 'gt5_upscale_fsr.dll';  Script = 'add_fsr.ps1';  Args = @();          Log = 'add_fsr';  Name = 'AMD FSR 3' })) {
+    if (-not (Test-Path (Join-Path $build $p.Dll))) { continue }
+    Write-Host "== $($p.Name): its plug-in built again with its Vulkan part"
+    Send-Add 'game' 99 'Finishing up'
+    $r = Invoke-PlugInAgain $p.Script $p.Args $p.Log
+    if ($r -eq 1) { Write-Host "   $($p.Name): not built again this time (GT5\logs\$($p.Log).log says why); it works with Direct3D 12 as before." }
+}
 Stop-AddOn 0 'Vulkan is in. Pick Display > Renderer: Vulkan in the launcher (or set "GT5_RENDERER=vulkan" in settings.bat).' 'Vulkan ready'

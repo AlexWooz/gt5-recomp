@@ -394,6 +394,15 @@ if ($addOns) {
         if ($r -eq 1) { Write-Host "  NVIDIA DLSS: not built this time (GT5\logs\add_dlss.log says why). The next update tries again." }
     }
 }
+# The shaders: everything this PC's game has drawn is made again with the new version, on every processor, before
+# the game starts (gt5.exe --prepare-shaders; its "GT5_SHADERS done total" lines are the progress, its words go to
+# GT5\logs\prepare.log). Never a stop: a shader not made here is made when first drawn, as before.
+$gt5exe = Join-Path $gt5 "build\gt5.exe"
+if (Test-Path -LiteralPath $gt5exe) {
+    Write-Host "Preparing shaders..."
+    $p = Start-Process -FilePath $gt5exe -ArgumentList "--prepare-shaders" -WorkingDirectory $gt5 -NoNewWindow -Wait -PassThru -RedirectStandardError (Join-Path $logs "prepare.log")
+    if ($p.ExitCode -ne 0) { Write-Host "  Shaders: not all made this time (GT5\logs\prepare.log says why). The game makes the rest as it needs them." }
+}
 Write-Host ""
 Write-Host "Done: $from -> $label. Saves, game files, settings and the shader cache were kept." -ForegroundColor Green
 Write-Host "The previous build is GT5\build\gt5.previous.exe; to go back, run update.ps1 -Version <version> (see -List)."

@@ -78,7 +78,7 @@ $dll = Join-Path $sdk 'lib\Windows_x86_64\rel\nvngx_dlss.dll'
 $dllg = Join-Path $sdk 'lib\Windows_x86_64\rel\nvngx_dlssg.dll'
 $inc = Join-Path $sdk 'include'
 $lic = Join-Path $sdk 'LICENSE.txt'
-$need = @($lib, $dll, $dllg, (Join-Path $inc 'nvsdk_ngx.h'), (Join-Path $inc 'nvsdk_ngx_helpers_dlssg_d3d.h'), $lic)
+$need = @($lib, $dll, $dllg, (Join-Path $inc 'nvsdk_ngx.h'), (Join-Path $inc 'nvsdk_ngx_helpers_dlssg_d3d.h'), (Join-Path $inc 'nvsdk_ngx_helpers_dlssg_vk.h'), $lic)
 function Test-SdkFiles { foreach ($f in $need) { if (-not (Test-Path $f)) { return $false } }; return $true }
 if (-not $SdkDir) {
     $have = if (Test-Path (Join-Path $sdk '.git')) { git -C $sdk rev-parse HEAD 2>$null } else { '' }
@@ -135,7 +135,16 @@ $tmp = Join-Path $deps 'build'
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $tmp | Out-Null
 Push-Location $tmp
-& $cc /nologo /O2 /MD /EHsc /W3 /LD -fuse-ld=lld -Wno-deprecated-declarations "/I$inc" "/I$iface" $src "/Fe:$(Join-Path $tmp 'gt5_upscale_dlss.dll')" `
+# With the Vulkan headers add_vulkan.ps1 leaves (setup and update run it before this), the plug-in also gets
+# its Vulkan part (gt5_upscale_vk.h: NGX's Vulkan entry points, in the same nvsdk_ngx_d.lib); nothing of
+# Vulkan is linked, the game hands its device over.
+$vk = @()
+$vkInc = Join-Path $gt5 'deps\vulkan\prefix\include'
+if ((Test-Path (Join-Path $vkInc 'vulkan\vulkan.h')) -and (Test-Path (Join-Path $iface 'gt5_upscale_vk.h'))) {
+    $vk = @('/DGT5_UPSCALE_WITH_VK', "/I$vkInc")
+    Write-Host '   (with its Vulkan part)'
+}
+& $cc /nologo /O2 /MD /EHsc /W3 /LD -fuse-ld=lld -Wno-deprecated-declarations -Wno-missing-braces "/I$inc" "/I$iface" @vk $src "/Fe:$(Join-Path $tmp 'gt5_upscale_dlss.dll')" `
     /link $lib advapi32.lib user32.lib shell32.lib version.lib ole32.lib gdi32.lib
 $rc = $LASTEXITCODE
 Pop-Location

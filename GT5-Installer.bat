@@ -702,6 +702,15 @@ function Get-Code([string]$base) {
     }
     Set-Now "Downloading the code"
     $code = Invoke-Tool $git @("-C", $base, "fetch", "--progress", "--tags", "origin") -OnLine { param($l) Read-GitProgress $l }
+    if ($code -ne 0) {
+        # A Git whose own certificate file is damaged or missing ("error adding trust anchors from file",
+        # #46) still reaches GitHub through Windows' certificate store. The setting stays in this install's
+        # repository, so updates use it too; it is taken out again if that doesn't help either.
+        Say "  Trying again with Windows' certificate store (http.sslBackend=schannel)."
+        [void](Invoke-Tool $git @("-C", $base, "config", "http.sslBackend", "schannel") -Quiet)
+        $code = Invoke-Tool $git @("-C", $base, "fetch", "--progress", "--tags", "origin") -OnLine { param($l) Read-GitProgress $l }
+        if ($code -ne 0) { [void](Invoke-Tool $git @("-C", $base, "config", "--unset", "http.sslBackend") -Quiet) }
+    }
     if ($code -ne 0) { Stop-Install "downloading the code from GitHub failed (is the internet connection up?)." }
     Set-Now "Unpacking the code"; Set-Pct -1
     $code = Invoke-Tool $git @("-C", $base, "checkout", "--progress", "-f", "-B", "main", "--track", "origin/main") -OnLine { param($l) Read-GitProgress $l }

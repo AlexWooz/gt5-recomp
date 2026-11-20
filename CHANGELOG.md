@@ -7,7 +7,36 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 > or repeated frames (fixed on 4 Nov and 9 Nov), so treat them as rough before-and-after comparisons.
 > From 9 Nov on, numbers are the game's own frames.
 
+## 20 Nov 2026
+
+🏷️ Released as **v0.1.109**
+
+- **Installer:** when Git can't use its own certificate file ("error adding trust anchors", a damaged Git for Windows, #46), downloading the code is tried again through Windows' certificate store, and the install keeps that setting so updates work too. Checked with a broken certificate file in Git's global settings (the retry gets through) and on a normal PC (nothing changes).
+- **Nothing left out while shaders build** (DirectX 12, part of Asynchronous shader loading): an object whose own shader is still being built is drawn at once with a general stand-in and switched over when the real one is ready. The stand-in's own shaders are built once in the "Preparing shaders" step (about 20 seconds). On a PC that has not played yet, about one part in fifty still goes missing for a moment (55 draws in a first race, against about 2,500 before); with a new car or track on a PC that has played, about one in twenty. The stand-in also draws most of the passes the game used to wait for (shadow maps, passes that read a rendered picture), so a first session waits about 0.3 seconds in all where it waited over a second.
+
+## 19 Nov 2026
+
+- **Button symbols** (Controls, a choice; the game's own by default): the game's menus can show Xbox buttons or your keyboard keys in place of the PlayStation symbols, on the help bars and on the Options controller picture. Checked on Europe 1.00; a release with other pictures keeps its own.
+- **After a crash or a freeze** the launcher offers **Save a report**: one ZIP of the logs with your user name and folders taken out, to attach on the report page. Nothing is sent by itself.
+- The log's frame generation line no longer repeats many times a minute.
+- The two extra job threads follow the priorities of the SPU they stand in for.
+- **Frame generation** makes frames on every screen: replays, the pre-race screen, menus and pause, at 30 drawn as well as 60.
+- **Shaders are prepared before the game starts** (a short step in the launcher, after updates and when graphics settings change).
+- **Shorter freezes** when new shaders are needed: they build on all the PC's cores.
+- **Asynchronous shader loading** (Display, on by default): no pause when a car or track first appears; a part can show up a moment late instead.
+- **Faster start with a big shader cache**: the cache is usable at once; a long pause at the first menu is gone.
+- If the game ever stops drawing for 8 seconds, the log now says where it is stuck, with the state of the game's job system.
+- Long sessions: the runtime's lock table no longer fills up (a fix first made in Project Tourline 5, MIT, adapted).
+- Groundwork for building shaders before you reach a new car or track: the game can look through its own model files in the background (Europe and Asia 1.00; it stays idle until a list of known shaders ships).
+- **Pixel shaders build about a third faster.** Every PC builds them again once after this update (before the game starts where it can).
+
 ## 18 Nov 2026
+
+- **Lighter on the CPU**: less work around every SPU job, the first native code for the biggest one, and SPU code that branches straight to where it is going.
+- **Frame rate**: 60 or 30 (in the game's menu and the launcher); Frame generation doubles either.
+- **Controller**: the buttons are the game's own again by default; throttle and brake on the triggers is a choice (Controls, Triggers).
+- **Vulkan**: the Resolution setting (up to 5K) and NVIDIA DLSS / DLAA work.
+- **DirectX 12**: frames no longer wait on the graphics card's whole queue; a little less work for the render threads.
 
 🏷️ Released as **v0.1.108**
 

@@ -60,8 +60,10 @@ body:
     attributes:
       label: Log file
       description: |
-        Drag the file into this box. Installer: `GT5-Installer.log` (next to the installer). Game:
-        `GT5\logs\play.err`, renamed to `play.err.txt` first because GitHub refuses `.err` files (or zip it).
+        Drag the file into this box. Game: the launcher's report file, `GT5-report-<date>.zip` on your desktop
+        (**Save a report** after a crash or a freeze, or **Help** > **Save logs for a report**). Installer:
+        `GT5-Installer.log` (next to the installer). By hand: `GT5\logs\play.err`, renamed to `play.err.txt` first
+        because GitHub refuses `.err` files (or zip it).
         After a restart, the earlier run's log is `play.prev.err`.
   - type: textarea
     id: log

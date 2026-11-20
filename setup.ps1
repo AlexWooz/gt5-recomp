@@ -384,6 +384,12 @@ if ($addOns) {
         if ($r -eq 0) { Write-Host "  NVIDIA DLSS: added" } elseif ($r -eq 1) { Write-Host "  NVIDIA DLSS: not added this time (GT5\logs\add_dlss.log says why). The next update tries again." }
     }
 }
+# The shaders this PC's game has drawn before (a setup over an earlier install keeps them), made with this build
+# (gt5.exe --prepare-shaders). On a first install there are none yet and it ends at once. Never a stop.
+$gt5exe = Join-Path $gt5 "build\gt5.exe"
+if (Test-Path -LiteralPath $gt5exe) {
+    $null = Start-Process -FilePath $gt5exe -ArgumentList "--prepare-shaders" -WorkingDirectory $gt5 -NoNewWindow -Wait -PassThru -RedirectStandardError (Join-Path $logs "prepare.log")
+}
 Write-Host ""
 Write-Host "Done! Start GT5Launcher.exe in this folder (settings, Play, Updates), or GT5\play.bat directly." -ForegroundColor Green
 Write-Host "Later, the launcher's Updates page or a double-click on Update.bat gets new versions." -ForegroundColor Green

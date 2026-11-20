@@ -1,4 +1,4 @@
-// GT5 Launcher: settings, play, updates and help for the Gran Turismo 5 PC recompilation.
+﻿// GT5 Launcher: settings, play, updates and help for the Gran Turismo 5 PC recompilation.
 // Built on your PC by launcher\build-launcher.ps1 with the C# compiler that comes with Windows
 // (.NET Framework 4), so nothing prebuilt is downloaded. C# 5 only: that is what that compiler takes.
 //
@@ -53,6 +53,14 @@ namespace Gt5Launcher
                 f.Show(); Application.DoEvents();
                 if (online) { var until = DateTime.Now.AddSeconds(8); while (DateTime.Now < until) { Application.DoEvents(); Thread.Sleep(50); } }
                 f.SaveScreenshots(args[1]);
+                return;
+            }
+            // --save-report [folder]: the report of the last run (ProblemReport) as a ZIP in that folder (else on the
+            // desktop), with no window: for testing, and for a helper that collects a report.
+            if (args.Length >= 1 && args[0] == "--save-report")
+            {
+                var p = new Paths();
+                try { ProblemReport.Save(p, ProblemReport.Classify(Path.Combine(p.Logs, "play.err"), null, -1), args.Length > 1 ? args[1] : null, null); } catch { }
                 return;
             }
             // --update-window <install folder> <launcher> [update.ps1 arguments]: the update window (#39), run
@@ -260,8 +268,17 @@ namespace Gt5Launcher
             { "started", new[] { "Starting the game...", "正在启动游戏..." } },
             { "stopped", new[] { "The game has closed.", "游戏已关闭。" } },
             // The game ended on its own with an exit code that isn't one of its own (0, or 20 / 21, where it has told
-            // the player itself): what Windows recorded goes to GT5\logs\play.err, not here.
-            { "crashed", new[] { "The game stopped unexpectedly. Help: Save logs for a report.", "游戏意外停止。可在“帮助”中保存日志用于报告。" } },
+            // the player itself): what Windows recorded goes to GT5\logs\play.err, not here. The report line's buttons
+            // follow it (ProblemReport).
+            { "crashed", new[] { "The game stopped unexpectedly.", "游戏意外停止。" } },
+            // After a freeze or a start that showed nothing, the same line (ProblemReport).
+            { "rep.freeze", new[] { "The game stopped responding.", "游戏停止响应。" } },
+            { "rep.nostart", new[] { "The game didn't start properly.", "游戏未能正常启动。" } },
+            { "rep.save", new[] { "Save a report", "保存报告" } },
+            { "rep.page", new[] { "Open the report page", "打开报告页面" } },
+            { "rep.hide", new[] { "Hide", "隐藏" } },
+            { "rep.saved", new[] { "Report saved: attach it on the report page.", "报告已保存：请在报告页面附上它。" } },
+            { "rep.notsaved", new[] { "The report couldn't be saved.", "无法保存报告。" } },
             { "nostart", new[] { "The game couldn't be started.", "无法启动游戏。" } },
             { "version", new[] { "Version", "版本" } },
             { "devbuild", new[] { "development build", "开发版本" } },
@@ -279,6 +296,10 @@ namespace Gt5Launcher
             { "shadows.standard", new[] { "Standard", "标准" } },
             { "shadows.high", new[] { "High", "高" } },
             { "shadows.ultra", new[] { "Ultra", "极高" } },
+            // New shaders (LD_SHADERS), as the game's menu says it (gt5_settings_table.h, k_ch_shaders).
+            { "shaders", new[] { "Asynchronous shader loading", "异步着色器加载" } },
+            { "shaders.wait", new[] { "Off", "关" } },
+            { "shaders.bg", new[] { "On", "开" } },
             // The NVIDIA DLSS row under Anti-aliasing (an add-on: see class Addon). [[...]] is the link.
             { "dlss.name", new[] { "NVIDIA DLSS", "NVIDIA DLSS" } },
             { "dlss.note", new[] { "From NVIDIA, about 60 MB. Adding it accepts [[NVIDIA's licence]].", "来自 NVIDIA，约 60 MB。添加即表示接受 [[NVIDIA 的许可协议]]。" } },
@@ -355,6 +376,11 @@ namespace Gt5Launcher
             { "triggers", new[] { "Triggers", "扳机键" } },
             { "triggers.drive", new[] { "Throttle and brake", "油门和刹车" } },
             { "triggers.ps3", new[] { "As on a PS3 pad", "与 PS3 手柄相同" } },
+            { "symbols", new[] { "Button symbols", "按键图标" } },
+            { "symbols.game", new[] { "As in the game", "游戏原样" } },
+            { "symbols.xbox", new[] { "Xbox", "Xbox" } },
+            { "symbols.keys", new[] { "Keyboard", "键盘" } },
+            { "symbols.auto", new[] { "Automatic", "自动" } },
             { "padbg", new[] { "Controller works when the game isn't in front", "游戏不在前台时手柄仍可用" } },
             { "clip", new[] { "Keep the mouse inside the window", "鼠标限制在窗口内" } },
             { "wheel", new[] { "Steering wheel", "方向盘" } },
@@ -427,9 +453,8 @@ namespace Gt5Launcher
             { "lang.help", new[] { "Only languages your disc has.", "仅限光盘包含的语言。" } },
             { "lang.system", new[] { "Same as Windows", "与 Windows 相同" } },
             { "mods", new[] { "Mods", "模组" } },
-            // Mods the port ships, by their folder name (GT5\mods\<name>): a few words in place of mod.json's text.
-            // Another mod shows its own name only.
-            { "mod.half-rate", new[] { "Half rate (30 fps, less CPU)", "半速（30 帧，更省 CPU）" } },
+            // Mods the port ships have a few words here by their folder name ("mod.<name>", GT5\mods\<name>) in place of
+            // mod.json's text; another mod shows its own name only. (half-rate is Frame rate's 30 now: no tick of its own.)
             { "sound", new[] { "Sound", "声音" } },
             { "volume", new[] { "Volume", "音量" } },
             { "bgmute", new[] { "Mute when in the background", "在后台时静音" } },
@@ -459,6 +484,10 @@ namespace Gt5Launcher
             { "uw.files", new[] { "{0:N0} of {1:N0} steps", "第 {0:N0} / {1:N0} 步" } },
             { "uw.finish", new[] { "Finishing", "正在完成" } },
             { "uw.addon", new[] { "Adding {0}", "正在添加 {0}" } },
+            { "uw.shaders", new[] { "Preparing shaders", "正在准备着色器" } },
+            { "uw.shcount", new[] { "{0:N0} of {1:N0}", "{0:N0} / {1:N0}" } },
+            { "prep.status", new[] { "Preparing shaders {0:N0} of {1:N0}", "正在准备着色器 {0:N0} / {1:N0}" } },
+            { "prep.now", new[] { "PLAY NOW", "立即开始" } },
             { "uw.done", new[] { "Updated to {0}", "已更新到 {0}" } },
             { "uw.donegen", new[] { "Update finished", "更新完成" } },
             { "uw.uptodate", new[] { "Already up to date", "已是最新版本" } },
@@ -512,6 +541,7 @@ namespace Gt5Launcher
             { "st.join", new[] { "Joining", "正在合并" } },
             { "st.remove", new[] { "Removing", "正在移除" } },
             { "st.working", new[] { "Working", "正在处理" } },
+            { "st.shaders", new[] { "Preparing shaders", "正在准备着色器" } },
             { "st.stopping", new[] { "Stopping", "正在停止" } },
             { "st.done", new[] { "Done.", "完成。" } },
             { "st.failed", new[] { "Didn't finish.", "未完成。" } },
@@ -591,7 +621,7 @@ namespace Gt5Launcher
         // set "NAME=value", and set NAME=value without the quotes, which cmd takes just the same
         // (before v0.1.86 a line without them was dropped at the next save).
         static readonly Regex SetLine = new Regex("^\\s*@?set\\s+(?:\"([A-Za-z0-9_]+)=(.*)\"|([A-Za-z0-9_]+)=(.*))\\s*$", RegexOptions.IgnoreCase);
-        // The Speed lines Save() writes after SpeedMark: the launcher's, not the player's.
+        // The Speed lines older launchers wrote after SpeedMark for 30 fps: the launcher's, not the player's.
         static readonly string[] SpeedKeys = { "LD_WATCH", "LD_WATCH_PRIORITY", "LD_WATCH_DRAW" };
 
         // The values as the file had them when it was last read or written. A value the launcher hasn't
@@ -608,6 +638,22 @@ namespace Gt5Launcher
             try { foreach (var kv in Read(path)) V[kv.Key] = kv.Value; } catch { }
             Base = new Dictionary<string, string>(V, StringComparer.OrdinalIgnoreCase);
             stamp = Stamp();
+            HasSpeedLines = SpeedLinesInFile();
+        }
+
+        // The file still ends in the Speed lines an older launcher wrote for 30 fps (LD_WATCH=2 ...): the next save
+        // leaves them out (LauncherForm.Normalize saves at once then).
+        public bool HasSpeedLines;
+        bool SpeedLinesInFile()
+        {
+            try
+            {
+                if (!File.Exists(path)) return false;
+                foreach (var line in File.ReadAllLines(path))
+                    if (line.Trim().StartsWith(SpeedMark, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            catch { }
+            return false;
         }
 
         // The file's size and time when it was last read or written here. The game's own menu (F1) writes the same
@@ -637,6 +683,7 @@ namespace Gt5Launcher
             V = next;
             Base = now;
             stamp = Stamp();
+            HasSpeedLines = SpeedLinesInFile();
             return changed;
         }
 
@@ -660,8 +707,8 @@ namespace Gt5Launcher
 
         // The set lines of a settings.bat; any other line of the player's own goes to `own` as written.
         // A key set twice takes the later value, as cmd does: a line added at the end of the file wins.
-        // The Speed lines Save() adds after SpeedMark are the launcher's own, but reading goes on past
-        // them (before v0.1.86 it stopped there, and a player's lines added below them were dropped).
+        // The Speed lines older launchers added after SpeedMark are the launcher's own and left out, but reading
+        // goes on past them (before v0.1.86 it stopped there, and a player's lines added below them were dropped).
         // v0.1.20-v0.1.22 wrote the Speed lines with no marker, so they were read back as LD_WATCH=2 and
         // 30 fps stayed on after Speed was set back: for those keys the first value counts, and
         // LD_WATCH_PRIORITY that came with such a repeated LD_WATCH is dropped.
@@ -739,17 +786,13 @@ namespace Gt5Launcher
                 sb.AppendLine(OwnMark + ", as you wrote them:");
                 foreach (var l in own) sb.AppendLine(l);
             }
-            // Speed (GT5_SPEED) turns into the renderer's own switches, after the keys so it wins.
-            // GT5 counts time in frames: these draw fewer frames instead of letting the game slow down.
-            string speed = Get("GT5_SPEED");
-            if (speed == "30")
-            {
-                sb.AppendLine(SpeedMark + " (GT5_SPEED=30): the renderer's own switches. The launcher writes these from Speed; reading stops here.");
-                sb.AppendLine("set \"LD_WATCH=2\""); sb.AppendLine("set \"LD_WATCH_PRIORITY=0\""); sb.AppendLine("set \"LD_WATCH_DRAW=2\"");
-            }
+            // Frame rate (GT5_SPEED) is read by the game itself now (its half rate, libs\video\rsx_frame_rate.c): no
+            // Speed lines after the keys any more. A file that has them from an older launcher loses them here
+            // (Read leaves them out), and the game reads such a file without them meanwhile (gt5_settings.c).
             File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
             Base = new Dictionary<string, string>(V, StringComparer.OrdinalIgnoreCase);
             stamp = Stamp();
+            HasSpeedLines = false;
         }
     }
 
@@ -932,6 +975,8 @@ namespace Gt5Launcher
         static readonly Regex NinjaLine = new Regex(@"^\[(\d+)/(\d+)\]");
         static readonly Regex SwitchLine = new Regex(@"^Switching from (.+) to (.+)$");
         static readonly Regex AddProgress = new Regex(@"^GT5_ADD (\w+) (\d+|-) ?(.*)$");
+        // gt5.exe --prepare-shaders: "GT5_SHADERS done total" (rsx_shader_prep.inc)
+        internal static readonly Regex ShaderLine = new Regex(@"^GT5_SHADERS (\d+) (\d+)$");
         string addPrev;   // the step's words while an add-on runs
         readonly Paths P;
         readonly string relaunch;
@@ -1119,6 +1164,20 @@ namespace Gt5Launcher
                 if (ph == "start") { addPrev = step; step = string.Format(T.Get("uw.addon"), m.Groups[3].Value.Trim()); sub = ""; }
                 else if (ph == "done" || ph == "skip" || ph == "fail") { if (addPrev != null) step = addPrev; addPrev = null; sub = ""; }
                 else if (addPrev != null && m.Groups[2].Value != "-") sub = m.Groups[2].Value + "%";
+                return;
+            }
+            // The shaders, made again for the new version before the game starts: "Preparing shaders 1,234 of 9,876".
+            m = ShaderLine.Match(t);
+            if (m.Success)
+            {
+                double n = double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                double of = double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+                if (of > 0)
+                {
+                    if (step != T.Get("uw.shaders")) { Step(0.97, 0.995, T.Get("uw.shaders"), 60); counted = true; }
+                    within = Math.Min(1, n / of);
+                    sub = string.Format(T.Get("uw.shcount"), n, of);
+                }
                 return;
             }
             m = SwitchLine.Match(t);
@@ -1844,7 +1903,20 @@ namespace Gt5Launcher
             if (t.Length == 0) return;
             // The add scripts' own progress lines (GT5\scripts\addon_common.ps1): the phase, and the whole run's
             // percent, which then leads the bar (git's and the build's own figures only fill in the words).
-            Match m = AddProgress.Match(t);
+            Match m = UpdateForm.ShaderLine.Match(t);   /* gt5.exe --prepare-shaders */
+            if (m.Success)
+            {
+                double n = double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                double of = double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+                if (of > 0)
+                {
+                    if (phase != "st.shaders") Phase("st.shaders");
+                    pct = Math.Min(100, n * 100 / of);
+                    figure = string.Format(T.Get("uw.shcount"), n, of);
+                }
+                return;
+            }
+            m = AddProgress.Match(t);
             if (m.Success)
             {
                 addFmt = true;
@@ -2261,6 +2333,12 @@ namespace Gt5Launcher
         bool comboQuiet;       // a list or tick box being set by the launcher itself (nothing saved, nothing asked)
         bool closeNow;         // "Stop and close" was pressed
         GpuInfo Gpu;           // what this PC's graphics cards can run (NVIDIA DLSS needs an RTX card)
+        // The line after a crash or a freeze (ProblemReport): the run it is about, its sentence, what the line said
+        // before it, and its buttons.
+        RunVerdict repRun;
+        string repText, repBefore;
+        bool repSaved;
+        FlatButton repSave, repPage, repHide;
         // Each setting's row, by its key (label, list or tick box, help line; an add-on row joins the row of the
         // setting it serves): a row can be greyed as a whole, and hidden as a whole with the rows below moving up.
         class Row { public string Key; public Panel Page; public int Top, Bottom; public readonly List<Control> Ctl = new List<Control>(); }
@@ -2273,8 +2351,10 @@ namespace Gt5Launcher
         // Settings the Vulkan renderer does nothing with yet: their rows are greyed while Vulkan is chosen, with one
         // line under Renderer. The rows the game's own menu hides on Vulkan (rsx_vulkan_backend.c, vk_menu_start, after
         // the Vulkan menu's first stage); take a key out when Vulkan gains that feature.
-        static readonly string[] VulkanLacks = { "LD_RES_TARGET", "LD_AA", "LD_DLSS_PRESET", "LD_DLSS_SCALE", "LD_SHADOWS",
-                                                 "LD_FG_METHOD", "LD_FRAMEGEN_MULT", "LD_PRESENT_SYNC", "PS3_TEX_DUMP" };
+        static readonly string[] VulkanLacks = { "LD_FG_METHOD", "LD_FRAMEGEN_MULT", "PS3_TEX_DUMP", "LD_SHADERS" };
+        // New shaders (LD_SHADERS) when not chosen ("" = this): false = wait for them, true = build in the background.
+        // The game has the same constant (gt5_settings.h, GT5_SHADERS_BG_DEFAULT): flip both together.
+        static readonly bool ShadersBgDefault = true;
         // The smallest window (its inside): the widest page row (the add-on rows, 700) beside the page list, and
         // room for a few rows above Play.
         const int MinClientW = 960, MinClientH = 540;
@@ -2336,6 +2416,15 @@ namespace Gt5Launcher
             // After the window exists: the check answers on the UI thread through BeginInvoke. Unticked ("" or "0")
             // means no check: the tick box writes "1" or nothing.
             Shown += delegate { if (S.Get("GT5_LAUNCHER_AUTOCHECK") == "1" && !shots) CheckForUpdates(false); };
+            // The last run, when it crashed or froze and its line wasn't dismissed or used. Screenshots: the line itself
+            // with GT5_LAUNCHER_REPORT_TEST=crash / freeze / nostart / saved.
+            if (!shots) Shown += delegate { CheckLastRun(); };
+            else
+            {
+                string rt = Environment.GetEnvironmentVariable("GT5_LAUNCHER_REPORT_TEST") ?? "";
+                if (rt != "") ShowReportLine(new RunVerdict { Kind = rt == "freeze" ? RunEnd.Freeze : rt == "nostart" ? RunEnd.NoStart : RunEnd.Crash });
+                if (rt == "saved") { repSaved = true; repSave.Visible = false; SetReportText("rep.saved"); }
+            }
             // The game's own menu (F1) writes the same settings: read them again whenever the launcher comes to the front.
             Activated += delegate { if (!shots) ReloadSettings(); };
         }
@@ -2354,6 +2443,22 @@ namespace Gt5Launcher
             // out): DirectX 12, which is what play.bat starts then anyway.
             if (S.Get("GT5_RENDERER") == "vulkan" && !VulkanBuilt()) { S.Set("GT5_RENDERER", ""); changed = true; }
             if (NormalizeFrameGen()) changed = true;
+            // Triggers: "ps3" was v0.1.108's name for the game's own layout, which is the default ("") again.
+            if (S.Get("PAD_TRIGGERS").Trim().ToLowerInvariant() == "ps3") { S.Set("PAD_TRIGGERS", ""); changed = true; }
+            // The half-rate mod's tick (Game page, GT5_MOD_HALF_RATE) is Frame rate's 30 now: a tick that was on
+            // becomes 30 where Frame rate was left unset, and the line goes either way.
+            if (S.V.ContainsKey("GT5_MOD_HALF_RATE"))
+            {
+                if (S.Get("GT5_MOD_HALF_RATE") == "1" && S.Get("GT5_SPEED") == "") S.Set("GT5_SPEED", "30");
+                S.V.Remove("GT5_MOD_HALF_RATE");
+                changed = true;
+            }
+            // Frame rate is 60 ("") or 30. A test build's other values: "30fg" is 30, "60" and "auto" are 60.
+            string sp = S.Get("GT5_SPEED").Trim().ToLowerInvariant();
+            if (sp == "30fg") { S.Set("GT5_SPEED", "30"); changed = true; }
+            else if (sp == "60" || sp == "auto") { S.Set("GT5_SPEED", ""); changed = true; }
+            // Speed lines an older launcher left after the keys (its 30 fps): saved again without them.
+            if (S.HasSpeedLines) changed = true;
             if (changed) SaveQuiet();
         }
 
@@ -2416,6 +2521,7 @@ namespace Gt5Launcher
             status = new Label { ForeColor = Look.Dim, AutoSize = false, Location = new Point(24, 18), Size = new Size(500, 48), Text = T.Get("ready"), TextAlign = ContentAlignment.MiddleLeft };
             bottom.Controls.Add(playButton); bottom.Controls.Add(status);
             bottom.Resize += delegate { playButton.Location = new Point(bottom.Width - playButton.Width - 24, 14); status.Width = Math.Max(100, playButton.Left - 48); };
+            BuildReportLine(bottom);
 
             content.Dock = DockStyle.Fill; content.BackColor = Look.Bg; content.Padding = new Padding(28, 18, 28, 10);
             Controls.Add(content); Controls.Add(nav); Controls.Add(bottom); Controls.Add(header);
@@ -2533,6 +2639,8 @@ namespace Gt5Launcher
             switch (key)
             {
                 case "renderer.note": return !VulkanChosen();
+                // 30 is the half-rate mod's switch: no row without it (as the game's menu leaves it out then).
+                case "GT5_SPEED": return !File.Exists(Path.Combine(P.Mods, "half-rate", "mod.json"));
                 case "LD_FG_METHOD": return !FgOn();
                 case "LD_FRAMEGEN_MULT": return !FgOn() || FgOneFrame();
                 case "PS3_WINDOW_SIZE":
@@ -2949,6 +3057,10 @@ namespace Gt5Launcher
             }
             // Shadows: DirectX 12 draws the sun's shadow map at 2x (High, the default) or 4x with soft edges.
             y = AddCombo(p, "shadows", null, "LD_SHADOWS", new[] { new Choice("standard", T.Get("shadows.standard")), new Choice("", T.Get("shadows.high")), new Choice("ultra", T.Get("shadows.ultra")) }, y);
+            // New shaders: wait for them, or build them in the background (DirectX 12; Vulkan always builds in the background).
+            y = AddCombo(p, "shaders", null, "LD_SHADERS", ShadersBgDefault
+                ? new[] { new Choice("", T.Get("shaders.bg")), new Choice("wait", T.Get("shaders.wait")) }
+                : new[] { new Choice("", T.Get("shaders.wait")), new Choice("bg", T.Get("shaders.bg")) }, y);
             p.VisibleChanged += delegate { if (p.Visible) RefreshAddons(); };
             // Frame generation, as in the game's menu: one switch; the generator (automatic unless one is named;
             // NVIDIA's and AMD's each need their add-on) and the multiplier only while it is on.
@@ -2966,7 +3078,8 @@ namespace Gt5Launcher
             y = AddCombo(p, "window", "window.help", "GT5_LAUNCH_WINDOW", new[] { new Choice("windowed", T.Get("window.windowed")), new Choice("max", T.Get("window.max")), new Choice("borderless", T.Get("window.borderless")) }, y);
             y = AddCombo(p, "size", "size.help", "PS3_WINDOW_SIZE", WindowSizes(), y);
             y = AddCombo(p, "shape", "shape.help", "PS3_ASPECT", new[] { new Choice("auto", T.Get("shape.auto")), new Choice("16:9", "16:9"), new Choice("21:9", "21:9"), new Choice("32:9", "32:9") }, y);
-            // Frame rate: 30 fps is the game's own 30 frames a second (its Performance page).
+            // Frame rate: 30 fps is the game's own 30 frames a second, at real speed (its half rate: the game's menu,
+            // Performance page; libs\video\rsx_frame_rate.c). Frame generation, above, doubles either.
             y = AddCombo(p, "speed", null, "GT5_SPEED", new[] { new Choice("", T.Get("speed.full")), new Choice("30", T.Get("speed.30")) }, y);
             return p;
         }
@@ -2996,8 +3109,13 @@ namespace Gt5Launcher
         {
             var p = NewPage(); int y = 0;
             y = AddHeading(p, T.Get("nav.controls"), y);
-            // A controller's triggers while driving (cellPad.c, PAD_TRIGGERS): throttle and brake, or as on a PS3 pad.
-            y = AddCombo(p, "triggers", null, "PAD_TRIGGERS", new[] { new Choice("", T.Get("triggers.drive")), new Choice("ps3", T.Get("triggers.ps3")) }, y);
+            // A controller's triggers while driving (cellPad.c, PAD_TRIGGERS): as on a PS3 pad (the game's own layout,
+            // the default), or throttle and brake.
+            y = AddCombo(p, "triggers", null, "PAD_TRIGGERS", new[] { new Choice("", T.Get("triggers.ps3")), new Choice("drive", T.Get("triggers.drive")) }, y);
+            // The game's button symbols (GT5\src\gt5_glyphs.cpp, GT5_BUTTON_SYMBOLS): the game's own (the default), an
+            // Xbox pad's, the keys bound below, or by the device used last. The same row as in the game's menu.
+            y = AddCombo(p, "symbols", null, "GT5_BUTTON_SYMBOLS", new[] { new Choice("", T.Get("symbols.game")), new Choice("xbox", T.Get("symbols.xbox")),
+                new Choice("keys", T.Get("symbols.keys")), new Choice("auto", T.Get("symbols.auto")) }, y);
             y = AddCheck(p, "padbg", null, "PAD_BACKGROUND", "1", y);
             y = AddCheck(p, "clip", null, "PAD_CURSOR_CLIP", "1", y);
             y = AddCombo(p, "wheel", "wheel.help", "PS3_WHEEL", new[] { new Choice("", T.Get("wheel.on")), new Choice("off", T.Get("wheel.off")) }, y + 8);
@@ -3147,7 +3265,8 @@ namespace Gt5Launcher
             y = AddNumber(p, "volume", null, "GT5_VOLUME", 0m, 100m, 5m, 100m, 0, "%", y);
             y = AddCheck(p, "bgmute", null, "GT5_MUTE_BACKGROUND", "1", y);
             // Mods built from GT5\mods: a tick each (GT5_MOD_<NAME>, 1 / 0). The section only when there is one. The
-            // unlock-fps example is not offered: the game never goes past 60 with it (and its text says otherwise).
+            // unlock-fps example is not offered: the game never goes past 60 with it (and its text says otherwise);
+            // half-rate is Frame rate's 30 (Display page).
             var mods = LoadMods();
             if (mods.Count > 0) y = AddHeading(p, T.Get("mods"), y + 10);
             foreach (var m in mods)
@@ -3184,6 +3303,8 @@ namespace Gt5Launcher
                         object o;
                         string name = d.TryGetValue("name", out o) && o != null ? o.ToString() : Path.GetFileName(dir);
                         if (name.Equals("unlock-fps", StringComparison.OrdinalIgnoreCase)) continue;
+                        // half-rate is the Frame rate setting's 30 (Display page; the game switches it while it runs).
+                        if (name.Equals("half-rate", StringComparison.OrdinalIgnoreCase)) continue;
                         // The ones the port ships have a few words of their own; another shows its name (its own
                         // description is for MODDING.md readers, not a row's caption).
                         string label = T.Get("mod." + name.ToLowerInvariant());
@@ -3281,13 +3402,32 @@ namespace Gt5Launcher
                 {
                     string desk = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                     var saved = new List<string>();
-                    foreach (var n in new[] { "play.err", "play.prev.err", "play.out", "update.log" })
+                    // The logs as one report file with this PC's names and folders taken out (ProblemReport), no longer
+                    // as copies of the logs themselves (those named the Windows user in every path).
+                    string lastErr = Path.Combine(P.Logs, "play.err");
+                    if (File.Exists(lastErr) || File.Exists(Path.Combine(P.Logs, "play.out")) || File.Exists(Path.Combine(P.Logs, "update.log")))
                     {
-                        string src = Path.Combine(P.Logs, n);
-                        if (!File.Exists(src)) continue;
-                        string dst = Path.Combine(desk, "gt5-" + n + ".txt");
-                        File.Copy(src, dst, true); saved.Add(Path.GetFileName(dst));
+                        Cursor = Cursors.WaitCursor;
+                        try { saved.Add(Path.GetFileName(ProblemReport.Save(P, ProblemReport.Classify(lastErr, null, -1), desk, null))); }
+                        finally { Cursor = Cursors.Default; }
                     }
+                    // The list of what this PC's game has drawn (keys only, no game data): with it, the port's own list
+                    // gets other players' tracks and cars. As text, one record a line, so a report form takes it.
+                    try
+                    {
+                        string keys = Path.Combine(P.Gt5, "scratch", "shader_keys", "shader_keys.lst");
+                        if (File.Exists(keys))
+                        {
+                            byte[] all = File.ReadAllBytes(keys);
+                            const int rec = 496;
+                            var sb = new StringBuilder();
+                            for (int o = 0; o + rec <= all.Length; o += rec) sb.AppendLine(Convert.ToBase64String(all, o, rec));
+                            string dst = Path.Combine(desk, "gt5-shader-keys.txt");
+                            File.WriteAllText(dst, sb.ToString(), new UTF8Encoding(false));
+                            saved.Add(Path.GetFileName(dst));
+                        }
+                    }
+                    catch { }
                     MessageBox.Show(this, saved.Count == 0 ? T.Get("help.nologs") : string.Format(T.Get("help.saved"), string.Join(", ", saved.ToArray())), "GT5");
                     return;
                 }
@@ -3747,9 +3887,117 @@ namespace Gt5Launcher
 
         // -- play --
         public void PlayNow() { Play(); }
+        // gt5.exe --prepare-shaders before the game (rsx_shader_prep.inc). DirectX 12 only: the Vulkan renderer has its
+        // own made-ahead pipeline list. Only when its stamp says something changed (PrepareWanted); its words go to
+        // GT5\logs\prepare.log.
+        Process prep;
+        bool prepDone;
+        // PLAY NOW while it works: stopped (cmd and gt5.exe), which is safe: each shader is saved when it is made, and
+        // the next run carries on.
+        void StopPrepare()
+        {
+            var pr = prep;
+            prep = null; prepDone = true;
+            playButton.Text = T.Get("play");
+            if (pr == null) return;
+            try
+            {
+                if (!pr.HasExited)
+                {
+                    var k = new ProcessStartInfo("taskkill.exe", "/T /F /PID " + pr.Id) { CreateNoWindow = true, UseShellExecute = false };
+                    Process.Start(k).WaitForExit(5000);
+                    pr.WaitForExit(5000);
+                }
+            }
+            catch { }
+        }
+        // Only when something changed since the step last ran: its stamp (GT5\scratch\rsx_shader_cache_v2\prepared.txt,
+        // second line, written by gt5.exe --prepare-shaders) names gt5.exe, settings.bat and the shipped shader list by
+        // size and time. The same now: nothing to start. No file (a cleared cache, or the game found a new graphics
+        // driver and removed it): the step runs.
+        bool PrepareWanted()
+        {
+            try
+            {
+                string stamp = Path.Combine(P.Gt5, "scratch", "rsx_shader_cache_v2", "prepared.txt");
+                if (!File.Exists(stamp)) return true;
+                string[] lines = File.ReadAllLines(stamp);
+                if (lines.Length < 2) return true;
+                var exe = new FileInfo(P.Exe);
+                var set = new FileInfo(P.Settings);
+                var ship = new FileInfo(Path.Combine(P.Gt5, "shaders", "known_d3d12.lst"));
+                string now = string.Format(CultureInfo.InvariantCulture, "launcher {0} {1} {2} {3} {4}",
+                    exe.Exists ? (uint)(exe.Length & 0xFFFFFFFF) : 0u, exe.Exists ? exe.LastWriteTimeUtc.ToFileTimeUtc() : 0L,
+                    set.Exists ? set.LastWriteTimeUtc.ToFileTimeUtc() : 0L,
+                    ship.Exists ? (uint)(ship.Length & 0xFFFFFFFF) : 0u, ship.Exists ? ship.LastWriteTimeUtc.ToFileTimeUtc() : 0L);
+                return lines[1].Trim() != now;
+            }
+            catch { return true; }
+        }
+        bool PrepareFirst()
+        {
+            if (prepDone || VulkanChosen() || !File.Exists(P.Exe)) return false;
+            if (!PrepareWanted()) return false;
+            Process me = Process.GetCurrentProcess();
+            IntPtr wasAff = IntPtr.Zero;
+            long good = GoodProcessors();
+            if (good != 0) { try { wasAff = me.ProcessorAffinity; me.ProcessorAffinity = new IntPtr(good); } catch { wasAff = IntPtr.Zero; } }
+            try
+            {
+                Directory.CreateDirectory(P.Logs);
+                var psi = new ProcessStartInfo("cmd.exe", "/c \"\"" + P.Exe + "\" --prepare-shaders 2>\"" + Path.Combine(P.Logs, "prepare.log") + "\"\"");
+                psi.WorkingDirectory = P.Gt5; psi.UseShellExecute = false; psi.CreateNoWindow = true;
+                psi.WindowStyle = ProcessWindowStyle.Hidden;
+                psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = Encoding.UTF8;
+                var pr = new Process { StartInfo = psi, EnableRaisingEvents = true };
+                pr.OutputDataReceived += delegate (object s, DataReceivedEventArgs e)
+                {
+                    if (e.Data == null) return;
+                    Match m = UpdateForm.ShaderLine.Match(e.Data.Trim());
+                    if (!m.Success) return;
+                    long n = long.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                    long of = long.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+                    if (of <= 0) return;   // nothing to make: no words at all
+                    try
+                    {
+                        BeginInvoke((MethodInvoker)delegate
+                        {
+                            if (prep != pr) return;
+                            status.Text = string.Format(T.Get("prep.status"), n, of);
+                            playButton.Text = T.Get("prep.now");
+                        });
+                    }
+                    catch { }
+                };
+                pr.Exited += delegate
+                {
+                    try
+                    {
+                        BeginInvoke((MethodInvoker)delegate
+                        {
+                            if (prep != pr) return;   // stopped by PLAY NOW: the game is already on its way
+                            prep = null; prepDone = true;
+                            playButton.Text = T.Get("play");
+                            status.Text = "";
+                            Play();
+                        });
+                    }
+                    catch { }
+                };
+                pr.Start();
+                prep = pr;
+                try { pr.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+                pr.BeginOutputReadLine();
+            }
+            catch { prep = null; prepDone = true; return false; }   // it couldn't start: the game starts as before
+            finally { if (wasAff != IntPtr.Zero) { try { me.ProcessorAffinity = wasAff; } catch { } } }
+            return true;
+        }
+
         void Play()
         {
             if (strip.Busy) { status.Text = T.Get("busy"); return; }
+            if (prep != null) StopPrepare();   // PLAY NOW while the shaders are being prepared
             if (running || GameRunning()) { status.Text = T.Get("already"); return; }
             // Play is greyed while the game can't start, and the Play page says why (--play gets here anyway).
             if (!CanStart()) { status.Text = Warning(); ShowPage("nav.play"); return; }
@@ -3774,6 +4022,10 @@ namespace Gt5Launcher
             }
             // Every change was written when it was made; this only catches one the file couldn't take then (it was open).
             SaveQuiet();
+            // The shaders first (gt5.exe --prepare-shaders): after an update, everything this PC has drawn is made again
+            // with the new version before the game starts. It ends at once when nothing changed; while it works, PLAY NOW
+            // starts the game straight away (what isn't made yet is made when first drawn, as before).
+            if (PrepareFirst()) return;
             Process cmd;
             // Processors the install's check found calculating wrongly (pc-check.ps1, .gt5\pc-check.json) are left out
             // of the game as they were out of the build: the launcher's own processor set, inherited by play.bat and
@@ -3793,6 +4045,8 @@ namespace Gt5Launcher
             finally { if (wasAff != IntPtr.Zero) { try { me.ProcessorAffinity = wasAff; } catch { } } }
             running = true;
             playButton.Text = T.Get("running"); playButton.Enabled = false;
+            HideReportLine();   // a new run: the line was about the one before
+            ProblemReport.Log(P, "play: the game is starting" + (VulkanChosen() ? " (Vulkan)" : ""));
             status.Text = T.Get("started");
             string mode = S.Get("GT5_LAUNCH_WINDOW");
             // The game places its own window (borderless at the desktop's size, a maximized window, or its last place)
@@ -3826,7 +4080,19 @@ namespace Gt5Launcher
                         if (hide) try { BeginInvoke((MethodInvoker)delegate { WindowState = FormWindowState.Minimized; }); } catch { }
                         if (place) { Thread.Sleep(600); ApplyWindowMode(hwnd, mode); }
                     }
-                    try { game.WaitForExit(); } catch { }
+                    // While it runs, its log every 3 s: a freeze report ([HANG]: no picture for 8 s) puts the report line up
+                    // at once, the launcher staying where it is (nothing comes over the game); the game drawing again takes
+                    // the line away unless the player used it.
+                    var hang = new HangWatch(Path.Combine(P.Logs, "play.err"));
+                    try
+                    {
+                        while (!game.WaitForExit(3000))
+                        {
+                            int change = hang.Poll();
+                            if (change != 0) try { BeginInvoke((MethodInvoker)delegate { FreezeChanged(change > 0); }); } catch { }
+                        }
+                    }
+                    catch { }
                 }
                 // gt5.exe is play.bat's last command, so cmd's exit code is the game's.
                 int code = int.MinValue;
@@ -3844,15 +4110,25 @@ namespace Gt5Launcher
                     if (!own) File.AppendAllText(Path.Combine(P.Logs, "play.err"), tail);
                 }
                 catch { }
+                // How the run ended, from its exit code and its log (ProblemReport.Classify): a crash, a freeze or a start
+                // that never showed a picture gets the report line.
+                RunVerdict verdict = null;
+                double secs = (DateTime.Now - start).TotalSeconds;
+                try { verdict = ProblemReport.Classify(Path.Combine(P.Logs, "play.err"), code == int.MinValue ? (int?)null : code, secs); } catch { }
+                ProblemReport.Log(P, "play: the game ended, exit code " + (code == int.MinValue ? "?" : ProblemReport.CodeText(code)) +
+                                     string.Format(CultureInfo.InvariantCulture, " after {0:0} s", secs) +
+                                     (verdict == null ? "" : ": " + ProblemReport.KindText(verdict) + (verdict.Picture ? "" : ", no picture shown")));
                 try
                 {
                     BeginInvoke((MethodInvoker)delegate
                     {
                         running = false;
+                        prepDone = false;   /* the next Play looks at the shaders' stamp again (settings may change) */
                         playButton.Text = T.Get("play");
                         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
                         Activate();
                         status.Text = T.Get(own ? "stopped" : "crashed");
+                        if (verdict != null && verdict.Kind != RunEnd.Fine && !ProblemReport.Seen(P, verdict.Key)) ShowReportLine(verdict);
                         // The game's own menu (F1) may have changed settings: every list shows the file as it is now.
                         ReloadSettings();
                         RefreshPlayButton();
@@ -3938,6 +4214,154 @@ namespace Gt5Launcher
             return found.Count == 0 ? null : string.Join("; ", found.ToArray());
         }
 
+        // -- the report line: after a crash or a freeze, one sentence at the bottom with "Save a report", "Open the report
+        // page" and a small x; nothing red, nothing over the game. A run's line goes for good once one of them is used.
+        void BuildReportLine(Panel bottom)
+        {
+            repSave = ReportButton(T.Get("rep.save")); repPage = ReportButton(T.Get("rep.page")); repHide = ReportButton("×");
+            repHide.Width = 30; repHide.AccessibleName = T.Get("rep.hide");
+            repSave.Click += delegate { SaveReport(); };
+            repPage.Click += delegate { OpenReportPage(); };
+            repHide.Click += delegate { DismissReport(); };
+            foreach (var b in new[] { repSave, repPage, repHide }) { b.Visible = false; bottom.Controls.Add(b); b.BringToFront(); }
+            // Another message in the line (busy, an add-on's result, the next run): the buttons go with the sentence.
+            status.TextChanged += delegate { if (repRun != null && status.Text != repText) HideReportLine(); };
+            bottom.Resize += delegate { PlaceReport(); };
+            if (repRun != null) { var r = repRun; repRun = null; ShowReportLine(r); }   // built again (the language changed)
+        }
+
+        static FlatButton ReportButton(string text)
+        {
+            var b = new FlatButton(text, Look.NavHot, Look.Line) { Font = Look.F(9.5f, FontStyle.Regular), Height = 30 };
+            b.Width = TextRenderer.MeasureText(text, b.Font).Width + 26;
+            return b;
+        }
+
+        void ShowReportLine(RunVerdict v)
+        {
+            if (status == null || status.IsDisposed || repSave == null) return;
+            if (repRun == null) repBefore = status.Text;
+            repRun = v;
+            repText = T.Get(v.Kind == RunEnd.Freeze ? "rep.freeze" : v.Kind == RunEnd.NoStart ? "rep.nostart" : "crashed");
+            status.Text = repText;
+            repSaved = false;
+            repSave.Visible = repPage.Visible = repHide.Visible = true;
+            repSave.Enabled = true;
+            PlaceReport();
+        }
+
+        void HideReportLine()
+        {
+            repRun = null;
+            foreach (var b in new[] { repSave, repPage, repHide }) if (b != null && !b.IsDisposed) b.Visible = false;
+            if (status != null && !status.IsDisposed && playButton != null) status.Width = Math.Max(100, playButton.Left - 48);
+        }
+
+        // The buttons right after the sentence, the line's label no wider than its words (nothing under the buttons).
+        void PlaceReport()
+        {
+            if (repRun == null || status == null || status.IsDisposed) return;
+            status.Width = TextRenderer.MeasureText(status.Text, status.Font).Width + 8;
+            int x = status.Left + status.Width + 6;
+            int y = status.Top + (status.Height - repSave.Height) / 2;
+            // (Not b.Visible: that says false for every control of a window not shown yet.)
+            foreach (var b in repSaved ? new[] { repPage, repHide } : new[] { repSave, repPage, repHide })
+            {
+                b.Location = new Point(x, y); x += b.Width + 8;
+            }
+        }
+
+        void SetReportText(string key) { repText = T.Get(key); status.Text = repText; PlaceReport(); }
+
+        // One ZIP on the desktop, shown in Explorer (made on a thread: a long log takes a moment).
+        void SaveReport()
+        {
+            var v = repRun;
+            if (v == null) return;
+            repSave.Enabled = false;
+            var th = new Thread(delegate ()
+            {
+                string zip = null;
+                try { zip = ProblemReport.Save(P, v, null, null); } catch { }
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (repRun != v) return;
+                        if (zip == null) { repSave.Enabled = true; SetReportText("rep.notsaved"); return; }
+                        v.Used = true;
+                        ProblemReport.MarkSeen(P, v.Key);
+                        ProblemReport.Log(P, "report: saved as " + Path.GetFileName(zip));
+                        repSaved = true;
+                        repSave.Visible = false;
+                        SetReportText("rep.saved");
+                        try { Process.Start("explorer.exe", "/select,\"" + zip + "\""); } catch { }
+                    });
+                }
+                catch { }
+            });
+            th.IsBackground = true; th.Start();
+        }
+
+        // GitHub's new-issue form in the browser, with a title, the version and the PC's parts (ProblemReport.IssueUrl):
+        // nothing else is in the link and nothing is sent; the player attaches the ZIP there.
+        void OpenReportPage()
+        {
+            var v = repRun;
+            if (v == null) return;
+            v.Used = true;
+            ProblemReport.MarkSeen(P, v.Key);
+            ProblemReport.Log(P, "report: the report page was opened");
+            try { Process.Start(new ProcessStartInfo(ProblemReport.IssueUrl(P, v, Gpu)) { UseShellExecute = true }); } catch { }
+        }
+
+        void DismissReport()
+        {
+            var v = repRun;
+            if (v == null) return;
+            ProblemReport.MarkSeen(P, v.Key);
+            string before = repBefore;
+            HideReportLine();
+            status.Text = before ?? "";
+        }
+
+        // The game froze (a [HANG] report in its log) or draws again, while it runs.
+        void FreezeChanged(bool frozen)
+        {
+            if (!running) return;
+            if (frozen)
+            {
+                if (repRun != null) return;
+                var v = new RunVerdict { Kind = RunEnd.Freeze, Key = ProblemReport.RunKey(Path.Combine(P.Logs, "play.err")) };
+                if (!ProblemReport.Seen(P, v.Key)) ShowReportLine(v);
+            }
+            else if (repRun != null && repRun.Kind == RunEnd.Freeze && !repRun.Used)
+            {
+                string before = repBefore;
+                HideReportLine();
+                status.Text = before ?? "";
+            }
+        }
+
+        // At start: the last run, when it crashed, froze or showed nothing in the last three days and its line wasn't
+        // dismissed or used.
+        void CheckLastRun()
+        {
+            var th = new Thread(delegate ()
+            {
+                try
+                {
+                    string err = Path.Combine(P.Logs, "play.err");
+                    if (!File.Exists(err) || (DateTime.Now - File.GetLastWriteTime(err)).TotalDays > 3 || GameRunning()) return;
+                    var v = ProblemReport.Classify(err, null, -1);
+                    if (v.Kind == RunEnd.Fine || ProblemReport.Seen(P, v.Key)) return;
+                    BeginInvoke((MethodInvoker)delegate { if (!running && repRun == null) ShowReportLine(v); });
+                }
+                catch { }
+            });
+            th.IsBackground = true; th.Start();
+        }
+
         void ApplyWindowMode(IntPtr hwnd, string mode)
         {
             try
@@ -3951,6 +4375,744 @@ namespace Gt5Launcher
                 SetForegroundWindow(hwnd);
             }
             catch { }
+        }
+    }
+
+    // ---- Problem reports: after a crash or a freeze ----------------------------------------------------
+    // How a run ended, from its exit code and GT5\logs\play.err (one file a run: play.bat keeps the one before as
+    // play.prev.err): a crash ([CRASH] / [ABORT] lines, or an exit code that isn't one of the game's own after it had
+    // shown pictures), a freeze (a [HANG] report the game didn't recover from) or a start that never showed a picture.
+    enum RunEnd { Fine, Crash, Freeze, NoStart }
+
+    class RunVerdict
+    {
+        public RunEnd Kind = RunEnd.Fine;
+        public string Key = "";          // which run (ProblemReport.RunKey)
+        public bool Picture;             // it showed at least one picture
+        public int? Code;                // its exit code, when known
+        public double Seconds = -1;      // how long it ran, when known
+        public string Windows = "";      // what Windows recorded about its end (the launcher's own line in play.err)
+        public string Disc = "";         // the game's title ID (BCES00569, BCUS98114, ...)
+        public bool Used;                // the player saved a report or opened the report page
+        public readonly List<string> Lines = new List<string>();   // the log lines that say what happened
+    }
+
+    // play.err read as it grows while the game runs: +1 when a freeze report starts, -1 when the game draws again within
+    // ProblemReport.LongFreeze s (a longer freeze keeps its line: it counts at the end too).
+    class HangWatch
+    {
+        readonly string path;
+        long at;
+        string part = "";
+        bool open;
+        public HangWatch(string path) { this.path = path; }
+        public int Poll()
+        {
+            bool was = open, longOne = false;
+            try
+            {
+                using (var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                {
+                    long len = f.Length;
+                    if (len < at) { at = 0; part = ""; }                               // a new run started the file again
+                    if (len - at > (8L << 20)) { at = len - (8L << 20); part = ""; }   // only the newest 8 MB
+                    if (len > at)
+                    {
+                        f.Seek(at, SeekOrigin.Begin);
+                        var b = new byte[len - at];
+                        int n = 0, r;
+                        while (n < b.Length && (r = f.Read(b, n, b.Length - n)) > 0) n += r;
+                        at += n;
+                        string text = part + Encoding.UTF8.GetString(b, 0, n);
+                        int last = text.LastIndexOf('\n');
+                        part = last < 0 ? text : text.Substring(last + 1);
+                        if (part.Length > 65536) part = "";
+                        if (last >= 0)
+                            foreach (var l in text.Substring(0, last).Split('\n'))
+                            {
+                                if (!l.StartsWith("[HANG]", StringComparison.Ordinal)) continue;
+                                if (ProblemReport.HangLine.IsMatch(l)) open = true;
+                                else if (open && l.StartsWith("[HANG] flips again", StringComparison.Ordinal))
+                                {
+                                    open = false;
+                                    if (ProblemReport.AgainSeconds(l) >= ProblemReport.LongFreeze) longOne = true;
+                                }
+                            }
+                    }
+                }
+            }
+            catch { }
+            if (longOne && !open) return was ? 0 : 1;   // a long one (begun and ended between two looks, maybe): its line stays
+            if (open == was) return 0;
+            return open ? 1 : -1;
+        }
+    }
+
+    // The report the player saves (one ZIP of a few MB at most) and the page they open. Nothing is ever sent by the
+    // launcher. Everything in the ZIP passes through Scrubber first: no Windows user name, no PC name and no folder
+    // outside the game's own.
+    static class ProblemReport
+    {
+        const string Repo = "https://github.com/MormonFTP-hub/gt5-recomp";
+        static readonly Encoding Utf8Strict = new UTF8Encoding(false, true);
+        // A picture reached the screen: the renderers' first-frame lines, their 5-second counts, or a freeze report
+        // (one comes only after pictures).
+        static readonly Regex PictureLine = new Regex(@"^\[(live-draw\] (frame|flip) \d|present\] [1-9]|pacing\] |frame-time\] |stutter\] 5 s to t=\d+ s: [1-9]|framegen\] version|menu\] (settings|in-game) menu ready|HANG\] the game has asked|RSX vulkan\] (engine: async shaders|engine: depth read|\[slow-frame\]))", RegexOptions.CultureInvariant);
+        internal static readonly Regex HangLine = new Regex(@"^\[HANG\] .*\bno (flip|picture) for\b", RegexOptions.CultureInvariant);
+        static readonly Regex AgainLine = new Regex(@"^\[HANG\] flips again .*\bafter (\d+) s\b", RegexOptions.CultureInvariant);
+        // A freeze the game came back from still counts when the picture stood still this long (the game's report
+        // comes after 8 s).
+        internal const int LongFreeze = 10;
+        // "[HANG] flips again (flip 1826) after 18 s without one": 18 (0 when the line doesn't say).
+        internal static int AgainSeconds(string l)
+        {
+            var m = AgainLine.Match(l);
+            int s;
+            return m.Success && int.TryParse(m.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out s) ? s : 0;
+        }
+        static readonly Regex EndLine = new Regex(@"^\[launcher\] the game ended with exit code (-?\d+)(?:; Windows says: (.*))?", RegexOptions.CultureInvariant);
+        static readonly Regex DiscId = new Regex(@"\b(BC[AEJKU]S\d{5}|BL[AEJKU]S\d{5})\b", RegexOptions.CultureInvariant);
+        // Lines worth keeping from the middle of a long log: the PC's parts and the settings in use.
+        static readonly Regex KeyLine = new Regex(@"^\[(gpu|settings|launcher|exit-chain|mods|spu-native|res-scale|upscale|fsr|shaders|cellVideoOut|threads\] every|win\] |menu\] settings menu|framegen\] (NVIDIA|AMD|version)|cellAudio\] sound|wheel\] (found|no)|RSX vulkan\] (using|device)|present\] vertical)", RegexOptions.CultureInvariant);
+        static readonly Regex Secret = new Regex(@"^(\s*set\s+""?)([A-Z0-9_]*(TOKEN|PASSWORD|PASSWD|SECRET|API_?KEY|AUTH)[A-Z0-9_]*)=([^""\r\n]*)", RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        // Which run: play.err's first 4 KB (its thread ids and times differ every run), and its time when shorter.
+        public static string RunKey(string err)
+        {
+            try
+            {
+                byte[] b;
+                using (var f = new FileStream(err, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) b = ReadBytes(f, 4096);
+                string k;
+                using (var sha = System.Security.Cryptography.SHA1.Create()) k = BitConverter.ToString(sha.ComputeHash(b), 0, 10).Replace("-", "");
+                if (b.Length < 4096) k += "-" + File.GetLastWriteTimeUtc(err).Ticks.ToString(CultureInfo.InvariantCulture);
+                return k;
+            }
+            catch { return ""; }
+        }
+
+        public static RunVerdict Classify(string err, int? code, double seconds)
+        {
+            var v = new RunVerdict { Code = code, Seconds = seconds, Key = RunKey(err) };
+            var lines = ReadLines(err);
+            int crashAt = -1, hangAt = -1, longAt = -1, againAt = -1;
+            bool hangOpen = false;
+            int? logged = null;
+            for (int i = 0; i < lines.Count; i++)
+            {
+                string l = lines[i];
+                if (l.Length == 0 || l[0] != '[') continue;
+                if (!v.Picture && PictureLine.IsMatch(l)) v.Picture = true;
+                if (crashAt < 0 && (l.StartsWith("[CRASH]", StringComparison.Ordinal) || l.StartsWith("[ABORT]", StringComparison.Ordinal))) crashAt = i;
+                if (l.StartsWith("[HANG]", StringComparison.Ordinal))
+                {
+                    if (HangLine.IsMatch(l)) { if (!hangOpen) hangAt = i; hangOpen = true; }
+                    else if (hangOpen && l.StartsWith("[HANG] flips again", StringComparison.Ordinal))
+                    {
+                        // It drew again: a freeze all the same when the picture stood still for LongFreeze s or more.
+                        hangOpen = false;
+                        if (AgainSeconds(l) >= LongFreeze && longAt < 0) { longAt = hangAt; againAt = i; }
+                    }
+                }
+                if (l.StartsWith("[launcher]", StringComparison.Ordinal))
+                {
+                    var m = EndLine.Match(l);
+                    int c;
+                    if (m.Success && int.TryParse(m.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out c)) { logged = c; v.Windows = m.Groups[2].Value; }
+                }
+                if (v.Disc == "" && i < 5000) { var d = DiscId.Match(l); if (d.Success) v.Disc = d.Groups[1].Value; }
+            }
+            if (!v.Code.HasValue) v.Code = logged;
+            if (crashAt >= 0)
+            {
+                v.Kind = RunEnd.Crash;
+                for (int i = crashAt; i < lines.Count && v.Lines.Count < 40; i++)
+                    if (lines[i].StartsWith("[CRASH]", StringComparison.Ordinal) || lines[i].StartsWith("[ABORT]", StringComparison.Ordinal)) v.Lines.Add(lines[i]);
+            }
+            else if (hangOpen || longAt >= 0)
+            {
+                v.Kind = RunEnd.Freeze;
+                // The report's first line, where the busiest threads were, and when it drew again.
+                int at = hangOpen ? hangAt : longAt;
+                for (int i = at; i < lines.Count && i < at + 400 && v.Lines.Count < 24; i++)
+                {
+                    string l = lines[i];
+                    if (i == at || l.StartsWith("[HANG] host thread", StringComparison.Ordinal) || l.StartsWith("[HANG]     ", StringComparison.Ordinal)) v.Lines.Add(l);
+                }
+                if (!hangOpen) v.Lines.Add(lines[againAt]);
+            }
+            else if (v.Code.HasValue)
+            {
+                // The game's own ends: 0 (quit), 20 (its graphics couldn't start: it said so itself), 21 (the window was
+                // closed while it ran). Any other code is a crash once it had shown pictures, else a start that failed.
+                int c = v.Code.Value;
+                if (c == 20) v.Kind = RunEnd.NoStart;
+                else if (c == 21) v.Kind = !v.Picture && seconds >= 30 ? RunEnd.NoStart : RunEnd.Fine;   // closed while stuck at start
+                else if (c == 0) v.Kind = v.Picture ? RunEnd.Fine : RunEnd.NoStart;
+                else v.Kind = v.Picture ? RunEnd.Crash : RunEnd.NoStart;
+            }
+            if (v.Kind != RunEnd.Fine && v.Lines.Count == 0)
+                for (int i = Math.Max(0, lines.Count - 12); i < lines.Count; i++) if (lines[i].Trim() != "") v.Lines.Add(lines[i]);
+            for (int i = 0; i < v.Lines.Count; i++) if (v.Lines[i].Length > 400) v.Lines[i] = v.Lines[i].Substring(0, 400) + " [...]";
+            return v;
+        }
+
+        public static string KindText(RunVerdict v)
+        {
+            return v.Kind == RunEnd.Crash ? "crash" : v.Kind == RunEnd.Freeze ? "freeze" : v.Kind == RunEnd.NoStart ? "didn't start" : "fine";
+        }
+        public static string CodeText(int c)
+        {
+            return c >= 0 && c < 0x10000 ? c.ToString(CultureInfo.InvariantCulture) : "0x" + ((uint)c).ToString("X8", CultureInfo.InvariantCulture);
+        }
+
+        // ---- reading logs ----
+        static byte[] ReadBytes(Stream s, int n)
+        {
+            var b = new byte[n];
+            int got = 0, r;
+            while (got < n && (r = s.Read(b, got, n - got)) > 0) got += r;
+            if (got < n) Array.Resize(ref b, got);
+            return b;
+        }
+
+        // A log's lines: each one UTF-8 when it is, else in Windows' own code page (the game writes paths through
+        // both), without NULs. Of a huge log, the first 16 MB and the last 48 MB. Open while the game writes it.
+        public static List<string> ReadLines(string path)
+        {
+            var lines = new List<string>();
+            if (!File.Exists(path)) return lines;
+            const long H = 16L << 20, Tl = 48L << 20;
+            byte[] head, tail = null;
+            long len;
+            using (var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                len = f.Length;
+                if (len <= H + Tl) head = ReadBytes(f, (int)len);
+                else { head = ReadBytes(f, (int)H); f.Seek(len - Tl, SeekOrigin.Begin); tail = ReadBytes(f, (int)Tl); }
+            }
+            Split(head, lines, false);
+            if (tail != null)
+            {
+                lines.Add("[... " + ((len - H - Tl) >> 20) + " MB of the log left out ...]");
+                Split(tail, lines, true);
+            }
+            return lines;
+        }
+
+        static void Split(byte[] b, List<string> into, bool skipFirst)
+        {
+            int start = 0;
+            if (skipFirst) { int nl = Array.IndexOf(b, (byte)'\n'); start = nl < 0 ? b.Length : nl + 1; }
+            while (start < b.Length)
+            {
+                int nl = Array.IndexOf(b, (byte)'\n', start);
+                int end = nl < 0 ? b.Length : nl, e = end;
+                if (e > start && b[e - 1] == '\r') e--;
+                into.Add(Decode(b, start, e - start));
+                start = end + 1;
+            }
+        }
+
+        static string Decode(byte[] b, int at, int n)
+        {
+            bool high = false, nul = false;
+            for (int i = at; i < at + n; i++) { if (b[i] >= 0x80) high = true; else if (b[i] == 0) nul = true; }
+            string s;
+            if (!high) s = Encoding.ASCII.GetString(b, at, n);
+            else
+            {
+                try { s = Utf8Strict.GetString(b, at, n); }
+                catch (DecoderFallbackException) { s = Encoding.Default.GetString(b, at, n); }
+            }
+            return nul ? s.Replace("\0", "") : s;
+        }
+
+        static string ReadText(string path)
+        {
+            using (var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var r = new StreamReader(f, Encoding.UTF8, true)) return r.ReadToEnd().Replace("\0", "");
+        }
+
+        static string Tail(string path, int count)
+        {
+            var lines = ReadLines(path);
+            var sb = new StringBuilder();
+            int from = Math.Max(0, lines.Count - count);
+            if (from > 0) sb.Append("[... ").Append(from).Append(" lines left out ...]\r\n");
+            for (int i = from; i < lines.Count; i++) sb.Append(lines[i].Length > 2000 ? lines[i].Substring(0, 2000) + " [...]" : lines[i]).Append("\r\n");
+            return sb.ToString();
+        }
+
+        // The parts of a log that matter, when the whole is too long: the start (version, graphics card, settings),
+        // every crash and freeze report whole, the lines naming the PC's parts and settings wherever they are, and the
+        // end. What is left out is counted where it was.
+        public static string Excerpt(List<string> lines, long fullChars, int head, int tail)
+        {
+            long total = 0;
+            foreach (var l in lines) total += l.Length + 2;
+            var keep = new bool[lines.Count];
+            if (total <= fullChars) for (int i = 0; i < keep.Length; i++) keep[i] = true;
+            else
+            {
+                for (int i = 0; i < Math.Min(head, lines.Count); i++) keep[i] = true;
+                for (int i = Math.Max(0, lines.Count - tail); i < lines.Count; i++) keep[i] = true;
+                for (int i = 0; i < lines.Count; i++)
+                {
+                    string l = lines[i];
+                    if (l.Length == 0 || l[0] != '[') continue;
+                    if (l.StartsWith("[CRASH] code=", StringComparison.Ordinal) || l.StartsWith("[ABORT]", StringComparison.Ordinal))
+                        for (int j = Math.Max(0, i - 30); j < Math.Min(lines.Count, i + 200); j++) keep[j] = true;
+                    else if (HangLine.IsMatch(l))
+                        for (int j = i; j < lines.Count && j < i + 8000; j++)
+                        {
+                            keep[j] = true;
+                            if (lines[j].StartsWith("[HANG] end of report", StringComparison.Ordinal)) break;
+                        }
+                    else if (l.StartsWith("[CRASH]", StringComparison.Ordinal) || l.StartsWith("[HANG]", StringComparison.Ordinal) || KeyLine.IsMatch(l)) keep[i] = true;
+                }
+            }
+            var sb = new StringBuilder();
+            int gap = 0;
+            for (int i = 0; i < lines.Count; i++)
+            {
+                if (!keep[i]) { gap++; continue; }
+                if (gap > 0) { sb.Append("[... ").Append(gap).Append(" lines left out ...]\r\n"); gap = 0; }
+                string l = lines[i];
+                sb.Append(l.Length > 2000 ? l.Substring(0, 2000) + " [...]" : l).Append("\r\n");
+            }
+            if (gap > 0) sb.Append("[... ").Append(gap).Append(" lines left out ...]\r\n");
+            return sb.ToString();
+        }
+
+        // ---- the report ----
+        // The folder a report keeps as %INSTALL%: the install folder, or a bare GT5 folder by itself.
+        public static string InstallDir(Paths p)
+        {
+            return p.Root != null && (File.Exists(Path.Combine(p.Root, "update.ps1")) || File.Exists(Path.Combine(p.Root, "setup.ps1"))) ? p.Root : p.Gt5;
+        }
+
+        // The report as one ZIP named GT5-report-<date>-<time>.zip in dir (null: the desktop, else GT5\logs\reports);
+        // its path. sc null: this PC's names and folders are taken out.
+        public static string Save(Paths p, RunVerdict v, string dir, Scrubber sc)
+        {
+            if (sc == null) sc = Scrubber.ThisPc(InstallDir(p));
+            if (string.IsNullOrEmpty(dir))
+            {
+                try { dir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory); } catch { dir = ""; }
+                if (dir == "" || !Directory.Exists(dir)) dir = Path.Combine(p.Logs, "reports");
+            }
+            Directory.CreateDirectory(dir);
+            string name = "GT5-report-" + DateTime.Now.ToString("yyyy-MM-dd-HHmm", CultureInfo.InvariantCulture);
+            string zip = Path.Combine(dir, name + ".zip");
+            for (int n = 2; File.Exists(zip); n++) zip = Path.Combine(dir, name + "-" + n + ".zip");
+            // The details of the run from its log (a freeze seen while the game ran has only its kind).
+            var d = Classify(Path.Combine(p.Logs, "play.err"), v.Code, v.Seconds);
+            if (v.Kind != RunEnd.Fine && d.Kind != v.Kind) { d.Kind = v.Kind; }
+            string tmp = Path.Combine(Path.GetTempPath(), "GT5-report-" + Guid.NewGuid().ToString("N") + ".zip");
+            try
+            {
+                // A few MB at most: smaller parts of the logs until it fits.
+                long[][] budgets = { new long[] { 3000000, 1500, 5000 }, new long[] { 1000000, 800, 2500 }, new long[] { 300000, 300, 1000 } };
+                foreach (var b in budgets)
+                {
+                    MiniZip.Write(tmp, Entries(p, d, sc, b[0], (int)b[1], (int)b[2]));
+                    if (new FileInfo(tmp).Length <= (6L << 20)) break;
+                }
+                File.Copy(tmp, zip, false);
+            }
+            finally { try { File.Delete(tmp); } catch { } }
+            return zip;
+        }
+
+        static List<KeyValuePair<string, byte[]>> Entries(Paths p, RunVerdict v, Scrubber sc, long full, int head, int tail)
+        {
+            var e = new List<KeyValuePair<string, byte[]>>();
+            Action<string, string> add = delegate (string n, string text)
+            {
+                e.Add(new KeyValuePair<string, byte[]>(n, Encoding.UTF8.GetBytes(sc.Apply(text))));
+            };
+            add("README.txt", Readme);
+            add("summary.txt", Summary(p, v));
+            foreach (var n in new[] { "play.err", "play.out", "play.prev.err" })
+            {
+                string f = Path.Combine(p.Logs, n);
+                if (!File.Exists(f)) continue;
+                bool main = n == "play.err";
+                add(n + ".txt", Excerpt(ReadLines(f), main ? full : full / 3, main ? head : head / 2, main ? tail : tail / 3));
+            }
+            if (File.Exists(p.Settings)) add("settings.txt", Secret.Replace(ReadText(p.Settings), "$1$2=<removed>"));
+            if (File.Exists(p.VersionFile)) add("version.txt", ReadText(p.VersionFile));
+            foreach (var n in new[] { "launcher.log", "update.log", "prepare.log" })
+            {
+                string f = Path.Combine(p.Logs, n);
+                if (File.Exists(f)) add(n + ".txt", Tail(f, 1500));
+            }
+            string check = Path.Combine(p.Root ?? p.Gt5, ".gt5", "pc-check.json");
+            if (File.Exists(check)) add("pc-check.txt", ReadText(check));
+            return e;
+        }
+
+        const string Readme =
+            "GT5 PC problem report\r\n" +
+            "Made by the GT5 launcher from this PC's game logs. Before anything was written, the Windows user name was\r\n" +
+            "replaced by <user>, the PC's name by <pc>, the user's folder by %USER%, the game's folder by %INSTALL% and\r\n" +
+            "every other folder by <folder>. No save data, game files or shader cache are in it. Open the files to\r\n" +
+            "check them before you share it. Nothing was sent anywhere: you attach this file to a report yourself.\r\n" +
+            "\r\n" +
+            "GT5 PC 问题报告\r\n" +
+            "由 GT5 启动器根据这台电脑的游戏日志生成。写入前，Windows 用户名已替换为 <user>，电脑名替换为 <pc>，用户文件夹\r\n" +
+            "替换为 %USER%，游戏文件夹替换为 %INSTALL%，其他文件夹替换为 <folder>。不含存档、游戏文件或着色器缓存。分享前\r\n" +
+            "可以打开文件检查。没有发送任何内容：请你自己把这个文件附加到报告中。\r\n";
+
+        static string Summary(Paths p, RunVerdict v)
+        {
+            var sb = new StringBuilder();
+            sb.Append("GT5 PC problem report, made ").Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)).Append("\r\n\r\n");
+            sb.Append("What happened: ").Append(v.Kind == RunEnd.Crash ? "the game stopped unexpectedly (crash)" : v.Kind == RunEnd.Freeze ? "the game stopped responding (freeze)" :
+                      v.Kind == RunEnd.NoStart ? "the game didn't start properly (no picture)" : "saved by hand (the last run's log shows no crash or freeze)").Append("\r\n");
+            if (v.Code.HasValue) sb.Append("Exit code: ").Append(CodeText(v.Code.Value)).Append("\r\n");
+            if (v.Seconds >= 0) sb.Append(string.Format(CultureInfo.InvariantCulture, "Run time: {0:0} s\r\n", v.Seconds));
+            sb.Append("Pictures shown: ").Append(v.Picture ? "yes" : "no").Append("\r\n");
+            if (v.Windows != "") sb.Append("Windows says: ").Append(v.Windows).Append("\r\n");
+            sb.Append("\r\n");
+            string ver = p.InstalledVersion();
+            sb.Append("Port version: ").Append(ver == "" ? "?" : ver).Append("\r\n");
+            if (v.Disc != "") sb.Append("Game: ").Append(v.Disc).Append("\r\n");
+            sb.Append("Windows: ").Append(WindowsName(true)).Append("\r\n");
+            sb.Append("Processor: ").Append(CpuName()).Append(", ").Append(Environment.ProcessorCount).Append(" logical processors\r\n");
+            sb.Append("Memory: ").Append(MemoryText()).Append("\r\n");
+            foreach (var g in Graphics()) sb.Append("Graphics: ").Append(g).Append("\r\n");
+            if (v.Lines.Count > 0)
+            {
+                sb.Append("\r\nFrom the log:\r\n");
+                foreach (var l in v.Lines) sb.Append("  ").Append(l).Append("\r\n");
+            }
+            return sb.ToString();
+        }
+
+        // ---- the PC's parts (nothing that names the PC or its user) ----
+        public static string WindowsName(bool build)
+        {
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion"))
+                {
+                    string name = Convert.ToString(k.GetValue("ProductName")), ver = Convert.ToString(k.GetValue("DisplayVersion")), cb = Convert.ToString(k.GetValue("CurrentBuild"));
+                    object ubr = k.GetValue("UBR");
+                    int b;
+                    if (int.TryParse(cb, out b) && b >= 22000) name = name.Replace("Windows 10", "Windows 11");   // Windows 11 still says 10 there
+                    string s = (name + " " + ver).Trim();
+                    if (build) s += " (build " + cb + (ubr != null ? "." + Convert.ToString(ubr, CultureInfo.InvariantCulture) : "") + ")";
+                    return s;
+                }
+            }
+            catch { return Environment.OSVersion.VersionString; }
+        }
+
+        public static string CpuName()
+        {
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0"))
+                    if (k != null) return Regex.Replace(Convert.ToString(k.GetValue("ProcessorNameString")), @"\s+", " ").Trim();
+            }
+            catch { }
+            return "?";
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        class MemStatus { public uint Length = 64, Load; public ulong Total, Avail, TotalPage, AvailPage, TotalVirtual, AvailVirtual, AvailExtended; }
+        [DllImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)] static extern bool GlobalMemoryStatusEx([In, Out] MemStatus m);
+        static string MemoryText()
+        {
+            try
+            {
+                var m = new MemStatus();
+                if (GlobalMemoryStatusEx(m)) return string.Format(CultureInfo.InvariantCulture, "{0:0.0} GB, {1:0.0} GB free now", m.Total / 1073741824.0, m.Avail / 1073741824.0);
+            }
+            catch { }
+            return "?";
+        }
+
+        // Each graphics card with its driver version (Windows' list of display drivers), else the names DXGI gives.
+        static List<string> Graphics()
+        {
+            var r = new List<string>();
+            try
+            {
+                using (var cls = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"))
+                    if (cls != null)
+                        foreach (var sub in cls.GetSubKeyNames())
+                        {
+                            if (!Regex.IsMatch(sub, @"^\d{4}$")) continue;
+                            try
+                            {
+                                using (var k = cls.OpenSubKey(sub))
+                                {
+                                    string desc = k == null ? "" : Convert.ToString(k.GetValue("DriverDesc")), ver = k == null ? "" : Convert.ToString(k.GetValue("DriverVersion"));
+                                    if (desc == "") continue;
+                                    string s = desc + (ver != "" ? " (driver " + ver + ")" : "");
+                                    if (!r.Contains(s)) r.Add(s);
+                                }
+                            }
+                            catch { }
+                        }
+            }
+            catch { }
+            if (r.Count == 0) try { r.AddRange(GpuInfo.Read().Names); } catch { }
+            return r;
+        }
+
+        static string Clip(string s, int n) { s = (s ?? "").Trim(); return s.Length > n ? s.Substring(0, n) : s; }
+
+        // GitHub's new-issue form for a problem, with a title and the version and the PC's parts filled in. Nothing else
+        // goes in the link: no log text, no path, no name.
+        public static string IssueUrl(Paths p, RunVerdict v, GpuInfo g)
+        {
+            string title = v.Kind == RunEnd.Freeze ? "The game froze" : v.Kind == RunEnd.NoStart ? "The game didn't start" : "The game stopped unexpectedly";
+            string bare = Repo + "/issues/new?template=2-problem.yml&title=" + Uri.EscapeDataString("[Problem] " + title);
+            string gpu = "";
+            if (g != null) foreach (var n in g.Names) if (n.IndexOf("Microsoft Basic", StringComparison.OrdinalIgnoreCase) < 0) { gpu = n; break; }
+            string ver = Clip(p.InstalledVersion(), 60), hw = Clip(CpuName(), 80) + ", " + Clip(gpu, 80) + ", " + Clip(WindowsName(false), 60);
+            // Anything the scrubber would change (a name of this PC in a version line, say): the title alone.
+            string filled = ver + "\n" + hw;
+            if (Scrubber.ThisPc(InstallDir(p)).Apply(filled) != filled) return bare;
+            return bare + "&version=" + Uri.EscapeDataString(ver) + "&hardware=" + Uri.EscapeDataString(hw) +
+                   "&what=" + Uri.EscapeDataString(title + ".\n\nWhat I was doing:\n");
+        }
+
+        // ---- the seen list and the launcher's own log ----
+        static string SeenFile(Paths p) { return Path.Combine(p.Root ?? p.Gt5, ".gt5", "report-seen.txt"); }
+        public static bool Seen(Paths p, string key)
+        {
+            if (string.IsNullOrEmpty(key)) return false;
+            try { foreach (var l in File.ReadAllLines(SeenFile(p))) if (l.Trim() == key) return true; } catch { }
+            return false;
+        }
+        public static void MarkSeen(Paths p, string key)
+        {
+            if (string.IsNullOrEmpty(key) || Seen(p, key)) return;
+            try
+            {
+                var all = new List<string>();
+                try { all.AddRange(File.ReadAllLines(SeenFile(p))); } catch { }
+                all.Add(key);
+                if (all.Count > 30) all.RemoveRange(0, all.Count - 30);
+                Directory.CreateDirectory(Path.GetDirectoryName(SeenFile(p)));
+                File.WriteAllLines(SeenFile(p), all.ToArray());
+            }
+            catch { }
+        }
+
+        // GT5\logs\launcher.log: what the launcher saw of each run (start, end, exit code), a few lines a run; it goes
+        // into the report.
+        public static void Log(Paths p, string line)
+        {
+            try
+            {
+                Directory.CreateDirectory(p.Logs);
+                string f = Path.Combine(p.Logs, "launcher.log");
+                if (File.Exists(f) && new FileInfo(f).Length > 256 * 1024)
+                {
+                    var all = File.ReadAllLines(f);
+                    var keep = new string[all.Length / 2];
+                    Array.Copy(all, all.Length - keep.Length, keep, 0, keep.Length);
+                    File.WriteAllLines(f, keep);
+                }
+                File.AppendAllText(f, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + "  " + line + "\r\n");
+            }
+            catch { }
+        }
+    }
+
+    // What a report may hold: the game's folder becomes %INSTALL%, the Windows user's folder %USER% (also any other
+    // Users\<name> folder, as in a log from another PC), Windows' and the program folders their usual names, any other
+    // folder <folder> (the file name stays: a crash names its DLL), and the Windows user name and this PC's name
+    // anywhere else <user> and <pc>; e-mail addresses go, and a person's name in a device name ("Anna's AirPods").
+    class Scrubber
+    {
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern int GetShortPathName(string l, StringBuilder s, int n);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern int GetLongPathName(string s, StringBuilder l, int n);
+        const string Seg = @"[^\\/:*?""<>|\r\n\t]+";                // a folder's name (spaces allowed)
+        // What follows the last separator, to a quote, a comma, the end of the line or the next path: a file name (and
+        // the log's words after it), or a folder's last name, which goes whole, spaces and all.
+        const string Last = @"((?:(?![A-Za-z]:[\\/])[^\\/:*?""'<>|\r\n\t,;)])*)";
+        const string End = @"(?=[\\/""'<>|:;,)\]\s]|$)";              // where a folder's name ends
+        const RegexOptions Opt = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+        // User names that are also words of the logs: replaced in paths only.
+        static readonly string[] Common = { "user", "users", "admin", "administrator", "owner", "pc", "game", "player", "guest", "default", "public", "test", "home", "windows", "gt5" };
+        static readonly Regex FileName = new Regex(@"^[^.]*[^.\s]\.[A-Za-z0-9]{1,8}(?![A-Za-z0-9])");
+        static readonly Regex Possessive = new Regex(@"(?<![A-Za-z0-9])\p{Lu}[\p{L}\p{N}_.-]*['’]s(?![A-Za-z0-9])");
+        readonly List<KeyValuePair<Regex, MatchEvaluator>> rules = new List<KeyValuePair<Regex, MatchEvaluator>>();
+
+        public static Scrubber ThisPc(string install)
+        {
+            var pcs = new List<string>();
+            string user = "", profile = "";
+            try { pcs.Add(Environment.MachineName); } catch { }
+            try { pcs.Add(Dns.GetHostName()); } catch { }
+            try
+            {
+                string d = Environment.UserDomainName;
+                if (!string.IsNullOrEmpty(d) && !d.Equals("WORKGROUP", StringComparison.OrdinalIgnoreCase) && !d.Equals("AzureAD", StringComparison.OrdinalIgnoreCase)) pcs.Add(d);
+            }
+            catch { }
+            try { user = Environment.UserName; } catch { }
+            try { profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile); } catch { }
+            return new Scrubber(install, profile, user, pcs.ToArray());
+        }
+
+        public Scrubber(string install, string profile, string user, string[] pcs)
+        {
+            foreach (var f in Forms(install)) Folder(f, "%INSTALL%");
+            foreach (var f in Forms(profile)) Folder(f, "%USER%");
+            Add(@"(?:(?<![A-Za-z0-9])[A-Za-z]:)?[\\/]+Users[\\/]+" + Seg, "%USER%");   // also /c/Users/<name> (Git's shell)
+            Add(@"%USER%[\\/]+AppData[\\/]+Local[\\/]+Temp" + End, "%TEMP%");
+            Add(@"%USER%[\\/]+AppData[\\/]+Local" + End, "%LOCALAPPDATA%");
+            Add(@"%USER%[\\/]+AppData[\\/]+Roaming" + End, "%APPDATA%");
+            // Folders inside the user's own: <folder> (Desktop, Downloads and the like by name), the file name kept.
+            Add(@"(%USER%|%TEMP%|%LOCALAPPDATA%|%APPDATA%)((?:[\\/]+" + Seg + @")*)[\\/]+" + Last, InUserFolder);
+            Add(@"(?<![A-Za-z0-9])[A-Za-z]:[\\/]+Windows" + End, "%WINDIR%");
+            Add(@"(?<![A-Za-z0-9])[A-Za-z]:[\\/]+Program Files \(x86\)" + End, "%ProgramFiles(x86)%");
+            Add(@"(?<![A-Za-z0-9])[A-Za-z]:[\\/]+Program Files" + End, "%ProgramFiles%");
+            Add(@"(?<![A-Za-z0-9])[A-Za-z]:[\\/]+ProgramData" + End, "%ProgramData%");
+            // Any other folder, on a drive or a network share.
+            Add(@"(?<![A-Za-z0-9])[A-Za-z]:[\\/]+(?:" + Seg + @"[\\/]+)*" + Last, KeepFile);
+            Add(@"(?<![\\/A-Za-z0-9%:])[\\/]{2}(?![?.][\\/])[^\\/:*?""<>|\r\n\t ]+[\\/]+(?:" + Seg + @"[\\/]+)*" + Last, KeepFile);
+            var leaf = Path.GetFileName((profile ?? "").TrimEnd('\\', '/'));
+            Name(user, "<user>");
+            if (!string.Equals(leaf, user, StringComparison.OrdinalIgnoreCase)) Name(leaf, "<user>");
+            foreach (var pc in pcs) Name(pc, "<pc>");
+            // (Only from the start of a word: tried at every letter of a long run it took seconds on some logs.)
+            Add(@"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}", "<email>");
+            // A sound device or a wheel named after its owner.
+            Add(@"(sound device|audio|\[wheel\]|bluetooth)[^\r\n]*", delegate (Match m) { return Possessive.Replace(m.Value, "<name>'s"); });
+        }
+
+        public string Apply(string text)
+        {
+            foreach (var r in rules) text = r.Key.Replace(text, r.Value);
+            return text;
+        }
+
+        void Add(string pattern, string to) { Add(pattern, delegate (Match m) { return to; }); }
+        void Add(string pattern, MatchEvaluator ev) { rules.Add(new KeyValuePair<Regex, MatchEvaluator>(new Regex(pattern, Opt), ev)); }
+
+        // A folder's path as a pattern: either slash, doubled ones too (as in JSON), any case.
+        void Folder(string path, string to)
+        {
+            var parts = path.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2) return;   // a drive alone is no folder of ours
+            var sb = new StringBuilder(@"(?<![A-Za-z0-9])");
+            for (int i = 0; i < parts.Length; i++) { if (i > 0) sb.Append(@"[\\/]+"); sb.Append(Regex.Escape(parts[i])); }
+            Add(sb.Append(End).ToString(), to);
+        }
+
+        // The path as given, its short (8.3) and long forms: longest first.
+        static List<string> Forms(string path)
+        {
+            var r = new List<string>();
+            if (string.IsNullOrEmpty(path)) return r;
+            string p = path.TrimEnd('\\', '/');
+            if (p.Length < 3) return r;
+            r.Add(p);
+            try { var sb = new StringBuilder(1024); if (GetShortPathName(p, sb, sb.Capacity) > 0) { string s = sb.ToString().TrimEnd('\\'); if (!r.Contains(s)) r.Add(s); } } catch { }
+            try { var sb = new StringBuilder(1024); if (GetLongPathName(p, sb, sb.Capacity) > 0) { string s = sb.ToString().TrimEnd('\\'); if (!r.Contains(s)) r.Add(s); } } catch { }
+            r.Sort(delegate (string a, string b) { return b.Length - a.Length; });
+            return r;
+        }
+
+        // A name anywhere, as a whole word (a name in another script: wherever it is).
+        void Name(string n, string to)
+        {
+            n = (n ?? "").Trim();
+            if (n.Length < 2 || Array.IndexOf(Common, n.ToLowerInvariant()) >= 0) return;
+            bool ascii = true;
+            foreach (char c in n) if (c >= 0x80) ascii = false;
+            string pat = Regex.Escape(n);
+            Add(ascii ? @"(?<![A-Za-z0-9])" + pat + @"(?![A-Za-z0-9])" : pat, to);
+        }
+
+        // A path in the user's own folders: the folder token, a well-known folder by name, <folder> for the rest, and
+        // the file name.
+        static readonly string[] UserFolders = { "desktop", "documents", "downloads", "onedrive", "pictures", "videos", "music", "saved games" };
+        static string InUserFolder(Match m)
+        {
+            string last = m.Groups[3].Value;
+            var dirs = m.Groups[2].Value.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries);
+            var sb = new StringBuilder(m.Groups[1].Value);
+            int i = 0;
+            if (dirs.Length > 0 && Array.IndexOf(UserFolders, dirs[0].Trim().ToLowerInvariant()) >= 0) { sb.Append('\\').Append(dirs[0].Trim()); i = 1; }
+            bool file = FileName.IsMatch(last);
+            if (i < dirs.Length || (!file && last != "")) sb.Append("\\<folder>");
+            if (file) sb.Append('\\').Append(last);
+            return sb.ToString();
+        }
+
+        // <folder>, with the file name when the path ends in one.
+        static string KeepFile(Match m)
+        {
+            string last = m.Groups[1].Value;
+            if (FileName.IsMatch(last)) return "<folder>\\" + last;
+            return last.Length == 0 ? "<folder>\\" : "<folder>";
+        }
+    }
+
+    // A ZIP file (deflate) made with what .NET Framework's System.dll has: the launcher is built with no other library.
+    static class MiniZip
+    {
+        static uint[] table;
+        static uint Crc(byte[] d)
+        {
+            if (table == null)
+            {
+                var t = new uint[256];
+                for (uint n = 0; n < 256; n++) { uint c = n; for (int k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1; t[n] = c; }
+                table = t;
+            }
+            uint crc = 0xFFFFFFFFu;
+            foreach (byte b in d) crc = table[(crc ^ b) & 0xFF] ^ (crc >> 8);
+            return crc ^ 0xFFFFFFFFu;
+        }
+
+        public static void Write(string path, List<KeyValuePair<string, byte[]>> files)
+        {
+            DateTime now = DateTime.Now;
+            ushort time = (ushort)((now.Hour << 11) | (now.Minute << 5) | (now.Second / 2));
+            ushort date = (ushort)(((now.Year - 1980) << 9) | (now.Month << 5) | now.Day);
+            using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write))
+            using (var w = new BinaryWriter(fs))
+            using (var cd = new MemoryStream())
+            using (var c = new BinaryWriter(cd))
+            {
+                foreach (var f in files)
+                {
+                    byte[] name = Encoding.UTF8.GetBytes(f.Key), data = f.Value, packed;
+                    using (var ms = new MemoryStream())
+                    {
+                        using (var ds = new System.IO.Compression.DeflateStream(ms, System.IO.Compression.CompressionMode.Compress, true)) ds.Write(data, 0, data.Length);
+                        packed = ms.ToArray();
+                    }
+                    ushort method = 8;
+                    if (packed.Length >= data.Length) { packed = data; method = 0; }
+                    uint crc = Crc(data), at = (uint)fs.Position;
+                    // local header, flag 0x800: the name is UTF-8
+                    w.Write(0x04034b50u); w.Write((ushort)20); w.Write((ushort)0x800); w.Write(method); w.Write(time); w.Write(date);
+                    w.Write(crc); w.Write((uint)packed.Length); w.Write((uint)data.Length); w.Write((ushort)name.Length); w.Write((ushort)0);
+                    w.Write(name); w.Write(packed);
+                    w.Flush();
+                    c.Write(0x02014b50u); c.Write((ushort)20); c.Write((ushort)20); c.Write((ushort)0x800); c.Write(method); c.Write(time); c.Write(date);
+                    c.Write(crc); c.Write((uint)packed.Length); c.Write((uint)data.Length); c.Write((ushort)name.Length); c.Write((ushort)0); c.Write((ushort)0);
+                    c.Write((ushort)0); c.Write((ushort)0); c.Write(0u); c.Write(at); c.Write(name);
+                }
+                c.Flush();
+                uint start = (uint)fs.Position;
+                byte[] dir = cd.ToArray();
+                w.Write(dir);
+                w.Write(0x06054b50u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)files.Count); w.Write((ushort)files.Count);
+                w.Write((uint)dir.Length); w.Write(start); w.Write((ushort)0);
+            }
         }
     }
 }

@@ -6,6 +6,7 @@ the launcher's Updates page shows the newest one's notes.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.1.109](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.109) | 20 Nov 2026 | Shaders no longer stall the game (prepared before start, built in the background, a stand-in draws meanwhile); frame generation on every screen; Button symbols; Save a report |
 | [v0.1.108](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.108) | 18 Nov 2026 | Fills the screen, sharper shadows, analog triggers, pause and quit in the game, Vulkan menu, new launcher and installer |
 | [v0.1.107](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.107) | 17 Nov 2026 | A test channel: update.ps1 -Test |
 | [v0.1.106](https://github.com/MormonFTP-hub/gt5-recomp/releases/tag/v0.1.106) | 17 Nov 2026 | Installer: calmer look (no red banner), plain wording, titled GT5 Recomp |

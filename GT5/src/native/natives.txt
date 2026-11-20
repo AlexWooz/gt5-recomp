@@ -34,6 +34,33 @@ w01606C00 00007DC8 - native_w01606C00.c hooked
 w0163C080 lift-sha1 4eec7fd483e7685e00714acca8dc425a8169c3fc
 w0163C080 000066A8 - native_w0163C080.c hooked
 w0163C080 00006418 - native_w0163C080.c hooked
+# The per-batch geometry job w018CAD00 (workload GPUSyncArray): its triangle cull 0xAB00, its other cull routine 0xF6C0 (counted
+# only), the command writer 0x1036C and its draw emitter 0x1011C (hand the batch's facing rule to the renderer). GT5_CULL=0 (default) the PS3's cull,
+# 1 the graphics card culls, 2 compare (counts, changes nothing). No lift-sha1 line: these read only SPU-visible state, check the
+# image's own instruction words, and call the lifted functions by name, so any lift of this image will do.
+w018CAD00 0000AB00 - native_w018CAD00.c hooked
+# 0xAB00's triangle loop (from 0xAF88: decisions in AVX2, the loop's stores as it makes them, then on to 0xB4E0 as
+# the lift goes). GT5_CULLX=0 the lifted loop, 1 native (default), 2 both run and compared.
+w018CAD00 0000AF88 - native_w018CAD00.c hooked
+w018CAD00 0000F6C0 - native_w018CAD00.c hooked
+w018CAD00 0001036C - native_w018CAD00.c hooked
+w018CAD00 0001011C - native_w018CAD00.c hooked
+# The job's output allocator 0x4650, its ring / relocation step 0x4330, the shared-buffer atomic 0x41E8 and the DMA
+# flush 0x40A0 as native code (the same DMAs and PUTs through the runtime, no dispatcher round trips). GT5_ALLOC=0
+# lifted (the default since D69), 1 native, 2 native with every result checked, 3 lifted with the ring checks of 2
+# watching what the lifted 0x4330 takes.
+w018CAD00 00004330 - native_w018CAD00.c hooked
+w018CAD00 000041E8 - native_w018CAD00.c hooked
+w018CAD00 000040A0 - native_w018CAD00.c hooked
+w018CAD00 00004650 - native_w018CAD00.c hooked
+# The job's quadword copy 0x8F40 (its first pass is entered part way through with a computed branch the lift has
+# no function for: an interpreter run in the game each call). GT5_MEMCPY=0 runs the lifted code.
+w018CAD00 00008F40 - native_w018CAD00.c hooked
+# The job's opcode handlers 9, 12 and 33, for the recorder: GT5_JOB_DUMP=<folder> writes their real inputs (the
+# programs no recorded batch ran); unset, a load and a branch a call, then the lifted handler.
+w018CAD00 00008880 - native_w018CAD00.c hooked
+w018CAD00 000072A0 - native_w018CAD00.c hooked
+w018CAD00 00008E80 - native_w018CAD00.c hooked
 # Each image's native functions were written against exactly this lifted file (lift-sha1): with any
 # other, the image is left as lifted code.
 jD58063CD lift-sha1 f0ac19ba3adbcde465340abe99842c50a2d626d5

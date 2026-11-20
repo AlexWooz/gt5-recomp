@@ -2,17 +2,21 @@
 add_fsr.ps1: AMD FSR 3 frame generation for this PC's game. setup.ps1 (so the installer) adds it after the
 first build and update.ps1 builds its plug-in again after each update; the launcher's Display page can add
 or remove it too. The game works the same without it; with it, "AMD FSR 3" can be picked as the frame
-generator. It runs on any graphics card that can run the game with Direct3D 12 (AMD, NVIDIA, Intel).
+generator. It runs on any graphics card that can run the game with Direct3D 12 (AMD, NVIDIA, Intel), and
+with Vulkan on any card whose Vulkan driver has what AMD's frame generator needs.
 
 FSR is AMD's software, not this project's, and none of it is in this project's files. This script:
   1. fetches the parts of AMD's FSR SDK it needs at a fixed release from AMD's own public repository with
-     git (https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK: 20 MB to download, 49 MB on disk:
-     a few headers, the licence, amd_fidelityfx_loader_dx12.dll and amd_fidelityfx_framegeneration_dx12.dll)
-     into GT5\deps\fsr, and checks it is exactly that release (kept there, so later runs fetch nothing);
-  2. checks that AMD's two DLLs are the ones this script was written for (SHA-256) and are signed by AMD;
+     git (https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK: 37 MB to download, 103 MB on disk:
+     a few headers, the licence, and AMD's loader and frame generation DLLs for Direct3D 12
+     (amd_fidelityfx_loader_dx12.dll, amd_fidelityfx_framegeneration_dx12.dll) and for Vulkan (the same
+     names ending _vk.dll)) into GT5\deps\fsr, and checks it is exactly that release (kept there, so later
+     runs fetch nothing);
+  2. checks that AMD's four DLLs are the ones this script was written for (SHA-256) and are signed by AMD;
   3. builds GT5\build\gt5_upscale_fsr.dll (this project's small plug-in, GT5\src\upscale\upscale_fsr.cpp)
-     against AMD's headers with the compiler the game is built with, and puts AMD's two DLLs and AMD's
-     licence text beside it (30 MB next to the game).
+     against AMD's headers with the compiler the game is built with (with its Vulkan part when
+     add_vulkan.ps1 has put the Vulkan headers in GT5\deps\vulkan\prefix), and puts AMD's four DLLs and
+     AMD's licence text beside it (67 MB next to the game).
 AMD gives these files under the MIT licence (the licence file names them); there is nothing to accept, the
 script says where the text is. gt5.exe itself is not rebuilt: it looks for the plug-in when it starts.
 
@@ -42,7 +46,9 @@ $Pin = @{ Name = 'AMD FSR SDK 2.4.0'; Url = 'https://github.com/GPUOpen-Librarie
           Commit = '7539ae8b6568ad29ed78a753404351daf3b5cca7' }
 $Dlls = @(
     @{ Name = 'amd_fidelityfx_loader_dx12.dll';          Sha = 'E2191D3C0828BE45EB8AFFD4E3EC0378F2293ADC345B772A7170EDCF3B021ECB' },
-    @{ Name = 'amd_fidelityfx_framegeneration_dx12.dll'; Sha = 'E6843252F58B0341A0D80F6A20BC0D840643EE95BC48C22CAC08745344577BB6' }
+    @{ Name = 'amd_fidelityfx_framegeneration_dx12.dll'; Sha = 'E6843252F58B0341A0D80F6A20BC0D840643EE95BC48C22CAC08745344577BB6' },
+    @{ Name = 'amd_fidelityfx_loader_vk.dll';            Sha = '38A56A01FB3565C0757D9F5C1E4E69DE4B65E5F2E5769B323B200DC1F142BAB9' },
+    @{ Name = 'amd_fidelityfx_framegeneration_vk.dll';   Sha = 'D002DABFF8C5E71EAA715FC99438CD4DC81230262A7897B16BC402EFEC3498B4' }
 )
 # What is taken out of AMD's repository (git sparse-checkout patterns, from its top folder).
 $Paths = @(
@@ -50,6 +56,8 @@ $Paths = @(
     '/Kits/FidelityFX/framegeneration/include/',
     '/Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll',
     '/Kits/FidelityFX/signedbin/amd_fidelityfx_framegeneration_dx12.dll',
+    '/Kits/FidelityFX/signedbin/amd_fidelityfx_loader_vk.dll',
+    '/Kits/FidelityFX/signedbin/amd_fidelityfx_framegeneration_vk.dll',
     '/docs/license.md'
 )
 
@@ -78,7 +86,7 @@ $incApi = Join-Path $kit 'api\include'
 $incFg = Join-Path $kit 'framegeneration\include'
 $bin = Join-Path $kit 'signedbin'
 $lic = Join-Path $sdk 'docs\license.md'
-$need = @((Join-Path $incApi 'ffx_api.h'), (Join-Path $incApi 'dx12\ffx_api_dx12.h'), (Join-Path $incFg 'ffx_framegeneration.h'), $lic) + @($Dlls | ForEach-Object { Join-Path $bin $_.Name })
+$need = @((Join-Path $incApi 'ffx_api.h'), (Join-Path $incApi 'dx12\ffx_api_dx12.h'), (Join-Path $incApi 'vk\ffx_api_vk.h'), (Join-Path $incFg 'ffx_framegeneration.h'), $lic) + @($Dlls | ForEach-Object { Join-Path $bin $_.Name })
 function Test-SdkFiles { foreach ($f in $need) { if (-not (Test-Path $f)) { return $false } }; return $true }
 if (-not $SdkDir) {
     $have = if (Test-Path (Join-Path $sdk '.git')) { git -C $sdk rev-parse HEAD 2>$null } else { '' }
@@ -135,8 +143,16 @@ Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $tmp | Out-Null
 Push-Location $tmp
 # Nothing of AMD's is linked: the plug-in loads AMD's loader DLL by name when the game starts.
-& $cc /nologo /O2 /MD /EHsc /W3 /LD -fuse-ld=lld -Wno-unknown-pragmas -Wno-deprecated-declarations "/I$incApi" "/I$incFg" "/I$iface" $src "/Fe:$(Join-Path $tmp 'gt5_upscale_fsr.dll')" `
-    /link wintrust.lib crypt32.lib
+# With the Vulkan headers add_vulkan.ps1 leaves (setup and update run it before this), the plug-in also gets
+# its Vulkan part (gt5_upscale_vk.h); nothing of Vulkan is linked either, the game hands its device over.
+$vk = @()
+$vkInc = Join-Path $gt5 'deps\vulkan\prefix\include'
+if ((Test-Path (Join-Path $vkInc 'vulkan\vulkan.h')) -and (Test-Path (Join-Path $iface 'gt5_upscale_vk.h'))) {
+    $vk = @('/DGT5_UPSCALE_WITH_VK', "/I$vkInc")
+    Write-Host '   (with its Vulkan part)'
+}
+& $cc /nologo /O2 /MD /EHsc /W3 /LD -fuse-ld=lld -Wno-unknown-pragmas -Wno-deprecated-declarations -Wno-missing-braces "/I$incApi" "/I$incFg" "/I$iface" @vk $src "/Fe:$(Join-Path $tmp 'gt5_upscale_fsr.dll')" `
+    /link wintrust.lib crypt32.lib advapi32.lib user32.lib
 $rc = $LASTEXITCODE
 Pop-Location
 if ($rc -or -not (Test-Path (Join-Path $tmp 'gt5_upscale_fsr.dll'))) {
