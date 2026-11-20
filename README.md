@@ -209,10 +209,30 @@ To play the previous build right away instead, copy `GT5\build\gt5.previous.exe`
 `GT5\build\gt5.exe` (the last update kept it). Please also
 [report what went wrong](https://github.com/MormonFTP-hub/gt5-recomp/issues/new?template=2-problem.yml).
 
+<a id="test-builds"></a>
+
+### Test builds
+
+Changes still being tried out go to a **test build** first: the `test` branch of this repository, with
+no version number and no release. Releases, new installs and the launcher's Update never use it. To try it:
+
+```
+powershell -ExecutionPolicy Bypass -File update.ps1 -Test
+```
+
+A plain update (`update.ps1`, `Update.bat` or the launcher's **Update now**) goes back to the newest
+release. What the current test build changes is at the top of
+[its CHANGELOG](https://github.com/MormonFTP-hub/gt5-recomp/blob/test/CHANGELOG.md) (the entries above
+the newest "Released as" line), and each new one is announced in
+[Announcements](https://github.com/MormonFTP-hub/gt5-recomp/discussions/categories/announcements) and in
+the Discord's releases channel. Expect rough edges, and say "test build" and its date when you report
+something.
+
 ### Other options
 
 | Command | What it does |
 |---|---|
+| `update.ps1 -Test` | The [test build](#test-builds): changes still being tried out. A plain update goes back. |
 | `update.ps1 -Dev` | The newest changes, before they're released. |
 | `update.ps1 -NoBuild` | Switch versions without building; build later with `GT5\scripts\build.cmd gt5`. |
 | `update.ps1 -Force` | Re-generate and rebuild everything, even when nothing changed. |

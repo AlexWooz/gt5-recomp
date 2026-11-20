@@ -29,29 +29,408 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 - **Installer**: checks the PC first; Vulkan and FSR 3 are set up during the install.
 
 ## 17 Nov 2026
+
 🏷️ Released as **v0.1.107**
+
+🧪 **A test channel**
+- `update.ps1 -Test` switches an install to the test build: changes that are still being tried out, kept on
+  a branch of their own (`test`) that releases, new installs and the launcher's Update never point at.
+  A plain `update.ps1` (or Update.bat, or the launcher's Update) goes back to the newest release. When
+  there is no test build it says so.
+
 🏷️ Released as **v0.1.106**
+
+🎨 **Installer: a calmer look and plainer words**
+- The header is dark slate with a blue progress bar and spinner (it was a large red band, which looked
+  alarming); red is kept for an actual failure. The window is titled **GT5 Recomp**.
+- The steps and status lines say what is happening in a few plain words ("Build tools", "Converting the
+  game", "Done") without tool names or file names. The specifics are still in Details and in the log.
+- Notes that don't need the player (a fallback that worked, a compiler retry, processors left out by the
+  check) no longer appear in the main window; they are in Details and the log.
+
 🏷️ Released as **v0.1.105**
+
+🪟 **The installer is one window now, installs nothing into Windows, and no longer needs RPCS3**
+- **One window from start to finish.** After Install the same window shows the eight steps (done,
+  running, waiting), one line saying what is happening and roughly how long it takes, a progress bar
+  with real figures (download bytes, files copied, functions generated, the compiler's file count), and a
+  Details button with the full text. The command prompt that used to scroll for an hour is gone (the
+  .bat's own console closes after a fraction of a second).
+- **Questions are part of the window.** Microsoft's licence for the compiler libraries is a page with
+  the link and a tick box that only you can tick (it used to be "type yes" in the console). Nothing else
+  asks anything.
+- **When something stops**, the window says what in a sentence, with Try again (it resumes: finished
+  steps are skipped), Open the log, Copy details and Report a problem. Cancel, or closing the window,
+  asks once, stops everything it started and says it is safe to run again.
+- **Finish page** with Play and a tick box for the desktop shortcut.
+- **No RPCS3 for the unlock steps.** The game's `EBOOT.BIN` and Sony's firmware file are now unlocked by
+  the port's own small tool, `GT5\scripts\ps3_unlock.py` (Python standard library only; about 3 s for
+  the firmware, under a second for the executable). It was checked byte for byte against RPCS3's output:
+  the executable of the Europe 1.00 disc (and, by the tool's own tests, the Asian 1.00 disc and the 2.01
+  and 2.17 updates) and all 1,075 files of firmware 4.92. Sony's keys are still not in this repository:
+  the tool fetches the key tables (about 50 KB) from RPCS3's public source at a pinned commit, checked by
+  SHA-256. If that fetch or the tool fails, the installer falls back to RPCS3 as before, now started
+  hidden; RPCS3 is downloaded only then. Installing game-update `.pkg` files still uses RPCS3.
+- **Nothing is installed into Windows any more.** Git was the last thing (winget, with a permission
+  prompt): when the PC has no Git, the port fetches a portable one (Git for Windows' MinGit 2.56.1,
+  38 MB, SHA-256 and signature checked) into `tools\git`, and the installer, `setup.ps1`, `update.ps1`
+  (so Update.bat and the launcher's Update button), `add_vulkan.ps1` and `add_dlss.ps1` use it.
+- **A PC whose processors calculate wrongly no longer breaks the install.** A fresh install on an
+  i7-14700KF kept stopping in code generation with Python errors that the tools' own lines cannot
+  raise. A deterministic job run on each of its 28 logical processors showed why: two of them failed it
+  most of the time, the other 26 never. Setup (and the installer, before it unlocks anything) now makes
+  that check, a minute or two, with the new `GT5\scripts\pc_check.py`; processors that fail are left
+  out of the whole install, the player is told which, and the result is kept for 30 days. If code
+  generation still stops, the check is made again with one of the lift's own jobs before the second
+  try. `pc-check.ps1` runs it by hand; README, "A processor that calculates wrongly".
+- Also fixed: running the installer on an existing install updates it first (the tools used to run from
+  the old scripts); a download or copy that was cut short resumes (it used to count as done, or block
+  the folder); an .iso is dismounted properly; output of every program reaches the log.
+- Tested on this PC up to the build (new install with no Git, existing install, the licence page,
+  a forced failure, cancel, both unlock routes). **Not tested: a whole install through the hour-long
+  build with the new window**; that run is being made after this release.
+- No re-lift: nothing the code generation is made from changed.
+
 🏷️ Released as **v0.1.104**
+
+🐍 **The port brings its own Python: none has to be installed, and the PC's own is no longer used**
+- Why: the tools that turn the game's code into C++ are Python programs, and until now they ran on
+  whatever Python the PC had (or the installer put Python 3.11 on the PC with winget). A fresh install
+  on a player's PC stopped in "spu_jobs" with `TypeError: 'int' object does not support the context
+  manager protocol` on a line with no `with` in it: an error from inside that PC's Python, which the
+  tool's own line cannot raise.
+- Now `setup.ps1` (and the installer, right after it downloads the code) runs the new `get-python.ps1`:
+  python.org's own build of **Python 3.11.9**, the version every release is generated with, from the
+  package the Python Software Foundation publishes on nuget.org. 17 MB, 43 MB unpacked, into
+  `tools\python` of the install folder. The download is checked against a SHA-256 and `python.exe` must
+  carry the Python Software Foundation's signature. Nothing is installed in Windows, no administrator
+  rights, PATH untouched; delete the folder to remove it.
+- The tools' environment (`venv`) is made from that copy. An install that already works keeps its
+  environment as it is. Running `GT5-Installer.bat` again switches an existing install to the port's
+  own Python (that is the fix for the install above: download the new installer and run it again).
+- `GT5-Installer.bat` no longer installs Python; of the things it used to put on the PC only Git is
+  left. `get-toolchain.ps1` uses the port's Python too.
+- If generating the game code still stops once, `setup.ps1` and `update.ps1` run it a second time from
+  the start before giving up, and the message names the Python version.
+- The lift scripts themselves are unchanged, so nobody has to regenerate the game code for this update.
+- Checked on made-up install folders: fetch (and a second run finding it there), a new environment made
+  from it with the tools' packages installed, an existing environment kept, and one made again when the
+  installer asks. The player's failure itself could not be reproduced here.
+
+🧰 **The installer no longer installs or changes Visual Studio**
+- `GT5-Installer.bat` used to install Microsoft's C++ Build Tools (about 7 GB) when no Visual Studio with
+  the Clang tools was found, and on a PC that had a Visual Studio without them it opened the Visual
+  Studio Installer and added several GB of workloads to it (seen on a PC with Visual Studio 2026: it
+  started modifying that). Neither happens any more.
+- Now: a Visual Studio that already has the Clang tools and a Windows SDK is used as it is. Otherwise the
+  installer runs `get-toolchain.ps1` right after downloading the code: LLVM 19.1.5, CMake, Ninja and
+  Microsoft's C/C++ libraries and Windows SDK, about 1.5 GB, all inside the install folder
+  (`tools\toolchain`). No administrator rights, nothing installed in Windows, the same compiler version
+  the releases are tested with; delete the folder to remove it. Microsoft's part is under Microsoft's
+  licence: the installer shows the link and goes on only when you type `yes`.
+- Git and Python are still installed with winget when they are missing.
+- Checked on made-up install folders (a usable Visual Studio; tools already fetched; licence declined:
+  nothing downloaded and a clear message; an old checkout). A whole install through this route was not
+  run here, because Microsoft's licence is the player's to accept; the tools and `build.cmd`'s use of
+  them are unchanged since v0.1.28.
+
 🏷️ Released as **v0.1.103**
+
+Superseded by v0.1.104 straight away (the same change); install v0.1.104 or later.
+
 🏷️ Released as **v0.1.102**
+
+🧰 **The installer no longer installs or changes Visual Studio**
+- `GT5-Installer.bat` used to install Microsoft's C++ Build Tools (about 7 GB) when no Visual Studio with
+  the Clang tools was found, and on a PC that had a Visual Studio without them it opened the Visual
+  Studio Installer and added several GB of workloads to it (seen on a PC with Visual Studio 2026: it
+  started modifying that). Neither happens any more.
+- Now: a Visual Studio that already has the Clang tools and a Windows SDK is used as it is. Otherwise the
+  installer runs `get-toolchain.ps1` right after downloading the code: LLVM 19.1.5, CMake, Ninja and
+  Microsoft's C/C++ libraries and Windows SDK, about 1.5 GB, all inside the install folder
+  (`tools\toolchain`). No administrator rights, nothing installed in Windows, the same compiler version
+  the releases are tested with; delete the folder to remove it. Microsoft's part is under Microsoft's
+  licence: the installer shows the link and goes on only when you type `yes`.
+- Git and Python are still installed with winget when they are missing.
+- Checked on made-up install folders (a usable Visual Studio; tools already fetched; licence declined:
+  nothing downloaded and a clear message; an old checkout). A whole install through this route was not
+  run here, because Microsoft's licence is the player's to accept; the tools and `build.cmd`'s use of
+  them are unchanged since v0.1.28.
+
 🏷️ Released as **v0.1.101**
+
+✨ **NVIDIA DLSS and DLAA, a frame generator that uses the game's real motion, and menu fixes (DirectX 12)**
+- **Anti-aliasing with NVIDIA DLSS** (RTX graphics cards). In the launcher (Display, **Anti-aliasing**) or
+  in the game's menu (F1, Display): **DLAA** draws the 3D picture at full size and cleans its edges;
+  **DLSS Quality / Balanced / Performance / Ultra Performance** draw it smaller and rebuild it, for slower
+  cards; **custom scale** takes any share from 33% to 100% (the "DLSS custom scale" row). A **DLSS
+  model** row picks NVIDIA's model (default, K, M, J, L). All of it can be changed while racing.
+- DLSS is NVIDIA's software and no part of it is in this project. The first time you pick a DLSS mode
+  the launcher offers to add it: it fetches NVIDIA's DLSS SDK (about 150 MB) from NVIDIA's own GitHub
+  page, shows NVIDIA's licence for you to accept, checks that `nvngx_dlss.dll` is signed by NVIDIA, and
+  builds a small plug-in (`gt5_upscale_dlss.dll`, this project's own source in `GT5/src/upscale`) next
+  to `gt5.exe`. `GT5\scripts\add_dlss.ps1` is that step; `-Remove` takes it out again. Without it the
+  game is the same as before and the DLSS choices are greyed out with the reason.
+- How it fits GT5: the renderer finds the moment the 3D scene is finished and the HUD starts, gives
+  DLSS the scene, its depth, a sub-pixel camera shift each frame and real motion vectors for every
+  object (cars, the cockpit interior and the mirror each have their own), and hands the result to the
+  game's own exposure and bloom. It works on races and replays' 3D picture; menus and the car-select
+  screen are left as they are. The output is the size of the picture on screen, so it pairs with
+  **Render resolution** (1440p + DLAA is a good start on a 1440p screen).
+- Measured in races on an RTX 4070 Ti SUPER: DLAA in the 1080p mode cost 1 to 2 frames a second (58.5
+  against 59.8, switched on and off every 10 s in one race); DLAA at a 1440p render resolution 59 fps;
+  DLSS Quality there (2048x864 drawn, 3072x1296 out) 59 fps. Edge roughness on a dumped frame fell from
+  20-26% of edge pixels to 12%.
+- **Frame generation, presentation fixed.** Made frames were spaced as if the game always ran at exactly
+  60 and, with vertical sync off, were still held to a refresh by Windows, which gave an uneven
+  6 / 12 ms pattern on a 165 Hz screen. They are now spaced from the measured frame time, anchored to
+  the last frame shown, and with vertical sync off presented with the tearing-capable flag (even on a
+  variable-refresh screen). In a race with 2x: the game stayed at 59.5-59.9 fps, about 125 shown a
+  second. A stall no longer switches it off for the rest of the run. `LD_FG_PRESENT=0` restores the old way.
+- **Frame generation from the game's own motion** (menu: **Frame generation: how**; `LD_FRAMEGEN=2`).
+  The old generator guesses motion from two finished pictures, HUD included, which warps the HUD and
+  wobbles on fences. The new one uses the same motion vectors and depth DLSS gets and never touches
+  the HUD. It makes frames in races only (menus are shown as drawn). New and still being judged; the
+  old one stays the default.
+- **Menu fixes.** Frame generation "Off" did not turn it off when only the multiplier was set (the row
+  showed Off while it stayed on): fixed. Rows that depend on another setting are greyed out with the
+  reason until they apply (DLSS model and custom scale, "how" for frame generation, window size outside
+  window mode, mouse steering's numbers, the wheel's rows). The anti-aliasing and frame generation rows
+  say what they are doing right now. "Resolution" is now called **PS3 video mode**, apart from Render
+  resolution.
+- **F8: a snapshot for bug reports.** If you see a picture fault, press F8 with the game in front: every
+  picture and depth buffer the renderer holds is written to `GT5\logs\snap_<date>_<time>\` (about a
+  second's pause, some hundred MB). Attach or mention it in a report. `LD_SNAP_KEY=0` turns the key off.
+- Vulkan: none of this yet. No re-lift: the update rebuilds the runtime, the game's own sources and
+  the launcher.
+
 🏷️ Released as **v0.1.100**
+
+🎛️ **In-game menu: cockpit view, mouse steering and force feedback apply while playing**
+- Changed in the menu (F1), these now count at once instead of from the next start: the cockpit view's
+  field of view, seat position and seat height; mouse steering's speed and self-centring; force feedback
+  strength and direction. Tried in a race from the driver's seat: field of view +30 set in the menu, the
+  view widened from 52.4 to 82.4 degrees there and then.
+- The cockpit view's wrapper is still only put in the camera's way once one of its three settings is
+  set, so a game with none of them set is untouched, as before.
+- A wheel that was opened without force feedback (strength 0) is opened again with it when the strength
+  comes up.
+- While the menu is open the steering wheel reads centred with the pedals released, as the controller
+  reads at rest.
+- The menu's wheel map ("press a button on the wheel") now sees the PC wheel's own buttons and axes.
+- Still from the next start, and marked so: the game's 720p / 1080p mode and screen shape, the
+  renderer, the game's language, which wheel is used and its rotation, and whether the mouse steers
+  (the game looks for its wheel once, at boot).
+- No re-lift.
+
 🏷️ Released as **v0.1.99**
+
+🖥️ **Render resolution up to 5K, and a settings menu inside the game (F1) (DirectX 12)**
+- **Render resolution** (launcher, Display; or the new menu): the picture is drawn at 1080p, 1440p, 4K or
+  5K, whatever the game's own 720p / 1080p mode is. The game still thinks it draws its PS3 picture; every
+  screen-sized target it draws into (the race, the HUD, the menus, the passes behind them) is made that
+  much larger on the graphics card. Sharper, and far fewer jagged edges; on a screen smaller than the
+  picture it is filtered down to the window, which smooths edges further. `LD_RES_TARGET=<lines>`
+  (or `LD_RES_SCALE=<factor>`, 0.25 to 8; below 1 draws fewer pixels for a slow graphics chip).
+- Measured in a race in the 1080p mode on an RTX 4070 Ti SUPER, switching to 4K while driving: 57 to 60
+  frames a second before and after. The cost is the graphics card's alone; an older card will feel it.
+- **The menu: F1**, or hold Select + Start on the controller. Display, Performance, Controls, Game and
+  About, over the running game, with the keyboard, the mouse or the controller. It reads and writes the
+  same `settings.bat` as the launcher, so the two always agree.
+- Each row says when it counts. **Applies now:** render resolution, frame generation and its multiplier,
+  vertical sync, window mode and window size, watch mode and how much it draws, the 30 fps Speed
+  setting, how waiting threads wait, the keyboard keys (with a "press a key" map), controller in the
+  background, keeping the mouse in the window. **From the next start:** the game's 720p / 1080p mode
+  and screen shape (the game sizes itself from them once, at boot), the renderer, the game's language,
+  the steering wheel and mouse steering, the cockpit view. Those rows say so.
+- The Performance page shows the game's and the drawn frame rate, cores busy, the frame's size, the
+  screen's refresh rate and the draw count; the same as a small corner readout if you switch it on.
+- The game is not paused by the menu: in a race, pause first. While it is open nothing you press reaches
+  the game.
+- The anti-aliasing / upscaling row is there and greyed out: those modes are the next step. Until then
+  a render resolution above your screen's is the anti-aliasing (4K on a 1440p screen is 2.25 samples a
+  pixel).
+- The menu is drawn with Dear ImGui 1.93.0 (MIT licence, unmodified, in `GT5/third_party/imgui`).
+- Vulkan: neither yet. No re-lift: the update rebuilds the runtime, the game's own sources and the
+  launcher.
+
 🏷️ Released as **v0.1.98**
+
+🎞️ **Frame rate multiplier: 2x, 3x or 4x on screens faster than 60 Hz (DirectX 12)**
+- Frame generation could only fill frames the game left out (watch mode, 30 fps). It can now multiply:
+  for every frame the game draws, one, two or three more are made on the graphics card and shown between
+  the drawn ones, evenly spaced. Launcher, Display: **Frame rate multiplier** (`LD_FRAMEGEN_MULT=2..4`;
+  it turns frame generation on by itself).
+- It never makes more than the screen can show: 2x needs 120 Hz, 3x needs 180 Hz, 4x needs 240 Hz. A 144
+  or 165 Hz screen gets 2x. The refresh rate is read from the screen the window is on.
+- Measured in a race on a 165 Hz screen: 287 drawn and 301 made frames in 5 seconds (about 118 a second
+  on screen) with the game itself at 57 frames a second, the same as without it; the thread that draws
+  did not wait for the presenter at all.
+- Two things had to change to get there. The first version spaced each group of frames over the whole
+  frame time and waited for the screen's refresh at every present: the presenter was inside the driver
+  most of the time, the drawing thread queued behind it and the game fell to 17-22 frames a second. Now
+  a group's frames are timed by the presenter's own clock and presented without waiting for the
+  refresh, and it stops spacing a group the moment a newer frame is waiting.
+- The game still runs at 60; the newest drawn frame reaches the screen about half a frame later. Made
+  frames have the usual limits: fast detail close to the camera can smear. Still marked beta.
+- No re-lift: the update rebuilds the runtime and the launcher.
+
 🏷️ Released as **v0.1.97**
+
+🧹 **Fix: after many cars, new ones were no longer drawn (DirectX 12). And a picture check before every release**
+- **The bug.** The DirectX 12 renderer kept every pipeline it ever built (one for each combination of a
+  car's shaders and render states) in a table of 8192 that only grew. A long session through the
+  dealerships fills it, and from then on every new pipeline's draws were dropped: new cars and scenes
+  came up with parts missing until the game was restarted. A player's log showed it: 8192 pipelines,
+  461,803 draws dropped ("shaders stopped compiling after visiting a few dealerships"). It is older than
+  the body-panel fault of v0.1.92-v0.1.95 and has nothing to do with it.
+- **The fix.** When the table fills, the pipelines no draw has asked for lately are released (idle for 30
+  seconds, less if that frees too little; never one used in the last two frames, never one still being
+  built), and one that is needed again is built again from the shader caches. Tested with the table made
+  small (`LD_PSO_CAP`): 600 entries, one fill in a race, 257 released, no draw dropped; 150 entries, less
+  than a race needs at once, 128 fills without a crash. Vulkan has the same limit in its own table; that
+  one is still to do.
+- **A picture check before every release.** v0.1.92-v0.1.95 went out with cars missing their body while
+  every test that compares code with code passed; the test runs' own frames showed the broken car and
+  were not looked at. From now on the frames of a driven run of the build (car select with the car at an
+  angle, the race) are compared by a program with a known-good run, a side-by-side sheet is looked at, and
+  the release script refuses to publish a change to the game's code without a passing record for exactly
+  those sources. Run on tonight's builds it fails every one from v0.1.92 to v0.1.95 and passes v0.1.91 and
+  v0.1.96. It looks at one car and one track, so it catches a fault like that one, not every fault.
+- No re-lift: the update rebuilds the runtime.
+
 🏷️ Released as **v0.1.96**
+
+🚨 **Fix: cars missing body panels since v0.1.92. And the waiting threads sleep: a fifth less CPU on big processors**
+- **The bug.** From v0.1.92 to v0.1.95, premium cars lost parts of their body: in car select while the car
+  turns, and in races (bonnet, doors, panels gone, the inside showing). Reported by two players on the
+  Discord, on DirectX 12 and Vulkan; the same here once looked for. The cause was one of the two changes
+  to the SPU translation in v0.1.92: float chains ran on values that had not had the SPU's "a zero is +0"
+  rule applied yet ("twins"), and somewhere an operation got a twin that no longer belonged to its
+  value. It passed 4.27 million differential runs on six job images and every compare race, and it was
+  wrong in the game. It is switched off (the helpers compute from the values again; no re-lift), and it
+  stays off until the fault is found and the car-select picture is part of the check. My test runs had
+  the broken picture in their frames all along and I had not looked at them: releases now get the car
+  looked at, at an angle and in a race, old build next to new.
+- **Waiting threads sleep instead of spin, on every processor.** The thread that walks the game's graphics
+  commands and the one that records them for DirectX 12 spun while they waited, on processors with more
+  than 12 threads (smaller ones already slept). Switched off and on every 10 seconds inside one race on a
+  32-thread i9: cores busy 3.53 to 2.96 (-22% +-3%), frames a second +0.7% +-0.3%. On 16 slow cores alone:
+  -10% CPU and -2.5% frames a second (there the CPU is the limit). `PS3_SPIN_SLEEP=0` spins as before.
+- **Float operations with a lane out of range** (real game vectors often carry something that is not a
+  number in their fourth lane) were redone one lane at a time in slow exact code; they are now done for
+  all four lanes in double precision on the CPU's vector unit, with the same results: 2.4 billion random
+  lanes per operation and all pairs of an edge set against the exact reference, no difference; 2.5 to 6
+  times faster per such call. Those routines were 3.8% of the SPU workers' time.
+- **Native 0x66A8 and 0x6418** (job `w0163C080`) no longer hand a call back when a lane is out of range:
+  counted in a race, 0 calls handed back (it was 79% and 100%), and on 96 inputs captured from the game
+  6-8 ns a call against 43-47 ns.
+- Measured before the fix above was in (so with the faulty translation feature still on, which was a
+  little faster): against v0.1.95 on 8 slow cores, three pairs, the whole game about 4% less CPU. The
+  numbers for this exact build are still to be measured.
+- No re-lift: the update rebuilds the SPU jobs and the runtime.
+
 🏷️ Released as **v0.1.95**
+
+💤 **The SPU workers are woken one at a time: 6% less CPU for the whole game**
+- The job scheduler kept one wake-up signal for all seven SPU worker threads and the coordinator. Every
+  job dispatch and every finished job woke all of them, thousands of times a second, and each idle worker
+  took the scheduler's lock, saw that the slot was not its own and went back to sleep. A profile of
+  v0.1.93 had a quarter of the workers' running time in that.
+- Each worker now has its own signal, and a dispatch wakes only the worker it filled. The code had been
+  there since 13 Nov, switched off: it was judged by frame rate on 4 slow cores then and showed nothing.
+  Judged by CPU it is the biggest single saving of this round.
+- Measured by switching it off and on every 10 seconds inside one race (so both halves see the same load):
+  8 slow cores, cores busy -5.7% +-1.6%, frame rate +0.9% +-0.7%; all cores, -8.3% +-1.7%, frame rate the
+  same; 4 slow cores, where the CPU is the limit, frame rate +3.9% +-2.5%. As whole races against v0.1.94
+  on 8 slow cores, two pairs: the whole game 516 to 485 (hundredths of a core), the SPU workers 343 to 314.
+- `SPURS_SLOT_WAKE=0` brings the shared signal back.
+- No re-lift: the update rebuilds the runtime.
+
 🏷️ Released as **v0.1.94**
+
+🔧 **The native grid pass and pack pass now really run in the game (a correction to v0.1.93)**
+- v0.1.93 said the grid pass (`w01606C00` 0x8038) and the pack pass (0x7DC8) run as native code. In the
+  game they did not: both stood aside whenever SPU interrupts were enabled, and GT5's worker jobs keep
+  them enabled the whole time (the job manager's handler). A test build that counts what each native
+  function does showed it: 0 of 270,000 calls of the grid pass taken natively in a race. The test harness
+  had only run them with interrupts off, and the side-by-side compare mode skipped the calls it could not
+  take, so neither showed it. The fill loop, 0x66A8 and 0x6418 were not affected by this.
+- Now they run whenever no enabled event is pending when they start (none ever was in the race). An event
+  raised while one runs is taken at the next label of the translated code that follows, a few microseconds
+  later; with none pending the translated function's own checks do nothing, so the results are the same.
+- Counted in a race with this build: the grid pass natively on all 278,000 calls and all 572 million
+  cells (none handed back), the pack pass fast-forwarding 283 million passes. Compared side by side with
+  the translated functions on every call, real data: 150 million calls, no difference.
+- Still handed back most of the time, and next: 0x66A8 (79% of its calls) and 0x6418 (all of them), because
+  the fourth lane of the vectors they work on holds values outside the PC's float range in the real data.
+- Measured against v0.1.93 on 8 slow cores, races run back to back: the SPU workers use about 3% less CPU
+  (pairs: -1%, -5%; one more pair was unusable). So the natives of v0.1.93 and this fix together are a few
+  percent of the workers' time, not the large step the functions' own numbers (4 times faster alone)
+  suggested: those functions are about 8% of what the workers do.
+- `cmake -DGT5_NATIVE_STATS=ON` builds the counting version (`[native-geo-stat]` every 5 seconds), for
+  checking that a native function is really taken before believing a measurement.
+- No re-lift: the update rebuilds two SPU jobs' native files and links.
+
 🏷️ Released as **v0.1.93**
+
+🧱 **Native code for the busiest geometry functions, and a cheaper path from SPU code to the runtime**
+- Five functions of the two geometry jobs that run on the SPU workers every frame now run as PC code:
+  the grid pass (`w01606C00` 0x8038, about 4 times faster measured alone on a 16x128 grid), its fill loop
+  (0x5BA8, 2 to 7 times) and the pack pass after it (0x7DC8, 3.8 times); in `w0163C080`, 0x66A8 (2 times)
+  and 0x6418 (1.4 times). Each was run 3 million times against the translated function with every register
+  and the whole local store compared, and with one bit flipped on purpose to see the check catch it.
+- In the game, with both versions run side by side on every call: 152 million calls in a race, no
+  difference. `GT5_NATIVE_GEO=0` runs the translated code, `=2` runs both and logs any difference
+  (`[native-geo]`).
+- The grid pass keeps the parts its fast path does not cover as the translated statements themselves. Those
+  are cut out of your own copy's translation when the game is built (`src/native/gen_*.py`), so no game
+  code is in the repository. `natives.txt` can now say which translation a native function was written
+  for (`lift-sha1`): with any other (another release of the game), that job simply stays translated.
+- Runtime, on by default: the hook every SPU write to graphics memory goes through kept one shared ring
+  that all workers wrote (110-130 ns a call with 7 threads; now a ring per thread, about 8 ns); writes to
+  the DMA channels and status reads take a short path (a 128-byte PUT: 60 to 26 ns). The old paths stay
+  in the build and were checked against the new ones (`GCM_PUT_HOOK=old|check`, `SPU_CH_FASTPATH=0`,
+  `SPU_DMA_FASTPATH=0`, `SPU_MFC_CTX_CACHE=0`).
+- Measured against v0.1.92 on 8 slow cores, three pairs of races run back to back (before the pack pass
+  was added): the SPU workers use 3.6% less CPU (2.8%, 4.9%, 3.1%), the whole game 1.5%. Both builds hold
+  57 frames a second there. Smaller than the functions' own numbers: a fresh profile shows the workers
+  now spend a quarter of their time going to sleep and being woken, and that is the next thing.
+- In the build but off until raced: `SPURS_WAKE_FILTER=1`, `SPURS_NATIVE_WORK=1` and `SPU_SN_ONCE=1`
+  (fewer wake-ups of the job scheduler, a native look at a job list before running its manager, one
+  interrupt per stall instead of two).
+- No re-lift: the update rebuilds the SPU jobs and the runtime.
+
 🏷️ Released as **v0.1.92**
 
-- **NVIDIA DLSS / DLAA** anti-aliasing (RTX cards).
-- **In-game menu (F1)** with a Resolution setting up to 5K.
-- **Installer**: one window, no command prompt, no RPCS3, nothing installed into Windows.
-- An install no longer fails on a PC with unstable processor cores.
-- Car bodies were drawn wrongly in v0.1.92 to v0.1.95: fixed in v0.1.96.
-- `update.ps1 -Test` switches to the test build; a plain update goes back.
+🧱 **The SPU translator writes faster code, and the reverb and the EQ's FFT are native**
+- Two changes to how SPU code is translated (`tools/spu_lifter.py`, both on by default):
+  - A read of a register's first word (the SPU's "preferred slot", used for every address, counter and
+    branch test) is written so the compiler keeps the register in one machine register. Before, each such
+    read made it keep a second copy in memory or move the value between vector and integer registers.
+  - The SPU rule "a zero result is +0" was applied after every float operation, three operations in
+    series on every chain of float maths. It now runs where a value leaves the chain (a store, a compare,
+    a shuffle); inside the chain the unfixed value is used, which gives the same results (the sign of a
+    zero operand cannot change a non-zero result, and a zero result is fixed where it leaves).
+- Same results: 4.27 million runs of the old translation against the new one on six job images (every
+  register and the whole local store compared), no difference. Measured alone, the busiest geometry
+  function is 1.3 times faster and the reverb's loops 1.4 to 3.6 times; the generated code is 3 to 8%
+  smaller.
+- Native code for the reverb (9 functions) and the EQ's FFT (6 functions), next to the mixer of v0.1.91.
+  Each was run 3 million times against the translated function without a difference, and is 1.8 to 5
+  times faster measured alone. `GT5_NATIVE_SND=0` runs the translated code, `=2` runs both and logs any
+  difference (`[native-snd]`).
+- In the game: with both versions of every native sound function run side by side (mixer, reverb, EQ),
+  159 million calls in menus and a race, no difference. The sound jobs together take 17% less time than
+  in v0.1.91 (two pairs of races run back to back on all cores: 2.21 to 1.84 and 2.18 to 1.84 seconds of
+  job time per 10 seconds).
+- What it does not show yet: the whole game's CPU use. On the test PC both builds hold 57-58 frames a
+  second on the fast cores and on 16 slow cores, and the busy-cores figure differs less between the
+  builds than between two races of the same build (about 5%). The gain in the geometry jobs is there in
+  the isolated measurements, not yet in a number from a race.
+- One re-lift: the update regenerates and rebuilds the game code once more (about 10 minutes plus the
+  build). The native functions that follow build on this translation and will not need another.
+
 ## 16 Nov 2026
 
 🏷️ Released as **v0.1.91**
