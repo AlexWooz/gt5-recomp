@@ -7,6 +7,76 @@ release on the tested rig in [STATUS.md](STATUS.md) unless a day says otherwise.
 > or repeated frames (fixed on 4 Nov and 9 Nov), so treat them as rough before-and-after comparisons.
 > From 9 Nov on, numbers are the game's own frames.
 
+## 21 Nov 2026
+
+⚡ **Steam Deck and Linux performance: async readbacks, an SPU lifter fix, and draw-engine work** (by AlexWooz, community pull
+request; one re-lift of the SPU jobs, done by `update.ps1` / `setup.sh`)
+- Eight changes, each with its own entry below and a switch to turn it off. Measured on a Steam Deck OLED
+  (SteamOS, US 2.17 with DLC, Vulkan), with the race paused the moment control is given (steady to about
+  1 ms). Two of them change Windows too: the two SPU lifter changes.
+- On v0.1.109, paused grid at a fixed 1100 MHz GPU clock: the readbacks and the draw engine +4.7%
+  (alternated in one run), the two SPU lifter changes +1.4 to +2.3% (two builds compared). On the Deck
+  the GPU is also power-starved: with the 15 W chip at its limit, the CPU takes the budget and the GPU
+  sits at 200 MHz while 100% busy. Steam's Quick Access > Performance > Manual GPU Clock (1100 MHz ran
+  a paused grid as fast as 1600 or slightly faster) is a settings change, not in this code, but it is
+  what most Deck players will want with it.
+
+🧩 **SPU interrupt windows no longer go through the indirect-branch resolver** (AlexWooz; re-lift)
+- Sony's WWS jobs open their DMA critical sections with `brsl $rX,.+4; ai $rX,$rX,K; bid $rX`: a branch
+  to the constant link+K with interrupts disabled. The lifter sent every one through
+  `spu_indirect_branch`. In GT5's scene traversal job (`w0159C180`) that was ~1.2 million a second at a
+  single site, and 11 of its 15 hottest indirect targets (`SPU_IB_HIST=1`).
+- The function finder's Duff's-device rule also seeded the 64 bytes after each such branch as function
+  starts, so they were lifted as one-instruction functions: 40% of that job's functions.
+- `spu_lifter.py` now branches directly (the D/E bit is still applied; `--no-pcget-direct` restores the
+  old lift), and `find_spu_functions.py` seeds the 64-byte span only when another instruction writes the
+  register (a real Duff's device). 1,599 sites in 38 Wws jobs; `w0159C180` goes from 3,509 functions to
+  2,274.
+- Images with hand-written native functions (`src/native/natives.txt`) are lifted as before, so their
+  lifted files still match their `lift-sha1` and the natives stay on (checked on 2.17's reverb and
+  01.00's two geometry jobs).
+- Steam Deck: captured jobs replay bit-exact. On v0.1.104 the traversal job was 17% faster and
+  `w01571080` 14%, paused grid 58.8 to 55.7 ms (+5.6%). On v0.1.109, whose direct branches already made
+  these sites cheaper, this and the channel change below give +1.4 to +2.3% together.
+
+📮 **SPU channel writes that only set a DMA parameter no longer store the registers first** (AlexWooz; re-lift)
+- With `SPU_CH_INLINE` the lifted jobs make a write to the MFC parameter channels (LSA, EAH, EAL, Size,
+  TagID, WrTagMask) themselves, as a store into the SPU context, but the lifter still wrote all of the
+  function's changed registers back to the context before each one, as it does before a real call.
+- Those six channels never read or change a register, so `spu_lifter.py` now leaves that out for them;
+  every other channel op still stores them first. `--no-inline-wrch` at lift time restores it.
+
+🖼️ **Vulkan on Linux: small readbacks don't wait any more** (AlexWooz)
+- `VK_RB_ASYNC` (async readbacks of GT5's exposure sample and brightness chain) was on by default on
+  Windows only. On Linux each of those readbacks first waited for the GPU to finish everything queued:
+  ~24 ms of every race frame on the Deck (`VK_SYNC_STATS=1`).
+- On v0.1.104, paused grid at the Deck's automatic GPU clock: 15.7 to 17.8 fps (+14%, alternated in one
+  run with `PS3_AB_WHAT=vkrb`); the exposure looks the same in play. `VK_RB_ASYNC=0` turns it off.
+
+🎨 **Vulkan on Linux: the vertex cache and the image pool** (AlexWooz)
+- `VK_VCACHE` keeps converted geometry while the guest's vertex pages are unwritten, which needs
+  Windows' `GetWriteWatch`. Linux now has it through userfaultfd write-protection
+  (`UFFD_FEATURE_WP_ASYNC`, kernel 6.7+) and the `PAGEMAP_SCAN` ioctl, which lists and re-protects written
+  pages in one call (what Wine builds `GetWriteWatch` on). A kernel without them keeps the cache off.
+  SteamOS 3.7 has both. `VK_VCACHE=0` turns it off.
+- `VK_IMAGE_POOL` is on by default on Linux too (it was Windows only). `VK_IMAGE_POOL=0` turns it off.
+
+✏️ **Draw engine: three per-draw savings on the RSX thread** (AlexWooz)
+- The vertex cache probe reads a compact array of tags instead of the 816-byte entries (one memory miss
+  per probe on a 16,384-entry table); texture change checks use the page write tracking above instead of
+  hashing the texture every frame, where it is available; 16-bit index runs are gathered and
+  byte-swapped with SSSE3/AVX2.
+- Steam Deck on v0.1.104: paused grid +2.8%, car select +2.3% (`PS3_AB_WHAT=drawfast`).
+
+🛠️ **Linux: a profile-guided build** (AlexWooz)
+- `bash GT5/scripts/pgo_linux.sh gen`, then `record` (play menus and a race, quit from the game),
+  `use` and `install`. The profile is made by running the game, so it lives in `GT5/analysis/pgo` and is
+  never committed; after a re-lift record again. Steam Deck, paused grid: 107.4 to 92.5 ms a frame.
+
+🔍 **Small things** (AlexWooz)
+- `SPU_IB_HIST=1`: every 5 s, which indirect-branch targets reach the full SPU resolver most often.
+- `ppu_lifter.py` rewrites an existing output file that isn't valid text instead of stopping.
+
 ## 20 Nov 2026
 
 🏷️ Released as **v0.1.109**
